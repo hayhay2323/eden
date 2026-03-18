@@ -85,7 +85,7 @@ impl TickRecord {
                     trade_volume: ta.map(|t| t.total_volume).unwrap_or(0),
                     buy_volume: ta.map(|t| t.buy_volume).unwrap_or(0),
                     sell_volume: ta.map(|t| t.sell_volume).unwrap_or(0),
-                    vwap: ta.and_then(|t| t.last_price),
+                    vwap: ta.map(|t| t.vwap).filter(|v| *v != Decimal::ZERO),
                     composite_degradation: deg.map(|d| d.composite_degradation),
                     institution_retention: deg.map(|d| d.institution_retention),
                 },

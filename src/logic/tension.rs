@@ -6,21 +6,23 @@ use time::OffsetDateTime;
 use crate::ontology::objects::Symbol;
 use crate::pipeline::dimensions::{DimensionSnapshot, SymbolDimensions};
 
-/// The four Pipeline dimensions, named for pairing.
+/// The five Pipeline dimensions, named for pairing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Dimension {
     OrderBookPressure,
     CapitalFlowDirection,
     CapitalSizeDivergence,
     InstitutionalDirection,
+    DepthStructureImbalance,
 }
 
 impl Dimension {
-    pub const ALL: [Dimension; 4] = [
+    pub const ALL: [Dimension; 5] = [
         Dimension::OrderBookPressure,
         Dimension::CapitalFlowDirection,
         Dimension::CapitalSizeDivergence,
         Dimension::InstitutionalDirection,
+        Dimension::DepthStructureImbalance,
     ];
 
     pub fn short_name(&self) -> &'static str {
@@ -29,6 +31,7 @@ impl Dimension {
             Dimension::CapitalFlowDirection => "capital",
             Dimension::CapitalSizeDivergence => "size",
             Dimension::InstitutionalDirection => "inst",
+            Dimension::DepthStructureImbalance => "depth",
         }
     }
 }
@@ -52,11 +55,11 @@ pub struct DimensionPair {
 /// Per-symbol tension analysis.
 #[derive(Debug, Clone)]
 pub struct SymbolTension {
-    /// Mean of all 6 pairwise products. Positive = coherent, negative = conflicted.
+    /// Mean of all C(n,2) pairwise products. Positive = coherent, negative = conflicted.
     pub coherence: Decimal,
-    /// Simple average of all 4 dimensions. Overall directional lean.
+    /// Simple average of all dimensions. Overall directional lean.
     pub mean_direction: Decimal,
-    /// All 6 pairwise relationships, sorted by product (most tense first).
+    /// All C(n,2) pairwise relationships, sorted by product (most tense first).
     pub pairs: Vec<DimensionPair>,
 }
 
@@ -89,22 +92,24 @@ fn get_value(sd: &SymbolDimensions, dim: Dimension) -> Decimal {
         Dimension::CapitalFlowDirection => sd.capital_flow_direction,
         Dimension::CapitalSizeDivergence => sd.capital_size_divergence,
         Dimension::InstitutionalDirection => sd.institutional_direction,
+        Dimension::DepthStructureImbalance => sd.depth_structure_imbalance,
     }
 }
 
 fn compute_symbol_tension(sd: &SymbolDimensions) -> SymbolTension {
     let dims = Dimension::ALL;
-    let four = Decimal::from(4);
-    let six = Decimal::from(6);
+    let n = Decimal::from(dims.len() as i64);
+    let pair_count = Decimal::from((dims.len() * (dims.len() - 1) / 2) as i64); // C(n,2)
 
-    // Mean direction: average of all 4 values.
+    // Mean direction: average of all values.
     let sum_vals: Decimal = dims.iter().map(|&d| get_value(sd, d)).sum();
-    let mean_direction = sum_vals / four;
+    let mean_direction = sum_vals / n;
 
-    // All C(4,2) = 6 pairs.
-    let mut pairs = Vec::with_capacity(6);
-    for i in 0..4 {
-        for j in (i + 1)..4 {
+    // All C(n,2) pairs.
+    let pair_count_usize = dims.len() * (dims.len() - 1) / 2;
+    let mut pairs = Vec::with_capacity(pair_count_usize);
+    for i in 0..dims.len() {
+        for j in (i + 1)..dims.len() {
             let val_a = get_value(sd, dims[i]);
             let val_b = get_value(sd, dims[j]);
             pairs.push(DimensionPair {
@@ -117,9 +122,9 @@ fn compute_symbol_tension(sd: &SymbolDimensions) -> SymbolTension {
         }
     }
 
-    // Coherence: mean of all 6 products.
+    // Coherence: mean of all pair products.
     let sum_products: Decimal = pairs.iter().map(|p| p.product).sum();
-    let coherence = sum_products / six;
+    let coherence = sum_products / pair_count;
 
     // Sort: most tense (most negative product) first.
     pairs.sort_by(|a, b| a.product.cmp(&b.product));
@@ -142,6 +147,7 @@ mod tests {
             capital_flow_direction: capital,
             capital_size_divergence: size,
             institutional_direction: inst,
+            depth_structure_imbalance: Decimal::ZERO,
         }
     }
 
@@ -191,10 +197,11 @@ mod tests {
     // ── pair count ──
 
     #[test]
-    fn always_six_pairs() {
+    fn always_ten_pairs() {
+        // C(5,2) = 10 pairs for 5 dimensions
         let sd = make_dims(dec!(0.1), dec!(0.2), dec!(0.3), dec!(0.4));
         let t = compute_symbol_tension(&sd);
-        assert_eq!(t.pairs.len(), 6);
+        assert_eq!(t.pairs.len(), 10);
     }
 
     // ── mean_direction ──
@@ -203,8 +210,8 @@ mod tests {
     fn mean_direction_calculation() {
         let sd = make_dims(dec!(0.4), dec!(0.2), dec!(-0.2), dec!(0.6));
         let t = compute_symbol_tension(&sd);
-        // (0.4 + 0.2 + (-0.2) + 0.6) / 4 = 1.0 / 4 = 0.25
-        assert_eq!(t.mean_direction, dec!(0.25));
+        // (0.4 + 0.2 + (-0.2) + 0.6 + 0) / 5 = 1.0 / 5 = 0.2
+        assert_eq!(t.mean_direction, dec!(0.2));
     }
 
     // ── pair sorting ──
@@ -264,29 +271,38 @@ mod tests {
 
     #[test]
     fn perfect_agreement() {
+        // All 4 explicit dims = 1, depth_structure_imbalance = 0
+        // Products: C(5,2)=10 pairs. 4 dims at 1 give C(4,2)=6 products of 1,
+        // plus 4 products of 1*0=0 (each of the 4 vs depth=0).
+        // Sum = 6, coherence = 6/10 = 0.6
         let sd = make_dims(dec!(1), dec!(1), dec!(1), dec!(1));
         let t = compute_symbol_tension(&sd);
-        // All products = 1, coherence = 1
-        assert_eq!(t.coherence, dec!(1));
-        assert_eq!(t.mean_direction, dec!(1));
+        assert_eq!(t.coherence, dec!(0.6));
+        // mean_direction = (1+1+1+1+0)/5 = 0.8
+        assert_eq!(t.mean_direction, dec!(0.8));
     }
 
     #[test]
     fn perfect_split() {
+        // [1, 1, -1, -1, 0] — 5 dims
+        // Pairs with products:
+        //   1*1=1, 1*-1=-1, 1*-1=-1, 1*0=0,
+        //          1*-1=-1, 1*-1=-1, 1*0=0,
+        //                   -1*-1=1, -1*0=0,
+        //                            -1*0=0
+        // Sum = 1-1-1+0-1-1+0+1+0+0 = -2, coherence = -2/10
         let sd = make_dims(dec!(1), dec!(1), dec!(-1), dec!(-1));
         let t = compute_symbol_tension(&sd);
-        // Products: 1*1=1, 1*-1=-1, 1*-1=-1, 1*-1=-1, 1*-1=-1, -1*-1=1
-        // Sum = 1-1-1-1-1+1 = -2, coherence = -2/6
-        let expected = Decimal::from(-2) / Decimal::from(6);
+        let expected = Decimal::from(-2) / Decimal::from(10);
         assert_eq!(t.coherence.round_dp(10), expected.round_dp(10));
     }
 
     #[test]
     fn single_dimension_active() {
-        // Only book has a value, rest are zero → all products are 0
+        // Only book has a value, rest (including depth) are zero → all products are 0
         let sd = make_dims(dec!(0.8), dec!(0), dec!(0), dec!(0));
         let t = compute_symbol_tension(&sd);
         assert_eq!(t.coherence, dec!(0));
-        assert_eq!(t.mean_direction, dec!(0.2)); // 0.8/4
+        assert_eq!(t.mean_direction, dec!(0.16)); // 0.8/5
     }
 }
