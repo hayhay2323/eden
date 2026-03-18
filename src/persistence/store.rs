@@ -32,28 +32,41 @@ impl EdenStore {
         Ok(())
     }
 
-    /// Persist institution cross-stock presences for tracking over time.
+    /// Persist institution cross-stock presences in a single batch query.
     pub async fn write_institution_states(
         &self,
         presences: &[CrossStockPresence],
         timestamp: time::OffsetDateTime,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        for p in presences {
-            let id = format!("inst_{}_{}", p.institution_id.0, timestamp.unix_timestamp());
-            let record = serde_json::json!({
-                "institution_id": p.institution_id.0,
-                "timestamp": timestamp.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
-                "symbols": p.symbols.iter().map(|s| &s.0).collect::<Vec<_>>(),
-                "ask_symbols": p.ask_symbols.iter().map(|s| &s.0).collect::<Vec<_>>(),
-                "bid_symbols": p.bid_symbols.iter().map(|s| &s.0).collect::<Vec<_>>(),
-                "seat_count": p.symbols.len(),
-            });
-            let _: Option<serde_json::Value> = self
-                .db
-                .upsert(("institution_state", &id))
-                .content(record)
-                .await?;
+        if presences.is_empty() {
+            return Ok(());
         }
+
+        let ts_str = timestamp
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default();
+
+        // Build all records as a single batch
+        let records: Vec<serde_json::Value> = presences
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "institution_id": p.institution_id.0,
+                    "timestamp": ts_str,
+                    "symbols": p.symbols.iter().map(|s| &s.0).collect::<Vec<_>>(),
+                    "ask_symbols": p.ask_symbols.iter().map(|s| &s.0).collect::<Vec<_>>(),
+                    "bid_symbols": p.bid_symbols.iter().map(|s| &s.0).collect::<Vec<_>>(),
+                    "seat_count": p.symbols.len(),
+                })
+            })
+            .collect();
+
+        // Single INSERT with all records — one DB round-trip instead of O(n)
+        self.db
+            .query("INSERT INTO institution_state $records")
+            .bind(("records", records))
+            .await?;
+
         Ok(())
     }
 
