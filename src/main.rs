@@ -2,10 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use longport::quote::{
-    PushEvent, PushEventDetail, QuoteContext, SecurityBrokers, SecurityDepth, SecurityQuote,
-    SubFlags, Trade,
+    CalcIndex, Period, PushEvent, PushEventDetail, QuoteContext, SecurityBrokers, SecurityDepth,
+    SecurityQuote, SubFlags, Trade, TradeSessions,
 };
-use longport::Config;
+use longport::{Config, Market};
 use rust_decimal::Decimal;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
@@ -61,6 +61,7 @@ struct LiveState {
     brokers: HashMap<Symbol, SecurityBrokers>,
     quotes: HashMap<Symbol, SecurityQuote>,
     trades: HashMap<Symbol, Vec<Trade>>,
+    candlesticks: HashMap<Symbol, Vec<longport::quote::Candlestick>>,
     push_count: u64,
     dirty: bool, // true if new pushes since last pipeline run
 }
@@ -72,6 +73,7 @@ impl LiveState {
             brokers: HashMap::new(),
             quotes: HashMap::new(),
             trades: HashMap::new(),
+            candlesticks: HashMap::new(),
             push_count: 0,
             dirty: false,
         }
@@ -127,7 +129,14 @@ impl LiveState {
                 let entry = self.trades.entry(symbol).or_default();
                 entry.extend(push_trades.trades);
             }
-            _ => {} // Candlestick — not used
+            PushEventDetail::Candlestick(candle) => {
+                let entry = self.candlesticks.entry(symbol).or_default();
+                entry.push(candle.candlestick);
+                // Keep last 60 candles (1 hour of 1-min data)
+                if entry.len() > 60 {
+                    entry.drain(..entry.len() - 60);
+                }
+            }
         }
     }
 
@@ -251,6 +260,17 @@ async fn main() {
     .expect("failed to subscribe");
     println!("Subscribed to {} symbols × 4 channels.", WATCHLIST.len());
 
+    // Subscribe to 1-minute candlesticks
+    for symbol in WATCHLIST {
+        if let Err(e) = ctx
+            .subscribe_candlesticks(*symbol, Period::OneMinute, TradeSessions::Intraday)
+            .await
+        {
+            eprintln!("Warning: failed to subscribe candlestick for {}: {}", symbol, e);
+        }
+    }
+    println!("Subscribed to 1-min candlesticks.");
+
     // ── Seed with initial REST snapshot ──
     println!("Fetching initial snapshot...");
     let initial_raw = snapshot::fetch(&ctx, &watchlist_symbols).await;
@@ -325,6 +345,48 @@ async fn main() {
         // Refresh capital data periodically via REST
         if last_capital_refresh.elapsed() >= capital_refresh_interval {
             rest = fetch_capital_data(&ctx, &watchlist_symbols).await;
+
+            // Fetch calc_indexes for all watchlist symbols
+            match ctx.calc_indexes(
+                WATCHLIST.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                [
+                    CalcIndex::TurnoverRate,
+                    CalcIndex::VolumeRatio,
+                    CalcIndex::PeTtmRatio,
+                    CalcIndex::PbRatio,
+                    CalcIndex::Amplitude,
+                    CalcIndex::FiveMinutesChangeRate,
+                    CalcIndex::DividendRatioTtm,
+                ],
+            ).await {
+                Ok(indexes) => {
+                    for idx in &indexes {
+                        if let (Some(vr), Some(tr)) = (idx.volume_ratio, idx.turnover_rate) {
+                            let sym = &idx.symbol;
+                            // Display notable volume ratios (volume_ratio > 2 = unusual activity)
+                            if vr > Decimal::TWO {
+                                println!("  [VOLUME] {}  volume_ratio={:.1}  turnover_rate={:.2}%  5min_chg={:+.2}%",
+                                    sym,
+                                    vr,
+                                    tr * pct,
+                                    idx.five_minutes_change_rate.unwrap_or(Decimal::ZERO) * pct,
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => eprintln!("Warning: calc_indexes failed: {}", e),
+            }
+
+            // Fetch market temperature
+            match ctx.market_temperature(Market::HK).await {
+                Ok(temp) => {
+                    println!("  [MARKET] HK temperature={} valuation={} sentiment={} ({})",
+                        temp.temperature, temp.valuation, temp.sentiment, temp.description);
+                }
+                Err(e) => eprintln!("Warning: market_temperature failed: {}", e),
+            }
+
             last_capital_refresh = Instant::now();
         }
 
@@ -534,6 +596,26 @@ async fn main() {
                         sym, count, vol, buy_pct, ta.vwap.round_dp(3),
                     );
                 }
+            }
+        }
+
+        // ── Display: Recent Candlesticks ──
+        let mut candle_syms: Vec<_> = live.candlesticks.iter()
+            .filter(|(_, candles)| !candles.is_empty())
+            .map(|(sym, candles)| {
+                let latest = candles.last().unwrap();
+                let range = latest.high - latest.low;
+                (sym, candles.len(), latest.close, range, latest.volume)
+            })
+            .collect();
+        candle_syms.sort_by(|a, b| b.4.cmp(&a.4));
+        if !candle_syms.is_empty() {
+            println!("\n── 1-Min Candles ──");
+            for (sym, count, close, range, vol) in candle_syms.iter().take(10) {
+                println!(
+                    "  {:>8}  close={}  range={}  vol={}  ({} candles buffered)",
+                    sym, close, range, vol, count,
+                );
             }
         }
 
