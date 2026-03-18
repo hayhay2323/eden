@@ -7,6 +7,7 @@ use crate::temporal::record::TickRecord;
 
 use super::schema;
 
+#[derive(Clone)]
 pub struct EdenStore {
     db: Surreal<Db>,
 }

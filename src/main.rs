@@ -275,11 +275,12 @@ async fn main() {
     );
 
     // ── Spawn push event forwarder ──
-    let (push_tx, mut push_rx) = mpsc::unbounded_channel::<PushEvent>();
+    let (push_tx, mut push_rx) = mpsc::channel::<PushEvent>(10000);
     tokio::spawn(async move {
         while let Some(event) = receiver.recv().await {
-            if push_tx.send(event).is_err() {
-                break;
+            if push_tx.try_send(event).is_err() {
+                // Channel full or closed — drop event to avoid blocking
+                continue;
             }
         }
     });
@@ -394,21 +395,25 @@ async fn main() {
         );
         history.push(tick_record);
 
-        // ── Persist to SurrealDB (log errors, never panic) ──
+        // ── Persist to SurrealDB (non-blocking, fire-and-forget) ──
         if let Some(ref store) = eden_store {
             if let Some(latest) = history.latest() {
-                if let Err(e) = store.write_tick(latest).await {
-                    eprintln!("Warning: failed to write tick: {}", e);
-                }
+                let record = latest.clone();
+                let store_ref = store.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = store_ref.write_tick(&record).await {
+                        eprintln!("Warning: failed to write tick: {}", e);
+                    }
+                });
             }
-            // Write institution states every 30 ticks (~1 min)
             if tick % 30 == 0 {
-                if let Err(e) = store.write_institution_states(
-                    &links.cross_stock_presences,
-                    now,
-                ).await {
-                    eprintln!("Warning: failed to write institution states: {}", e);
-                }
+                let presences = links.cross_stock_presences.clone();
+                let store_ref = store.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = store_ref.write_institution_states(&presences, now).await {
+                        eprintln!("Warning: failed to write institution states: {}", e);
+                    }
+                });
             }
         }
 
