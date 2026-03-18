@@ -72,6 +72,29 @@ pub struct DepthLevel {
 }
 
 #[derive(Debug, Clone)]
+pub struct DepthProfile {
+    /// Volume concentration in top 3 levels vs total (0..1). High = wall at top, low = distributed.
+    pub top3_volume_ratio: Decimal,
+    /// Weighted average distance from best price (volume-weighted), in price units.
+    pub volume_weighted_distance: Decimal,
+    /// Volume at best level / total volume (0..1). High = large wall at best.
+    pub best_level_ratio: Decimal,
+    /// Number of levels with nonzero volume.
+    pub active_levels: usize,
+}
+
+impl DepthProfile {
+    pub fn empty() -> Self {
+        DepthProfile {
+            top3_volume_ratio: Decimal::ZERO,
+            volume_weighted_distance: Decimal::ZERO,
+            best_level_ratio: Decimal::ZERO,
+            active_levels: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct OrderBookObservation {
     pub symbol: Symbol,
     pub ask_levels: Vec<DepthLevel>,
@@ -83,6 +106,8 @@ pub struct OrderBookObservation {
     pub spread: Option<Decimal>,
     pub ask_level_count: usize,
     pub bid_level_count: usize,
+    pub bid_profile: DepthProfile,
+    pub ask_profile: DepthProfile,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +124,37 @@ pub struct QuoteObservation {
     pub market_status: MarketStatus,
 }
 
+// ── Trade types ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TradeDirection {
+    Up,
+    Down,
+    Neutral,
+}
+
+#[derive(Debug, Clone)]
+pub struct TradeRecord {
+    pub price: Decimal,
+    pub volume: i64,
+    pub timestamp: OffsetDateTime,
+    pub direction: TradeDirection,
+}
+
+/// Aggregated trade activity for a symbol from recent tick data.
+#[derive(Debug, Clone)]
+pub struct TradeActivity {
+    pub symbol: Symbol,
+    pub trade_count: usize,
+    pub total_volume: i64,
+    pub buy_volume: i64,
+    pub sell_volume: i64,
+    pub neutral_volume: i64,
+    pub vwap: Decimal,
+    pub last_price: Option<Decimal>,
+    pub trades: Vec<TradeRecord>,
+}
+
 // ── LinkSnapshot ──
 
 #[derive(Debug)]
@@ -111,6 +167,7 @@ pub struct LinkSnapshot {
     pub capital_breakdowns: Vec<CapitalBreakdown>,
     pub order_books: Vec<OrderBookObservation>,
     pub quotes: Vec<QuoteObservation>,
+    pub trade_activities: Vec<TradeActivity>,
 }
 
 impl LinkSnapshot {
@@ -124,6 +181,7 @@ impl LinkSnapshot {
         let capital_breakdowns = compute_capital_breakdowns(raw);
         let order_books = compute_order_books(raw);
         let quotes = compute_quotes(raw);
+        let trade_activities = compute_trade_activities(raw);
 
         LinkSnapshot {
             timestamp: raw.timestamp,
@@ -134,6 +192,7 @@ impl LinkSnapshot {
             capital_breakdowns,
             order_books,
             quotes,
+            trade_activities,
         }
     }
 }
@@ -272,6 +331,52 @@ fn compute_capital_breakdowns(raw: &RawSnapshot) -> Vec<CapitalBreakdown> {
         .collect()
 }
 
+/// Compute a structural profile of one side (bid or ask) of the order book.
+fn compute_depth_profile(levels: &[DepthLevel], best_price: Option<Decimal>) -> DepthProfile {
+    let active_levels = levels.iter().filter(|l| l.volume > 0).count();
+    let total_vol: i64 = levels.iter().map(|l| l.volume).sum();
+
+    if total_vol == 0 || levels.is_empty() {
+        return DepthProfile {
+            top3_volume_ratio: Decimal::ZERO,
+            volume_weighted_distance: Decimal::ZERO,
+            best_level_ratio: Decimal::ZERO,
+            active_levels,
+        };
+    }
+
+    let total_dec = Decimal::from(total_vol);
+
+    // Top 3 volume ratio
+    let top3_vol: i64 = levels.iter().take(3).map(|l| l.volume).sum();
+    let top3_volume_ratio = Decimal::from(top3_vol) / total_dec;
+
+    // Best level ratio
+    let best_vol = levels.first().map(|l| l.volume).unwrap_or(0);
+    let best_level_ratio = Decimal::from(best_vol) / total_dec;
+
+    // Volume-weighted distance from best price
+    let volume_weighted_distance = if let Some(bp) = best_price {
+        let mut weighted_sum = Decimal::ZERO;
+        for l in levels {
+            if let Some(price) = l.price {
+                let dist = (price - bp).abs();
+                weighted_sum += dist * Decimal::from(l.volume);
+            }
+        }
+        weighted_sum / total_dec
+    } else {
+        Decimal::ZERO
+    };
+
+    DepthProfile {
+        top3_volume_ratio,
+        volume_weighted_distance,
+        best_level_ratio,
+        active_levels,
+    }
+}
+
 /// Convert SecurityDepth → OrderBookObservation for each symbol.
 fn compute_order_books(raw: &RawSnapshot) -> Vec<OrderBookObservation> {
     raw.depths
@@ -310,6 +415,9 @@ fn compute_order_books(raw: &RawSnapshot) -> Vec<OrderBookObservation> {
                 _ => None,
             };
 
+            let bid_profile = compute_depth_profile(&bid_levels, best_bid);
+            let ask_profile = compute_depth_profile(&ask_levels, best_ask);
+
             OrderBookObservation {
                 symbol: symbol.clone(),
                 ask_levels,
@@ -321,17 +429,89 @@ fn compute_order_books(raw: &RawSnapshot) -> Vec<OrderBookObservation> {
                 spread,
                 ask_level_count: depth.asks.len(),
                 bid_level_count: depth.bids.len(),
+                bid_profile,
+                ask_profile,
             }
         })
         .collect()
 }
 
-fn market_status_from_i32(v: i32) -> MarketStatus {
-    match v {
-        0 => MarketStatus::Normal,
-        1 => MarketStatus::Halted,
-        6 => MarketStatus::ToBeOpened,
-        10 => MarketStatus::SuspendTrade,
+/// Aggregate trade ticks into TradeActivity per symbol.
+fn compute_trade_activities(raw: &RawSnapshot) -> Vec<TradeActivity> {
+    raw.trades
+        .iter()
+        .map(|(symbol, trades)| {
+            let mut buy_volume: i64 = 0;
+            let mut sell_volume: i64 = 0;
+            let mut neutral_volume: i64 = 0;
+            let mut price_volume_sum = Decimal::ZERO;
+            let mut total_volume: i64 = 0;
+            let mut records = Vec::with_capacity(trades.len());
+            let mut last_price = None;
+
+            for t in trades {
+                total_volume += t.volume;
+                price_volume_sum += t.price * Decimal::from(t.volume);
+
+                let dir = match t.direction {
+                    longport::quote::TradeDirection::Up => {
+                        buy_volume += t.volume;
+                        TradeDirection::Up
+                    }
+                    longport::quote::TradeDirection::Down => {
+                        sell_volume += t.volume;
+                        TradeDirection::Down
+                    }
+                    _ => {
+                        neutral_volume += t.volume;
+                        TradeDirection::Neutral
+                    }
+                };
+
+                last_price = Some(t.price);
+                records.push(TradeRecord {
+                    price: t.price,
+                    volume: t.volume,
+                    timestamp: t.timestamp,
+                    direction: dir,
+                });
+            }
+
+            let vwap = if total_volume > 0 {
+                price_volume_sum / Decimal::from(total_volume)
+            } else {
+                Decimal::ZERO
+            };
+
+            TradeActivity {
+                symbol: symbol.clone(),
+                trade_count: trades.len(),
+                total_volume,
+                buy_volume,
+                sell_volume,
+                neutral_volume,
+                vwap,
+                last_price,
+                trades: records,
+            }
+        })
+        .collect()
+}
+
+fn market_status_from_trade_status(status: longport::quote::TradeStatus) -> MarketStatus {
+    use longport::quote::TradeStatus;
+    match status {
+        TradeStatus::Normal => MarketStatus::Normal,
+        TradeStatus::Halted => MarketStatus::Halted,
+        TradeStatus::Delisted => MarketStatus::Other,
+        TradeStatus::Fuse => MarketStatus::Halted,
+        TradeStatus::PrepareList => MarketStatus::ToBeOpened,
+        TradeStatus::CodeMoved => MarketStatus::Other,
+        TradeStatus::ToBeOpened => MarketStatus::ToBeOpened,
+        TradeStatus::SplitStockHalts => MarketStatus::Halted,
+        TradeStatus::Expired => MarketStatus::Other,
+        TradeStatus::WarrantPrepareList => MarketStatus::ToBeOpened,
+        TradeStatus::SuspendTrade => MarketStatus::SuspendTrade,
         _ => MarketStatus::Other,
     }
 }
@@ -350,7 +530,7 @@ fn compute_quotes(raw: &RawSnapshot) -> Vec<QuoteObservation> {
             volume: q.volume,
             turnover: q.turnover,
             timestamp: q.timestamp,
-            market_status: market_status_from_i32(q.trade_status as i32),
+            market_status: market_status_from_trade_status(q.trade_status),
         })
         .collect()
 }
@@ -375,6 +555,7 @@ mod tests {
             capital_distributions: HashMap::new(),
             depths: HashMap::new(),
             quotes: HashMap::new(),
+            trades: HashMap::new(),
         }
     }
 
@@ -588,6 +769,7 @@ mod tests {
             capital_distributions: HashMap::new(),
             depths: HashMap::new(),
             quotes: HashMap::new(),
+            trades: HashMap::new(),
         };
 
         let flows = compute_capital_flows(&raw);
@@ -604,6 +786,7 @@ mod tests {
             capital_distributions: HashMap::new(),
             depths: HashMap::new(),
             quotes: HashMap::new(),
+            trades: HashMap::new(),
         };
 
         let flows = compute_capital_flows(&raw);
@@ -636,6 +819,7 @@ mod tests {
             )]),
             depths: HashMap::new(),
             quotes: HashMap::new(),
+            trades: HashMap::new(),
         };
 
         let breakdowns = compute_capital_breakdowns(&raw);
@@ -720,6 +904,7 @@ mod tests {
                     overnight_quote: None,
                 }),
             ]),
+            trades: HashMap::new(),
         };
 
         let snapshot = LinkSnapshot::compute(&raw, &store);
@@ -761,6 +946,7 @@ mod tests {
             capital_distributions: HashMap::new(),
             depths: data.into_iter().collect(),
             quotes: HashMap::new(),
+            trades: HashMap::new(),
         }
     }
 
@@ -772,6 +958,7 @@ mod tests {
             capital_distributions: HashMap::new(),
             depths: HashMap::new(),
             quotes: data.into_iter().collect(),
+            trades: HashMap::new(),
         }
     }
 
