@@ -357,8 +357,30 @@ async fn main() {
         let active_fps = tracker.active_fingerprints();
         let decision = DecisionSnapshot::compute(&brain, &links, &active_fps, &store);
 
+        // Auto-exit: remove positions whose composite is now zero
+        let zero_syms: Vec<Symbol> = tracker
+            .active_fingerprints()
+            .iter()
+            .filter(|fp| {
+                decision
+                    .convergence_scores
+                    .get(&fp.symbol)
+                    .map(|c| c.composite == Decimal::ZERO)
+                    .unwrap_or(true) // also exit if symbol disappeared from convergence
+            })
+            .map(|fp| fp.symbol.clone())
+            .collect();
+        for sym in &zero_syms {
+            tracker.exit(sym);
+        }
+
         let newly_entered = tracker.auto_enter(&decision.convergence_scores, &brain);
         let new_set: HashSet<&Symbol> = newly_entered.iter().collect();
+
+        // Refresh fingerprints every 30 ticks to prevent stale degradation baselines
+        if tick % 30 == 0 && tracker.active_count() > 0 {
+            tracker.refresh_all(&brain);
+        }
 
         // ── Capture tick record into history ──
         let tick_record = TickRecord::capture(
