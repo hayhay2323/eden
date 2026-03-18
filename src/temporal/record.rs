@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use time::serde::rfc3339;
 
 use crate::ontology::links::TradeActivity;
 use crate::ontology::objects::Symbol;
@@ -11,6 +12,7 @@ use crate::ontology::objects::Symbol;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TickRecord {
     pub tick_number: u64,
+    #[serde(with = "rfc3339")]
     pub timestamp: OffsetDateTime,
     pub signals: HashMap<Symbol, SymbolSignals>,
 }
