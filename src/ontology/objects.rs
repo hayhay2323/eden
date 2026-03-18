@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 // ── ID newtypes ──
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -9,7 +11,7 @@ pub struct BrokerId(pub i32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InstitutionId(pub i32);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Symbol(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
