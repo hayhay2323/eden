@@ -22,10 +22,10 @@ impl EdenStore {
 
     /// Persist a tick record.
     pub async fn write_tick(&self, record: &TickRecord) -> Result<(), Box<dyn std::error::Error>> {
-        let id = format!("tick_{}", record.tick_number);
+        let id = format!("tick_{}_{}", record.timestamp.unix_timestamp(), record.tick_number);
         let _: Option<serde_json::Value> = self
             .db
-            .create(("tick_record", &id))
+            .upsert(("tick_record", &id))
             .content(record.clone())
             .await?;
         Ok(())
@@ -49,7 +49,7 @@ impl EdenStore {
             });
             let _: Option<serde_json::Value> = self
                 .db
-                .create(("institution_state", &id))
+                .upsert(("institution_state", &id))
                 .content(record)
                 .await?;
         }
