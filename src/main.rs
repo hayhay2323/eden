@@ -23,6 +23,7 @@ use eden::pipeline::dimensions::DimensionSnapshot;
 use eden::temporal::buffer::TickHistory;
 use eden::temporal::record::TickRecord;
 use eden::temporal::analysis::compute_dynamics;
+use eden::persistence::store::EdenStore;
 
 const WATCHLIST: &[&str] = &[
     "700.HK",   // Tencent
@@ -225,6 +226,19 @@ async fn main() {
         println!("\nBroker {} → {} ({})", test_broker, inst.name_en, inst.id);
     }
 
+    // ── Initialize SurrealDB ──
+    let eden_db_path = std::env::var("EDEN_DB_PATH").unwrap_or_else(|_| "data/eden.db".into());
+    let eden_store = match EdenStore::open(&eden_db_path).await {
+        Ok(store) => {
+            println!("SurrealDB opened at {}", eden_db_path);
+            Some(store)
+        }
+        Err(e) => {
+            eprintln!("Warning: SurrealDB failed to open: {}. Running without persistence.", e);
+            None
+        }
+    };
+
     let watchlist_symbols: Vec<Symbol> = WATCHLIST.iter().map(|s| Symbol(s.to_string())).collect();
 
     // ── Subscribe to ALL real-time push types ──
@@ -357,6 +371,24 @@ async fn main() {
             &decision.degradations,
         );
         history.push(tick_record);
+
+        // ── Persist to SurrealDB (log errors, never panic) ──
+        if let Some(ref store) = eden_store {
+            if let Some(latest) = history.latest() {
+                if let Err(e) = store.write_tick(latest).await {
+                    eprintln!("Warning: failed to write tick: {}", e);
+                }
+            }
+            // Write institution states every 30 ticks (~1 min)
+            if tick % 30 == 0 {
+                if let Err(e) = store.write_institution_states(
+                    &links.cross_stock_presences,
+                    now,
+                ).await {
+                    eprintln!("Warning: failed to write institution states: {}", e);
+                }
+            }
+        }
 
         // ── Compute temporal dynamics ──
         let dynamics = compute_dynamics(&history);
