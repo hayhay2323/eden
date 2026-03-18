@@ -94,6 +94,12 @@ pub struct Stock {
     pub exchange: String,
     pub lot_size: i32,
     pub sector_id: Option<SectorId>,
+    // Fundamentals from static_info
+    pub total_shares: i64,
+    pub circulating_shares: i64,
+    pub eps_ttm: rust_decimal::Decimal,
+    pub bps: rust_decimal::Decimal,
+    pub dividend_yield: rust_decimal::Decimal,
 }
 
 #[derive(Debug, Clone)]

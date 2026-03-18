@@ -375,6 +375,11 @@ mod tests {
             exchange: "SEHK".into(),
             lot_size: 100,
             sector_id: sector.map(|s| SectorId(s.into())),
+            total_shares: 0,
+            circulating_shares: 0,
+            eps_ttm: rust_decimal::Decimal::ZERO,
+            bps: rust_decimal::Decimal::ZERO,
+            dividend_yield: rust_decimal::Decimal::ZERO,
         }
     }
 

@@ -203,6 +203,11 @@ pub async fn initialize(
                 exchange: info.exchange.clone(),
                 lot_size: info.lot_size,
                 sector_id,
+                total_shares: info.total_shares,
+                circulating_shares: info.circulating_shares,
+                eps_ttm: info.eps_ttm,
+                bps: info.bps,
+                dividend_yield: info.dividend_yield,
             },
         );
     }
@@ -243,6 +248,11 @@ mod tests {
             exchange: "SEHK".into(),
             lot_size: 100,
             sector_id: sector.map(|s| SectorId(s.into())),
+            total_shares: 0,
+            circulating_shares: 0,
+            eps_ttm: rust_decimal::Decimal::ZERO,
+            bps: rust_decimal::Decimal::ZERO,
+            dividend_yield: rust_decimal::Decimal::ZERO,
         }
     }
 
