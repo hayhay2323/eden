@@ -1,13 +1,28 @@
-use longport::quote::QuoteContext;
-use longport::Config;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
+use longport::quote::{
+    PushEvent, PushEventDetail, QuoteContext, SecurityBrokers, SecurityDepth, SecurityQuote,
+    SubFlags, Trade,
+};
+use longport::Config;
+use rust_decimal::Decimal;
+use tokio::sync::mpsc;
+use tokio::time::{Duration, Instant};
+
+use eden::action::narrative::NarrativeSnapshot;
+use eden::graph::decision::{DecisionSnapshot, OrderDirection};
+use eden::graph::graph::BrainGraph;
+use eden::graph::tracker::PositionTracker;
+use eden::logic::tension::TensionSnapshot;
 use eden::ontology::links::LinkSnapshot;
 use eden::ontology::objects::{BrokerId, Symbol};
-use eden::ontology::snapshot;
+use eden::ontology::snapshot::{self, RawSnapshot};
 use eden::ontology::store;
-use eden::action::narrative::NarrativeSnapshot;
-use eden::logic::tension::TensionSnapshot;
 use eden::pipeline::dimensions::DimensionSnapshot;
+use eden::temporal::buffer::TickHistory;
+use eden::temporal::record::TickRecord;
+use eden::temporal::analysis::compute_dynamics;
 
 const WATCHLIST: &[&str] = &[
     "700.HK",   // Tencent
@@ -35,12 +50,163 @@ const WATCHLIST: &[&str] = &[
     "2269.HK",  // WuXi Bio
 ];
 
+/// Debounce window: after receiving a push event, wait this long for more
+/// before running the pipeline. Batches rapid-fire events without adding latency.
+const DEBOUNCE_MS: u64 = 2000;
+
+/// Live market state accumulated from WebSocket push events.
+struct LiveState {
+    depths: HashMap<Symbol, SecurityDepth>,
+    brokers: HashMap<Symbol, SecurityBrokers>,
+    quotes: HashMap<Symbol, SecurityQuote>,
+    trades: HashMap<Symbol, Vec<Trade>>,
+    push_count: u64,
+    dirty: bool, // true if new pushes since last pipeline run
+}
+
+impl LiveState {
+    fn new() -> Self {
+        Self {
+            depths: HashMap::new(),
+            brokers: HashMap::new(),
+            quotes: HashMap::new(),
+            trades: HashMap::new(),
+            push_count: 0,
+            dirty: false,
+        }
+    }
+
+    fn apply(&mut self, event: PushEvent) {
+        let symbol = Symbol(event.symbol);
+        self.push_count += 1;
+        self.dirty = true;
+        match event.detail {
+            PushEventDetail::Depth(depth) => {
+                self.depths.insert(
+                    symbol,
+                    SecurityDepth {
+                        asks: depth.asks,
+                        bids: depth.bids,
+                    },
+                );
+            }
+            PushEventDetail::Brokers(brokers) => {
+                self.brokers.insert(
+                    symbol,
+                    SecurityBrokers {
+                        ask_brokers: brokers.ask_brokers,
+                        bid_brokers: brokers.bid_brokers,
+                    },
+                );
+            }
+            PushEventDetail::Quote(quote) => {
+                let existing = self.quotes.get(&symbol);
+                self.quotes.insert(
+                    symbol.clone(),
+                    SecurityQuote {
+                        symbol: symbol.0,
+                        last_done: quote.last_done,
+                        prev_close: existing
+                            .map(|q| q.prev_close)
+                            .unwrap_or(Decimal::ZERO),
+                        open: quote.open,
+                        high: quote.high,
+                        low: quote.low,
+                        timestamp: quote.timestamp,
+                        volume: quote.volume,
+                        turnover: quote.turnover,
+                        trade_status: quote.trade_status,
+                        pre_market_quote: None,
+                        post_market_quote: None,
+                        overnight_quote: None,
+                    },
+                );
+            }
+            PushEventDetail::Trade(push_trades) => {
+                let entry = self.trades.entry(symbol).or_default();
+                entry.extend(push_trades.trades);
+            }
+            _ => {} // Candlestick — not used
+        }
+    }
+
+    /// Merge live push state with REST-fetched capital data into a RawSnapshot.
+    /// Consumes accumulated trades (they're per-tick, not cumulative).
+    fn to_raw_snapshot(&mut self, rest: &RestSnapshot) -> RawSnapshot {
+        let trades = std::mem::take(&mut self.trades);
+        self.dirty = false;
+        RawSnapshot {
+            timestamp: time::OffsetDateTime::now_utc(),
+            brokers: self.brokers.clone(),
+            depths: self.depths.clone(),
+            quotes: self.quotes.clone(),
+            trades,
+            capital_flows: rest.capital_flows.clone(),
+            capital_distributions: rest.capital_distributions.clone(),
+        }
+    }
+}
+
+/// REST-only data that doesn't come via push.
+struct RestSnapshot {
+    capital_flows: HashMap<Symbol, Vec<longport::quote::CapitalFlowLine>>,
+    capital_distributions: HashMap<Symbol, longport::quote::CapitalDistributionResponse>,
+}
+
+/// Fetch only capital flow + distribution via REST (not push-able).
+async fn fetch_capital_data(ctx: &QuoteContext, watchlist: &[Symbol]) -> RestSnapshot {
+    use futures::future::join_all;
+
+    let flow_futures: Vec<_> = watchlist
+        .iter()
+        .map(|sym| {
+            let ctx = ctx.clone();
+            let symbol_str = sym.0.clone();
+            let sym = sym.clone();
+            async move {
+                match ctx.capital_flow(symbol_str).await {
+                    Ok(f) => Some((sym, f)),
+                    Err(e) => {
+                        eprintln!("Warning: capital_flow({}) failed: {}", sym, e);
+                        None
+                    }
+                }
+            }
+        })
+        .collect();
+
+    let dist_futures: Vec<_> = watchlist
+        .iter()
+        .map(|sym| {
+            let ctx = ctx.clone();
+            let symbol_str = sym.0.clone();
+            let sym = sym.clone();
+            async move {
+                match ctx.capital_distribution(symbol_str).await {
+                    Ok(d) => Some((sym, d)),
+                    Err(e) => {
+                        eprintln!("Warning: capital_distribution({}) failed: {}", sym, e);
+                        None
+                    }
+                }
+            }
+        })
+        .collect();
+
+    let (flow_results, dist_results) = tokio::join!(join_all(flow_futures), join_all(dist_futures));
+
+    RestSnapshot {
+        capital_flows: flow_results.into_iter().flatten().collect(),
+        capital_distributions: dist_results.into_iter().flatten().collect(),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
 
     let config = Config::from_env().expect("failed to load Longport config from env");
-    let (ctx, _) = QuoteContext::try_new(config.into())
+    let (ctx, mut receiver) = QuoteContext::try_new(Arc::new(config))
         .await
         .expect("failed to connect to Longport");
 
@@ -48,199 +214,309 @@ async fn main() {
 
     let store = store::initialize(&ctx, WATCHLIST).await;
 
-    // Stats
     println!("\n=== ObjectStore Stats ===");
     println!("Institutions: {}", store.institutions.len());
     println!("Brokers:      {}", store.brokers.len());
     println!("Stocks:       {}", store.stocks.len());
     println!("Sectors:      {}", store.sectors.len());
 
-    // Verify: look up broker 4497 → should be Barclays Asia
     let test_broker = BrokerId(4497);
-    match store.institution_for_broker(&test_broker) {
-        Some(inst) => {
-            println!("\n=== Broker {} Lookup ===", test_broker);
-            println!("Institution: {} ({})", inst.name_en, inst.id);
-            println!("Class:       {:?}", inst.class);
-            println!("All broker seats: {:?}", inst.broker_ids);
-        }
-        None => {
-            println!("\nBroker {} not found in any institution", test_broker);
-        }
+    if let Some(inst) = store.institution_for_broker(&test_broker) {
+        println!("\nBroker {} → {} ({})", test_broker, inst.name_en, inst.id);
     }
 
-    // ── Layer 2: Links ──
-    println!("\n=== Fetching Links snapshot... ===");
     let watchlist_symbols: Vec<Symbol> = WATCHLIST.iter().map(|s| Symbol(s.to_string())).collect();
-    let raw = snapshot::fetch(&ctx, &watchlist_symbols).await;
-    let links = LinkSnapshot::compute(&raw, &store);
 
-    println!("\n=== LinkSnapshot Stats ===");
-    println!("Broker queue entries:    {}", links.broker_queues.len());
-    println!("Institution activities:  {}", links.institution_activities.len());
-    println!("Cross-stock presences:   {}", links.cross_stock_presences.len());
-    println!("Capital flows:           {}", links.capital_flows.len());
-    println!("Capital breakdowns:      {}", links.capital_breakdowns.len());
-    println!("Order books:             {}", links.order_books.len());
-    println!("Quotes:                  {}", links.quotes.len());
+    // ── Subscribe to ALL real-time push types ──
+    println!("\nSubscribing to WebSocket (DEPTH + BROKER + QUOTE + TRADE)...");
+    ctx.subscribe(
+        WATCHLIST,
+        SubFlags::DEPTH | SubFlags::BROKER | SubFlags::QUOTE | SubFlags::TRADE,
+    )
+    .await
+    .expect("failed to subscribe");
+    println!("Subscribed to {} symbols × 4 channels.", WATCHLIST.len());
 
-    // ── Order book imbalance ──
-    println!("\n=== Order Book Imbalance (Bid vs Ask) ===");
-    let mut obs: Vec<_> = links.order_books.iter().collect();
-    obs.sort_by_key(|o| std::cmp::Reverse(o.total_bid_volume.saturating_add(o.total_ask_volume)));
-    for ob in &obs {
-        let total = ob.total_bid_volume + ob.total_ask_volume;
-        let bid_pct = if total > 0 { ob.total_bid_volume as f64 / total as f64 * 100.0 } else { 0.0 };
-        println!("  {:>8}  bid {:<12} ask {:<12} bid%={:.1}%  spread={:?}",
-            ob.symbol, ob.total_bid_volume, ob.total_ask_volume, bid_pct, ob.spread);
-    }
+    // ── Seed with initial REST snapshot ──
+    println!("Fetching initial snapshot...");
+    let initial_raw = snapshot::fetch(&ctx, &watchlist_symbols).await;
 
-    // ── Capital flow ranking ──
-    println!("\n=== Capital Flow Ranking (Net Inflow) ===");
-    let mut flows: Vec<_> = links.capital_flows.iter().collect();
-    flows.sort_by(|a, b| b.net_inflow.cmp(&a.net_inflow));
-    for f in &flows {
-        println!("  {:>8}  net_inflow={}", f.symbol, f.net_inflow);
-    }
+    let mut live = LiveState::new();
+    live.depths = initial_raw.depths;
+    live.brokers = initial_raw.brokers;
+    live.quotes = initial_raw.quotes;
 
-    // ── Capital breakdown ──
-    println!("\n=== Capital Breakdown (Large / Medium / Small net) ===");
-    let mut bds: Vec<_> = links.capital_breakdowns.iter().collect();
-    bds.sort_by(|a, b| b.large_net.cmp(&a.large_net));
-    for b in &bds {
-        println!("  {:>8}  large={:<14} medium={:<14} small={}", b.symbol, b.large_net, b.medium_net, b.small_net);
-    }
+    let mut rest = RestSnapshot {
+        capital_flows: initial_raw.capital_flows,
+        capital_distributions: initial_raw.capital_distributions,
+    };
 
-    // ── Cross-stock presences (top institutions) ──
-    println!("\n=== Top Cross-Stock Institutions ===");
-    let mut cross: Vec<_> = links.cross_stock_presences.iter().collect();
-    cross.sort_by_key(|c| std::cmp::Reverse(c.symbols.len()));
-    for c in cross.iter().take(10) {
-        let inst_name = store.institutions.get(&c.institution_id)
-            .map(|i| i.name_en.as_str()).unwrap_or("?");
-        println!("  {} ({}) — {} stocks, ask={}, bid={}",
-            inst_name, c.institution_id, c.symbols.len(), c.ask_symbols.len(), c.bid_symbols.len());
-    }
+    let mut tracker = PositionTracker::new();
+    let mut history = TickHistory::new(300); // ~10 min at 2s debounce
+    let pct = Decimal::new(100, 0);
 
-    // ── Quote summary ──
-    println!("\n=== Quote Summary ===");
-    let mut qs: Vec<_> = links.quotes.iter().collect();
-    qs.sort_by(|a, b| b.volume.cmp(&a.volume));
-    for q in &qs {
-        let chg = q.last_done - q.prev_close;
-        let chg_pct = if q.prev_close != rust_decimal::Decimal::ZERO {
-            (chg / q.prev_close * rust_decimal::Decimal::new(100, 0)).round_dp(2)
-        } else { rust_decimal::Decimal::ZERO };
-        println!("  {:>8}  last={:<10} chg={:<+10} ({:>+6}%)  vol={:<12} status={:?}",
-            q.symbol, q.last_done, chg, chg_pct, q.volume, q.market_status);
-    }
+    println!(
+        "\nReal-time event-driven monitoring active (debounce: {}ms)\n",
+        DEBOUNCE_MS,
+    );
 
-    // Find Barclays cross-stock presence
-    let barclays_id = store
-        .institution_for_broker(&BrokerId(4497))
-        .map(|inst| inst.id);
-    // 700.HK order book detail
-    if let Some(ob) = links.order_books.iter().find(|o| o.symbol == Symbol("700.HK".into())) {
-        println!("\n=== 700.HK Order Book ===");
-        println!("Ask levels: {} (total vol: {})", ob.ask_level_count, ob.total_ask_volume);
-        println!("Bid levels: {} (total vol: {})", ob.bid_level_count, ob.total_bid_volume);
-        println!("Spread: {:?}", ob.spread);
-    }
+    // ── Spawn push event forwarder ──
+    let (push_tx, mut push_rx) = mpsc::unbounded_channel::<PushEvent>();
+    tokio::spawn(async move {
+        while let Some(event) = receiver.recv().await {
+            if push_tx.send(event).is_err() {
+                break;
+            }
+        }
+    });
 
-    // 700.HK quote detail
-    if let Some(q) = links.quotes.iter().find(|q| q.symbol == Symbol("700.HK".into())) {
-        println!("\n=== 700.HK Quote ===");
-        println!("Last: {} | Prev Close: {}", q.last_done, q.prev_close);
-        println!("Open: {} | High: {} | Low: {}", q.open, q.high, q.low);
-        println!("Volume: {} | Turnover: {}", q.volume, q.turnover);
-        println!("Status: {:?}", q.market_status);
-    }
+    let mut tick: u64 = 0;
+    let debounce = Duration::from_millis(DEBOUNCE_MS);
 
-    // ── Layer 3: Pipeline — Dimension Vectors ──
-    let dim_snapshot = DimensionSnapshot::compute(&links);
-    println!("\n=== Dimension Vectors ===");
-    let pct = rust_decimal::Decimal::new(100, 0);
-    let mut dim_syms: Vec<_> = dim_snapshot.dimensions.iter().collect();
-    dim_syms.sort_by(|a, b| a.0 .0.cmp(&b.0 .0));
-    for (sym, d) in &dim_syms {
+    // Refresh capital data every 60s (REST-only data)
+    let capital_refresh_interval = Duration::from_secs(60);
+    let mut last_capital_refresh = Instant::now();
+
+    loop {
+        // Wait for at least one push event
+        match push_rx.recv().await {
+            Some(event) => live.apply(event),
+            None => {
+                eprintln!("Push channel closed. Exiting.");
+                break;
+            }
+        }
+
+        // Debounce: drain all events that arrive within the window
+        let deadline = Instant::now() + debounce;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(remaining, push_rx.recv()).await {
+                Ok(Some(event)) => live.apply(event),
+                _ => break,
+            }
+        }
+
+        if !live.dirty {
+            continue;
+        }
+
+        tick += 1;
+        let now = time::OffsetDateTime::now_utc();
+
+        // Refresh capital data periodically via REST
+        if last_capital_refresh.elapsed() >= capital_refresh_interval {
+            rest = fetch_capital_data(&ctx, &watchlist_symbols).await;
+            last_capital_refresh = Instant::now();
+        }
+
+        println!("══════════════════════════════════════════════════════════");
         println!(
-            "  {:>8}  book={:>+7}%  capital={:>+7}%  size={:>+7}%  inst={:>+7}%",
-            sym,
-            (d.order_book_pressure * pct).round_dp(1),
-            (d.capital_flow_direction * pct).round_dp(2),
-            (d.capital_size_divergence * pct).round_dp(1),
-            (d.institutional_direction * pct).round_dp(1),
+            "  #{:<4}  {}  │  {} total pushes",
+            tick,
+            now.format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_else(|_| now.to_string()),
+            live.push_count,
         );
-    }
+        println!("══════════════════════════════════════════════════════════");
 
-    // ── Layer 4: Logic — Tension Analysis ──
-    let tension_snapshot = TensionSnapshot::compute(&dim_snapshot);
-    let mut tension_syms: Vec<_> = tension_snapshot.tensions.iter().collect();
-    tension_syms.sort_by(|a, b| a.1.coherence.cmp(&b.1.coherence)); // most tense first
+        // ── Build snapshot and run full pipeline ──
+        let raw = live.to_raw_snapshot(&rest);
 
-    println!("\n=== Tension Analysis (most conflicted first) ===");
-    for (sym, t) in &tension_syms {
-        let tense_pairs: Vec<_> = t.pairs.iter().filter(|p| p.product < rust_decimal::Decimal::ZERO).collect();
-        let dir_arrow = if t.mean_direction > rust_decimal::Decimal::ZERO { "▲" } else if t.mean_direction < rust_decimal::Decimal::ZERO { "▼" } else { "—" };
-        print!(
-            "  {:>8}  coherence={:>+6}  direction={} {:>+6}",
-            sym,
-            (t.coherence * pct).round_dp(1),
-            dir_arrow,
-            (t.mean_direction * pct).round_dp(1),
-        );
-        if tense_pairs.is_empty() {
-            println!("  (aligned)");
-        } else {
-            let labels: Vec<String> = tense_pairs
-                .iter()
-                .map(|p| format!("{}↔{}", p.dim_a, p.dim_b))
-                .collect();
-            println!("  tensions: {}", labels.join(", "));
-        }
-    }
-
-    // ── Layer 5: Action — Market Narratives ──
-    let narrative_snapshot = NarrativeSnapshot::compute(&tension_snapshot, &dim_snapshot);
-    let mut narr_syms: Vec<_> = narrative_snapshot.narratives.iter().collect();
-    narr_syms.sort_by(|a, b| a.0 .0.cmp(&b.0 .0));
-
-    println!("\n=== Market Narratives ===");
-    for (sym, n) in &narr_syms {
-        let dir_arrow = if n.mean_direction > rust_decimal::Decimal::ZERO { "▲" } else if n.mean_direction < rust_decimal::Decimal::ZERO { "▼" } else { "—" };
-        let strongest = &n.readings[0];
-        print!(
-            "  {:>8}  {:<18} coherence={:>+6}%  dir={}{:>+6}%  strongest: {}({:>+4}%)",
-            sym,
-            n.regime.to_string(),
-            (n.coherence * pct).round_dp(1),
-            dir_arrow,
-            (n.mean_direction * pct).round_dp(1),
-            strongest.dimension.short_name(),
-            (strongest.value * pct).round_dp(0),
-        );
-        if !n.contradictions.is_empty() {
-            let labels: Vec<String> = n.contradictions.iter()
-                .map(|p| format!("{}↔{}", p.dim_a, p.dim_b))
-                .collect();
-            println!("  tensions: {}", labels.join(", "));
-        } else {
-            println!();
-        }
-    }
-
-    if let Some(bid) = barclays_id {
-        if let Some(cross) = links
-            .cross_stock_presences
+        // Show trade activity if any
+        let trade_symbols: Vec<_> = raw
+            .trades
             .iter()
-            .find(|c| c.institution_id == bid)
-        {
-            println!("\n=== Barclays Cross-Stock Presence ===");
-            println!("Stocks: {:?}", cross.symbols);
-            println!("Ask:    {:?}", cross.ask_symbols);
-            println!("Bid:    {:?}", cross.bid_symbols);
-        } else {
-            println!("\nBarclays not present in multiple stocks this snapshot");
+            .filter(|(_, t)| !t.is_empty())
+            .map(|(s, t)| (s.clone(), t.len(), t.iter().map(|t| t.volume).sum::<i64>()))
+            .collect();
+
+        let links = LinkSnapshot::compute(&raw, &store);
+        let dim_snapshot = DimensionSnapshot::compute(&links);
+        let tension_snapshot = TensionSnapshot::compute(&dim_snapshot);
+        let narrative_snapshot = NarrativeSnapshot::compute(&tension_snapshot, &dim_snapshot);
+        let brain = BrainGraph::compute(&narrative_snapshot, &dim_snapshot, &links, &store);
+
+        let active_fps = tracker.active_fingerprints();
+        let decision = DecisionSnapshot::compute(&brain, &links, &active_fps, &store);
+
+        let newly_entered = tracker.auto_enter(&decision.convergence_scores, &brain);
+        let new_set: HashSet<&Symbol> = newly_entered.iter().collect();
+
+        // ── Capture tick record into history ──
+        let tick_record = TickRecord::capture(
+            tick,
+            now,
+            &decision.convergence_scores,
+            &dim_snapshot.dimensions,
+            &links.order_books,
+            &links.trade_activities,
+            &decision.degradations,
+        );
+        history.push(tick_record);
+
+        // ── Compute temporal dynamics ──
+        let dynamics = compute_dynamics(&history);
+
+        // ── Display: Convergence Scores ──
+        println!("\n── Convergence Scores ──");
+        let mut conv_syms: Vec<_> = decision.convergence_scores.iter().collect();
+        conv_syms.sort_by(|a, b| b.1.composite.abs().cmp(&a.1.composite.abs()));
+        for (sym, c) in &conv_syms {
+            let dir = if c.composite > Decimal::ZERO {
+                "▲"
+            } else if c.composite < Decimal::ZERO {
+                "▼"
+            } else {
+                "—"
+            };
+            println!(
+                "  {:>8}  composite={}{:>+7}%  inst={:>+7}%  sector={:>+7}%  corr={:>+7}%",
+                sym,
+                dir,
+                (c.composite * pct).round_dp(1),
+                (c.institutional_alignment * pct).round_dp(1),
+                c.sector_coherence
+                    .map(|s| format!("{:>+7}", (s * pct).round_dp(1)))
+                    .unwrap_or_else(|| "    n/a".into()),
+                (c.cross_stock_correlation * pct).round_dp(1),
+            );
         }
+
+        // ── Display: Temporal Dynamics ──
+        if history.len() >= 2 {
+            let mut dyn_syms: Vec<_> = dynamics.iter().collect();
+            dyn_syms.sort_by(|a, b| b.1.composite_delta.abs().cmp(&a.1.composite_delta.abs()));
+            println!("\n── Signal Dynamics (biggest movers) ──");
+            for (sym, d) in dyn_syms.iter().take(10) {
+                let accel = if d.composite_acceleration > Decimal::ZERO { "accelerating" }
+                    else if d.composite_acceleration < Decimal::ZERO { "decelerating" }
+                    else { "steady" };
+                println!(
+                    "  {:>8}  delta={:>+7}%  {}  duration={} ticks  inst_delta={:>+7}%  bid_wall={:>+6}%  ask_wall={:>+6}%  buy_ratio={:>5}%",
+                    sym,
+                    (d.composite_delta * pct).round_dp(1),
+                    accel,
+                    d.composite_duration,
+                    (d.inst_alignment_delta * pct).round_dp(1),
+                    (d.bid_wall_delta * pct).round_dp(1),
+                    (d.ask_wall_delta * pct).round_dp(1),
+                    (d.buy_ratio_trend * pct).round_dp(0),
+                );
+            }
+        }
+
+        // ── Display: Order Suggestions ──
+        if !decision.order_suggestions.is_empty() {
+            println!("\n── Order Suggestions ──");
+            for s in &decision.order_suggestions {
+                let dir = match s.direction {
+                    OrderDirection::Buy => "BUY ",
+                    OrderDirection::Sell => "SELL",
+                };
+                let tag = if new_set.contains(&s.symbol) {
+                    " [NEW]"
+                } else {
+                    ""
+                };
+                println!(
+                    "  {:>8}  {}  qty={}  price=[{} - {}]  composite={:>+7}%{}",
+                    s.symbol,
+                    dir,
+                    s.suggested_quantity,
+                    s.price_low
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "?".into()),
+                    s.price_high
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "?".into()),
+                    (s.convergence.composite * pct).round_dp(1),
+                    tag,
+                );
+            }
+        }
+
+        // ── Display: Structural Degradation ──
+        if !decision.degradations.is_empty() {
+            println!("\n── Structural Degradation (active positions) ──");
+            let mut deg_syms: Vec<_> = decision.degradations.iter().collect();
+            deg_syms.sort_by(|a, b| b.1.composite_degradation.cmp(&a.1.composite_degradation));
+            for (sym, d) in &deg_syms {
+                println!(
+                    "  {:>8}  degradation={:>+7}%  inst_retain={:>+7}%  sector_chg={:>+7}%  corr_retain={:>+7}%  dim_drift={:>+7}%",
+                    sym,
+                    (d.composite_degradation * pct).round_dp(1),
+                    (d.institution_retention * pct).round_dp(1),
+                    (d.sector_coherence_change * pct).round_dp(1),
+                    (d.correlation_retention * pct).round_dp(1),
+                    (d.dimension_drift * pct).round_dp(1),
+                );
+            }
+        }
+
+        // ── Display: Trade Activity ──
+        if !trade_symbols.is_empty() {
+            println!("\n── Trade Ticks ──");
+            let mut sorted = trade_symbols;
+            sorted.sort_by(|a, b| b.2.cmp(&a.2));
+            for (sym, count, vol) in sorted.iter().take(10) {
+                // Find buy/sell breakdown from links
+                if let Some(ta) = links.trade_activities.iter().find(|t| &t.symbol == sym) {
+                    let buy_pct = if ta.total_volume > 0 {
+                        ta.buy_volume as f64 / ta.total_volume as f64 * 100.0
+                    } else {
+                        0.0
+                    };
+                    println!(
+                        "  {:>8}  {} ticks  vol={}  buy={:.0}%  vwap={}",
+                        sym, count, vol, buy_pct, ta.vwap.round_dp(3),
+                    );
+                }
+            }
+        }
+
+        // ── Display: Depth Profile ──
+        let mut profiles: Vec<_> = links
+            .order_books
+            .iter()
+            .filter(|ob| ob.bid_profile.active_levels > 0 || ob.ask_profile.active_levels > 0)
+            .collect();
+        profiles.sort_by(|a, b| {
+            let a_imbal = (a.bid_profile.top3_volume_ratio - a.ask_profile.top3_volume_ratio).abs();
+            let b_imbal = (b.bid_profile.top3_volume_ratio - b.ask_profile.top3_volume_ratio).abs();
+            b_imbal.cmp(&a_imbal)
+        });
+        if !profiles.is_empty() {
+            println!("\n── Depth Profile (top asymmetry) ──");
+            for ob in profiles.iter().take(10) {
+                println!(
+                    "  {:>8}  bid[top3={:>5}% best={:>5}% lvls={}]  ask[top3={:>5}% best={:>5}% lvls={}]  spread={:?}",
+                    ob.symbol,
+                    (ob.bid_profile.top3_volume_ratio * pct).round_dp(1),
+                    (ob.bid_profile.best_level_ratio * pct).round_dp(1),
+                    ob.bid_profile.active_levels,
+                    (ob.ask_profile.top3_volume_ratio * pct).round_dp(1),
+                    (ob.ask_profile.best_level_ratio * pct).round_dp(1),
+                    ob.ask_profile.active_levels,
+                    ob.spread,
+                );
+            }
+        }
+
+        // ── Summary ──
+        println!(
+            "\n  Tracked: {} | New: {} | History: {}/{} ticks | Data: {} depths, {} brokers, {} quotes",
+            tracker.active_count(),
+            newly_entered.len(),
+            history.len(),
+            300,
+            live.depths.len(),
+            live.brokers.len(),
+            live.quotes.len(),
+        );
+        println!();
     }
 }
