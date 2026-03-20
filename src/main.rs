@@ -12,10 +12,10 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
 
 use eden::action::narrative::NarrativeSnapshot;
+use eden::action::workflow::{ActionDescriptor, ActionWorkflowSnapshot, SuggestedAction};
 use eden::external::polymarket::{
     fetch_polymarket_snapshot, load_polymarket_configs, PolymarketMarketConfig, PolymarketSnapshot,
 };
-use eden::action::workflow::{ActionDescriptor, ActionWorkflowSnapshot, SuggestedAction};
 use eden::graph::decision::{DecisionSnapshot, OrderDirection, StructuralFingerprint};
 use eden::graph::graph::BrainGraph;
 use eden::graph::insights::{ConflictHistory, GraphInsights};
@@ -55,9 +55,7 @@ use eden::persistence::lineage_snapshot::LineageSnapshotRecord;
 use eden::persistence::store::EdenStore;
 #[cfg(feature = "persistence")]
 use eden::persistence::tactical_setup::TacticalSetupRecord;
-use eden::temporal::lineage::{
-    LineageAlignmentFilter, LineageFilters, LineageSortKey,
-};
+use eden::temporal::lineage::{LineageAlignmentFilter, LineageFilters, LineageSortKey};
 
 const WATCHLIST: &[&str] = &[
     // ── User Holdings ──
@@ -618,8 +616,8 @@ fn parse_lineage_arguments(
                 index += 1;
                 continue;
             }
-            "--label" | "--bucket" | "--family" | "--session" | "--regime" | "--top"
-            | "--sort" | "--alignment" => {}
+            "--label" | "--bucket" | "--family" | "--session" | "--regime" | "--top" | "--sort"
+            | "--alignment" => {}
             _ => return Err(format!("unknown lineage flag: {}", flag)),
         }
 
@@ -995,10 +993,7 @@ fn print_causal_flip_event(leaf_label: &str, leaf_scope_key: &str, flip: &Causal
     println!("          {}", flip.summary);
 }
 
-fn print_polymarket_snapshot(
-    configs: &[PolymarketMarketConfig],
-    snapshot: &PolymarketSnapshot,
-) {
+fn print_polymarket_snapshot(configs: &[PolymarketMarketConfig], snapshot: &PolymarketSnapshot) {
     let pct = Decimal::new(100, 0);
     println!(
         "Polymarket  configured={}  fetched={}  priors={}",
@@ -1092,11 +1087,7 @@ fn print_lineage_report(
 }
 
 #[cfg(feature = "persistence")]
-fn print_lineage_history(
-    records: &[LineageSnapshotRecord],
-    filters: &LineageFilters,
-    top: usize,
-) {
+fn print_lineage_history(records: &[LineageSnapshotRecord], filters: &LineageFilters, top: usize) {
     if records.is_empty() {
         println!("No lineage snapshots found.");
         return;
@@ -1126,7 +1117,9 @@ fn select_lineage_rows(
         .filter(|row| {
             row_matches_filters(row, filters)
                 && matches_lineage_alignment(
-                    row.mean_external_delta.parse::<Decimal>().unwrap_or(Decimal::ZERO),
+                    row.mean_external_delta
+                        .parse::<Decimal>()
+                        .unwrap_or(Decimal::ZERO),
                     alignment,
                 )
         })
@@ -1149,6 +1142,7 @@ fn select_lineage_rows(
     filtered_rows
 }
 
+#[cfg(feature = "persistence")]
 fn lineage_row_metric(
     row: &eden::persistence::lineage_metric_row::LineageMetricRowRecord,
     sort_by: LineageSortKey,
@@ -1162,6 +1156,7 @@ fn lineage_row_metric(
     }
 }
 
+#[cfg(feature = "persistence")]
 fn matches_lineage_alignment(value: Decimal, alignment: LineageAlignmentFilter) -> bool {
     match alignment {
         LineageAlignmentFilter::All => true,
@@ -1570,11 +1565,7 @@ mod tests {
 
     #[test]
     fn parse_lineage_cli_command_with_explicit_limit() {
-        let args = vec![
-            "eden".to_string(),
-            "lineage".to_string(),
-            "42".to_string(),
-        ];
+        let args = vec!["eden".to_string(), "lineage".to_string(), "42".to_string()];
         let command = parse_cli_command(&args).expect("lineage command parses");
         match command {
             CliCommand::Lineage {
@@ -1839,12 +1830,12 @@ async fn fetch_rest_data(
     let market_context_future = fetch_market_context(ctx, watchlist);
     let polymarket_future = fetch_polymarket_snapshot(polymarket_configs);
 
-    let (
-        flow_results,
-        dist_results,
-        (calc_indexes, market_temperature),
-        polymarket_snapshot,
-    ) = tokio::join!(flow_future, dist_future, market_context_future, polymarket_future);
+    let (flow_results, dist_results, (calc_indexes, market_temperature), polymarket_snapshot) = tokio::join!(
+        flow_future,
+        dist_future,
+        market_context_future,
+        polymarket_future
+    );
 
     RestSnapshot {
         calc_indexes,

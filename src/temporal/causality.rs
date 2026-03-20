@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+use time::serde::rfc3339;
 use time::OffsetDateTime;
 
 use crate::ontology::world::{BackwardInvestigation, CausalContestState};
@@ -8,7 +10,8 @@ use crate::ontology::ReasoningScope;
 
 use super::buffer::TickHistory;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CausalFlipStyle {
     Sudden,
     ErosionDriven,
@@ -29,9 +32,10 @@ impl std::fmt::Display for CausalFlipStyle {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CausalTimelinePoint {
     pub tick_number: u64,
+    #[serde(with = "rfc3339")]
     pub timestamp: OffsetDateTime,
     pub contest_state: CausalContestState,
     pub leading_cause_id: Option<String>,
@@ -42,9 +46,10 @@ pub struct CausalTimelinePoint {
     pub leader_transition_summary: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CausalFlipEvent {
     pub tick_number: u64,
+    #[serde(with = "rfc3339")]
     pub timestamp: OffsetDateTime,
     pub from_cause_id: String,
     pub from_explanation: String,
@@ -55,7 +60,7 @@ pub struct CausalFlipEvent {
     pub summary: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CausalTimeline {
     pub leaf_scope_key: String,
     pub leaf_label: String,

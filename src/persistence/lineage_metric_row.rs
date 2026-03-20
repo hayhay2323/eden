@@ -124,72 +124,108 @@ pub fn rows_from_lineage_stats(
 ) -> Vec<LineageMetricRowRecord> {
     let mut rows = Vec::new();
 
-    rows.extend(stats.promoted_outcomes.iter().enumerate().map(|(idx, item)| {
-        LineageMetricRowRecord::outcome_row(
-            snapshot_id,
-            tick_number,
-            recorded_at,
-            window_size,
-            "promoted_outcomes",
-            idx,
-            item,
-        )
-    }));
-    rows.extend(stats.blocked_outcomes.iter().enumerate().map(|(idx, item)| {
-        LineageMetricRowRecord::outcome_row(
-            snapshot_id,
-            tick_number,
-            recorded_at,
-            window_size,
-            "blocked_outcomes",
-            idx,
-            item,
-        )
-    }));
-    rows.extend(stats.falsified_outcomes.iter().enumerate().map(|(idx, item)| {
-        LineageMetricRowRecord::outcome_row(
-            snapshot_id,
-            tick_number,
-            recorded_at,
-            window_size,
-            "falsified_outcomes",
-            idx,
-            item,
-        )
-    }));
-    rows.extend(stats.promoted_contexts.iter().enumerate().map(|(idx, item)| {
-        LineageMetricRowRecord::contextual_row(
-            snapshot_id,
-            tick_number,
-            recorded_at,
-            window_size,
-            "promoted_contexts",
-            idx,
-            item,
-        )
-    }));
-    rows.extend(stats.blocked_contexts.iter().enumerate().map(|(idx, item)| {
-        LineageMetricRowRecord::contextual_row(
-            snapshot_id,
-            tick_number,
-            recorded_at,
-            window_size,
-            "blocked_contexts",
-            idx,
-            item,
-        )
-    }));
-    rows.extend(stats.falsified_contexts.iter().enumerate().map(|(idx, item)| {
-        LineageMetricRowRecord::contextual_row(
-            snapshot_id,
-            tick_number,
-            recorded_at,
-            window_size,
-            "falsified_contexts",
-            idx,
-            item,
-        )
-    }));
+    rows.extend(
+        stats
+            .promoted_outcomes
+            .iter()
+            .enumerate()
+            .map(|(idx, item)| {
+                LineageMetricRowRecord::outcome_row(
+                    snapshot_id,
+                    tick_number,
+                    recorded_at,
+                    window_size,
+                    "promoted_outcomes",
+                    idx,
+                    item,
+                )
+            }),
+    );
+    rows.extend(
+        stats
+            .blocked_outcomes
+            .iter()
+            .enumerate()
+            .map(|(idx, item)| {
+                LineageMetricRowRecord::outcome_row(
+                    snapshot_id,
+                    tick_number,
+                    recorded_at,
+                    window_size,
+                    "blocked_outcomes",
+                    idx,
+                    item,
+                )
+            }),
+    );
+    rows.extend(
+        stats
+            .falsified_outcomes
+            .iter()
+            .enumerate()
+            .map(|(idx, item)| {
+                LineageMetricRowRecord::outcome_row(
+                    snapshot_id,
+                    tick_number,
+                    recorded_at,
+                    window_size,
+                    "falsified_outcomes",
+                    idx,
+                    item,
+                )
+            }),
+    );
+    rows.extend(
+        stats
+            .promoted_contexts
+            .iter()
+            .enumerate()
+            .map(|(idx, item)| {
+                LineageMetricRowRecord::contextual_row(
+                    snapshot_id,
+                    tick_number,
+                    recorded_at,
+                    window_size,
+                    "promoted_contexts",
+                    idx,
+                    item,
+                )
+            }),
+    );
+    rows.extend(
+        stats
+            .blocked_contexts
+            .iter()
+            .enumerate()
+            .map(|(idx, item)| {
+                LineageMetricRowRecord::contextual_row(
+                    snapshot_id,
+                    tick_number,
+                    recorded_at,
+                    window_size,
+                    "blocked_contexts",
+                    idx,
+                    item,
+                )
+            }),
+    );
+    rows.extend(
+        stats
+            .falsified_contexts
+            .iter()
+            .enumerate()
+            .map(|(idx, item)| {
+                LineageMetricRowRecord::contextual_row(
+                    snapshot_id,
+                    tick_number,
+                    recorded_at,
+                    window_size,
+                    "falsified_contexts",
+                    idx,
+                    item,
+                )
+            }),
+    );
 
     rows
 }
@@ -197,8 +233,14 @@ pub fn rows_from_lineage_stats(
 pub fn row_matches_filters(row: &LineageMetricRowRecord, filters: &LineageFilters) -> bool {
     matches_bucket(filters.bucket.as_deref(), &row.bucket)
         && matches_text(filters.label.as_deref(), &row.label)
-        && matches_text(filters.family.as_deref(), row.family.as_deref().unwrap_or(""))
-        && matches_text(filters.session.as_deref(), row.session.as_deref().unwrap_or(""))
+        && matches_text(
+            filters.family.as_deref(),
+            row.family.as_deref().unwrap_or(""),
+        )
+        && matches_text(
+            filters.session.as_deref(),
+            row.session.as_deref().unwrap_or(""),
+        )
         && matches_text(
             filters.market_regime.as_deref(),
             row.market_regime.as_deref().unwrap_or(""),
@@ -313,7 +355,9 @@ fn parse_decimal(value: &str) -> rust_decimal::Decimal {
 fn matches_text(filter: Option<&str>, value: &str) -> bool {
     match filter {
         None => true,
-        Some(filter) => value.to_ascii_lowercase().contains(&filter.to_ascii_lowercase()),
+        Some(filter) => value
+            .to_ascii_lowercase()
+            .contains(&filter.to_ascii_lowercase()),
     }
 }
 
@@ -366,13 +410,8 @@ mod tests {
             ..LineageStats::default()
         };
 
-        let rows = rows_from_lineage_stats(
-            "lineage:42:50",
-            42,
-            OffsetDateTime::UNIX_EPOCH,
-            50,
-            &stats,
-        );
+        let rows =
+            rows_from_lineage_stats("lineage:42:50", 42, OffsetDateTime::UNIX_EPOCH, 50, &stats);
 
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].bucket, "promoted_outcomes");

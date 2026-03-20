@@ -119,7 +119,10 @@ impl TickRecord {
                 .filter(|price| *price > Decimal::ZERO)
                 .or_else(|| ta.and_then(|activity| activity.last_price))
                 .filter(|price| *price > Decimal::ZERO)
-                .or_else(|| ta.map(|activity| activity.vwap).filter(|price| *price > Decimal::ZERO));
+                .or_else(|| {
+                    ta.map(|activity| activity.vwap)
+                        .filter(|price| *price > Decimal::ZERO)
+                });
 
             signals.insert(
                 symbol.clone(),

@@ -32,8 +32,14 @@ impl WorldSnapshots {
         polymarket: Option<&PolymarketSnapshot>,
         previous_backward_reasoning: Option<&BackwardReasoningSnapshot>,
     ) -> Self {
-        let world_state =
-            derive_world_state(events, derived_signals, insights, decision, reasoning, polymarket);
+        let world_state = derive_world_state(
+            events,
+            derived_signals,
+            insights,
+            decision,
+            reasoning,
+            polymarket,
+        );
         let backward_reasoning =
             derive_backward_reasoning(reasoning, &world_state, previous_backward_reasoning);
         Self {
@@ -64,7 +70,11 @@ fn derive_world_state(
         })
         .unwrap_or_default();
     let market_driver = strongest_market_prior(&polymarket_priors);
-    let market_regime = external_market_regime(&polymarket_priors, !reasoning.case_clusters.is_empty(), insights.stress.composite_stress);
+    let market_regime = external_market_regime(
+        &polymarket_priors,
+        !reasoning.case_clusters.is_empty(),
+        insights.stress.composite_stress,
+    );
 
     for hypothesis in &reasoning.hypotheses {
         if let ReasoningScope::Sector(sector) = &hypothesis.scope {
@@ -291,16 +301,14 @@ fn append_polymarket_entities(
     priors: &[PolymarketPrior],
 ) {
     for prior in priors.iter().take(6) {
-        let provenance = ProvenanceMetadata::new(
-            ProvenanceSource::External("polymarket".into()),
-            timestamp,
-        )
-        .with_trace_id(format!("world:polymarket:{}", prior.slug))
-        .with_inputs([
-            format!("polymarket:{}", prior.slug),
-            format!("outcome:{}", prior.selected_outcome),
-        ])
-        .with_note("external event prior");
+        let provenance =
+            ProvenanceMetadata::new(ProvenanceSource::External("polymarket".into()), timestamp)
+                .with_trace_id(format!("world:polymarket:{}", prior.slug))
+                .with_inputs([
+                    format!("polymarket:{}", prior.slug),
+                    format!("outcome:{}", prior.selected_outcome),
+                ])
+                .with_note("external event prior");
         entities.push(EntityState {
             entity_id: format!("world:polymarket:{}", prior.slug),
             scope: prior.scope.clone(),

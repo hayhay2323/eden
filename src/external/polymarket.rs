@@ -202,8 +202,12 @@ fn parse_polymarket_configs(
     raw: &str,
     source: &str,
 ) -> Result<Vec<PolymarketMarketConfig>, String> {
-    serde_json::from_str(raw)
-        .map_err(|error| format!("failed to parse Polymarket config from {}: {}", source, error))
+    serde_json::from_str(raw).map_err(|error| {
+        format!(
+            "failed to parse Polymarket config from {}: {}",
+            source, error
+        )
+    })
 }
 
 pub async fn fetch_polymarket_snapshot(
@@ -271,15 +275,15 @@ async fn fetch_market_prior(
 
     Ok(PolymarketPrior {
         slug: market.slug.clone(),
-        label: config.label.clone().unwrap_or_else(|| market.question.clone()),
+        label: config
+            .label
+            .clone()
+            .unwrap_or_else(|| market.question.clone()),
         question: market.question,
         scope: config.scope(),
         target_scopes: config.target_scopes,
         bias: config.bias,
-        selected_outcome: outcomes
-            .get(index)
-            .cloned()
-            .unwrap_or_else(|| "Yes".into()),
+        selected_outcome: outcomes.get(index).cloned().unwrap_or_else(|| "Yes".into()),
         probability,
         conviction_threshold: config.conviction_threshold,
         active: market.active.unwrap_or(true),
@@ -295,7 +299,8 @@ fn parse_string_array(value: Option<&Value>) -> Option<Vec<String>> {
     match value? {
         Value::String(raw) => serde_json::from_str(raw).ok(),
         Value::Array(items) => Some(
-            items.iter()
+            items
+                .iter()
                 .filter_map(|item| match item {
                     Value::String(value) => Some(value.clone()),
                     _ => None,
@@ -374,7 +379,9 @@ pub fn parse_target_scope(scope: &str) -> Option<ReasoningScope> {
         "theme" => Some(ReasoningScope::Theme(value.into())),
         "region" => Some(ReasoningScope::Region(value.into())),
         "custom" => Some(ReasoningScope::Custom(value.into())),
-        "symbol" => Some(ReasoningScope::Symbol(crate::ontology::Symbol(value.into()))),
+        "symbol" => Some(ReasoningScope::Symbol(crate::ontology::Symbol(
+            value.into(),
+        ))),
         _ => None,
     }
 }
@@ -442,7 +449,9 @@ mod tests {
         );
         assert_eq!(
             parse_target_scope("symbol:981.HK"),
-            Some(ReasoningScope::Symbol(crate::ontology::Symbol("981.HK".into())))
+            Some(ReasoningScope::Symbol(crate::ontology::Symbol(
+                "981.HK".into()
+            )))
         );
     }
 

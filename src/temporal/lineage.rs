@@ -143,14 +143,14 @@ impl LineageStats {
         filtered.blocked_by.clear();
         filtered.promoted_by.clear();
         filtered.falsified_by.clear();
-        filtered.promoted_outcomes = filter_outcomes_by_alignment(&self.promoted_outcomes, alignment);
+        filtered.promoted_outcomes =
+            filter_outcomes_by_alignment(&self.promoted_outcomes, alignment);
         filtered.blocked_outcomes = filter_outcomes_by_alignment(&self.blocked_outcomes, alignment);
         filtered.falsified_outcomes =
             filter_outcomes_by_alignment(&self.falsified_outcomes, alignment);
         filtered.promoted_contexts =
             filter_contexts_by_alignment(&self.promoted_contexts, alignment);
-        filtered.blocked_contexts =
-            filter_contexts_by_alignment(&self.blocked_contexts, alignment);
+        filtered.blocked_contexts = filter_contexts_by_alignment(&self.blocked_contexts, alignment);
         filtered.falsified_contexts =
             filter_contexts_by_alignment(&self.falsified_contexts, alignment);
         filtered
@@ -436,16 +436,8 @@ fn evaluate_setup_outcome(
     }
 
     let latest_return = path_returns.last().copied()?;
-    let max_favorable_excursion = path_returns
-        .iter()
-        .copied()
-        .max()
-        .unwrap_or(Decimal::ZERO);
-    let max_adverse_excursion = path_returns
-        .iter()
-        .copied()
-        .min()
-        .unwrap_or(Decimal::ZERO);
+    let max_favorable_excursion = path_returns.iter().copied().max().unwrap_or(Decimal::ZERO);
+    let max_adverse_excursion = path_returns.iter().copied().min().unwrap_or(Decimal::ZERO);
     let round_trip_cost = context.estimated_cost * Decimal::TWO;
     let material_move = round_trip_cost.max(Decimal::new(3, 3));
     let entry_record = records_by_tick.get(&context.entry_tick).copied();
@@ -694,7 +686,10 @@ fn top_context_outcomes(
     items
 }
 
-fn filter_count_list(items: &[(String, usize)], label_filter: Option<&str>) -> Vec<(String, usize)> {
+fn filter_count_list(
+    items: &[(String, usize)],
+    label_filter: Option<&str>,
+) -> Vec<(String, usize)> {
     items
         .iter()
         .filter(|(label, _)| matches_filter(label_filter, label))
@@ -751,7 +746,9 @@ fn filter_contexts_by_alignment(
 fn matches_filter(filter: Option<&str>, value: &str) -> bool {
     match filter {
         None => true,
-        Some(filter) => value.to_ascii_lowercase().contains(&filter.to_ascii_lowercase()),
+        Some(filter) => value
+            .to_ascii_lowercase()
+            .contains(&filter.to_ascii_lowercase()),
     }
 }
 
@@ -772,7 +769,12 @@ fn structure_retained(
         return false;
     };
     let entry_mark = entry_record
-        .and_then(|record| context.symbol.as_ref().and_then(|symbol| record.signals.get(symbol)))
+        .and_then(|record| {
+            context
+                .symbol
+                .as_ref()
+                .and_then(|symbol| record.signals.get(symbol))
+        })
         .and_then(effective_price);
     let latest_mark = effective_price(latest_signal);
     let price_not_broken = match (entry_mark, latest_mark) {
@@ -784,10 +786,7 @@ fn structure_retained(
 
     have_same_sign(entry_composite, latest_signal.composite)
         && latest_signal.composite.abs() >= entry_composite.abs() / Decimal::TWO
-        && latest_signal
-            .composite_degradation
-            .unwrap_or(Decimal::ZERO)
-            < Decimal::new(45, 2)
+        && latest_signal.composite_degradation.unwrap_or(Decimal::ZERO) < Decimal::new(45, 2)
         && price_not_broken
 }
 

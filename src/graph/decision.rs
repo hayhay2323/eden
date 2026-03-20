@@ -801,7 +801,11 @@ impl DecisionSnapshot {
         }
     }
 
-    pub fn apply_polymarket_snapshot(&mut self, snapshot: &PolymarketSnapshot, store: &ObjectStore) {
+    pub fn apply_polymarket_snapshot(
+        &mut self,
+        snapshot: &PolymarketSnapshot,
+        store: &ObjectStore,
+    ) {
         self.market_regime.apply_polymarket_snapshot(snapshot);
         for suggestion in &mut self.order_suggestions {
             let sector_id = store
@@ -821,9 +825,20 @@ fn apply_external_convergence_to_suggestion(
     snapshot: &PolymarketSnapshot,
     sector_id: Option<&SectorId>,
 ) {
-    let supportive = strongest_relevant_prior(snapshot, &suggestion.symbol, sector_id, suggestion.direction, true);
-    let conflicting =
-        strongest_relevant_prior(snapshot, &suggestion.symbol, sector_id, suggestion.direction, false);
+    let supportive = strongest_relevant_prior(
+        snapshot,
+        &suggestion.symbol,
+        sector_id,
+        suggestion.direction,
+        true,
+    );
+    let conflicting = strongest_relevant_prior(
+        snapshot,
+        &suggestion.symbol,
+        sector_id,
+        suggestion.direction,
+        false,
+    );
     let base_confidence = clamp_unit(suggestion.convergence.composite.abs());
 
     suggestion.effective_confidence = base_confidence;
@@ -845,8 +860,8 @@ fn apply_external_convergence_to_suggestion(
             (prior.probability * Decimal::from(100)).round_dp(0),
         ));
         if conflicting.is_none() {
-            suggestion.convergence_score =
-                Decimal::ONE - (Decimal::ONE - base_confidence) * (Decimal::ONE - prior.probability);
+            suggestion.convergence_score = Decimal::ONE
+                - (Decimal::ONE - base_confidence) * (Decimal::ONE - prior.probability);
             suggestion.effective_confidence = suggestion.convergence_score;
         }
     }
@@ -933,10 +948,10 @@ fn direction_label(direction: OrderDirection) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::external::polymarket::{PolymarketBias, PolymarketPrior, PolymarketSnapshot};
     use crate::action::narrative::{
         DimensionReading, Direction, NarrativeSnapshot, Regime, SymbolNarrative,
     };
+    use crate::external::polymarket::{PolymarketBias, PolymarketPrior, PolymarketSnapshot};
     use crate::graph::graph::BrainGraph;
     use crate::logic::tension::Dimension;
     use crate::ontology::links::*;
@@ -1641,7 +1656,10 @@ mod tests {
         apply_external_convergence_to_suggestion(&mut suggestion, &snapshot, sector_id);
 
         assert!(suggestion.external_confirmation.is_some());
-        assert_eq!(suggestion.external_support_slug.as_deref(), Some("chip-sanctions"));
+        assert_eq!(
+            suggestion.external_support_slug.as_deref(),
+            Some("chip-sanctions")
+        );
         assert!(suggestion.convergence_score > dec!(0.55));
     }
 }
