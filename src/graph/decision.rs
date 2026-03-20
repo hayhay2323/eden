@@ -2,12 +2,14 @@ use std::collections::HashMap;
 
 use petgraph::visit::EdgeRef;
 use petgraph::Direction as GraphDirection;
+use rust_decimal::prelude::Signed;
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
 
+use crate::external::polymarket::{PolymarketBias, PolymarketPrior, PolymarketSnapshot};
 use crate::math::cosine_similarity;
 use crate::ontology::links::LinkSnapshot;
-use crate::ontology::objects::{InstitutionId, Symbol};
+use crate::ontology::objects::{InstitutionId, SectorId, Symbol};
 use crate::ontology::store::ObjectStore;
 use crate::pipeline::dimensions::SymbolDimensions;
 
@@ -32,7 +34,10 @@ impl ConvergenceScore {
         // 1. institutional_alignment: weighted avg of institution edge directions, weighted by seat_count
         let mut weighted_sum = Decimal::ZERO;
         let mut weight_total = Decimal::ZERO;
-        for edge in brain.graph.edges_directed(stock_idx, GraphDirection::Incoming) {
+        for edge in brain
+            .graph
+            .edges_directed(stock_idx, GraphDirection::Incoming)
+        {
             if let EdgeKind::InstitutionToStock(e) = edge.weight() {
                 let w = Decimal::from(e.seat_count as i64);
                 weighted_sum += e.direction * w;
@@ -47,7 +52,10 @@ impl ConvergenceScore {
 
         // 2. sector_coherence: sector node's mean_coherence via stock→sector edge
         let mut sector_coherence = None;
-        for edge in brain.graph.edges_directed(stock_idx, GraphDirection::Outgoing) {
+        for edge in brain
+            .graph
+            .edges_directed(stock_idx, GraphDirection::Outgoing)
+        {
             if let EdgeKind::StockToSector(_) = edge.weight() {
                 let target = edge.target();
                 if let NodeKind::Sector(s) = &brain.graph[target] {
@@ -59,7 +67,10 @@ impl ConvergenceScore {
         // 3. cross_stock_correlation: mean of (similarity * neighbor.mean_direction) across stock↔stock
         let mut corr_sum = Decimal::ZERO;
         let mut corr_count = 0i64;
-        for edge in brain.graph.edges_directed(stock_idx, GraphDirection::Outgoing) {
+        for edge in brain
+            .graph
+            .edges_directed(stock_idx, GraphDirection::Outgoing)
+        {
             if let EdgeKind::StockToStock(e) = edge.weight() {
                 let target = edge.target();
                 if let NodeKind::Stock(neighbor) = &brain.graph[target] {
@@ -129,7 +140,10 @@ impl StructuralFingerprint {
 
         // Institutional directions
         let mut institutional_directions = Vec::new();
-        for edge in brain.graph.edges_directed(stock_idx, GraphDirection::Incoming) {
+        for edge in brain
+            .graph
+            .edges_directed(stock_idx, GraphDirection::Incoming)
+        {
             if let EdgeKind::InstitutionToStock(e) = edge.weight() {
                 let source = edge.source();
                 if let NodeKind::Institution(inst) = &brain.graph[source] {
@@ -140,7 +154,10 @@ impl StructuralFingerprint {
 
         // Sector coherence
         let mut sector_mean_coherence = None;
-        for edge in brain.graph.edges_directed(stock_idx, GraphDirection::Outgoing) {
+        for edge in brain
+            .graph
+            .edges_directed(stock_idx, GraphDirection::Outgoing)
+        {
             if let EdgeKind::StockToSector(_) = edge.weight() {
                 let target = edge.target();
                 if let NodeKind::Sector(s) = &brain.graph[target] {
@@ -151,7 +168,10 @@ impl StructuralFingerprint {
 
         // Correlated stocks
         let mut correlated_stocks = Vec::new();
-        for edge in brain.graph.edges_directed(stock_idx, GraphDirection::Outgoing) {
+        for edge in brain
+            .graph
+            .edges_directed(stock_idx, GraphDirection::Outgoing)
+        {
             if let EdgeKind::StockToStock(e) = edge.weight() {
                 let target = edge.target();
                 if let NodeKind::Stock(neighbor) = &brain.graph[target] {
@@ -204,8 +224,7 @@ impl StructuralDegradation {
                             .edges_directed(inst_idx, GraphDirection::Outgoing)
                             .any(|edge| {
                                 if let EdgeKind::InstitutionToStock(e) = edge.weight() {
-                                    edge.target() == stock_idx
-                                        && same_sign(e.direction, *entry_dir)
+                                    edge.target() == stock_idx && same_sign(e.direction, *entry_dir)
                                 } else {
                                     false
                                 }
@@ -268,8 +287,7 @@ impl StructuralDegradation {
                     }
                 }
             }
-            Decimal::from(retained)
-                / Decimal::from(fingerprint.correlated_stocks.len() as i64)
+            Decimal::from(retained) / Decimal::from(fingerprint.correlated_stocks.len() as i64)
         };
 
         // dimension_drift: 1 - cosine_similarity(entry, current)
@@ -315,6 +333,345 @@ fn same_sign(a: Decimal, b: Decimal) -> bool {
         || (a == Decimal::ZERO && b == Decimal::ZERO)
 }
 
+fn requires_manual_confirmation(
+    score: &ConvergenceScore,
+    price_low: Option<Decimal>,
+    price_high: Option<Decimal>,
+) -> bool {
+    let low_confidence = score.composite.abs() < Decimal::new(35, 2);
+    let structural_disagreement = (score.institutional_alignment != Decimal::ZERO
+        && score.cross_stock_correlation != Decimal::ZERO
+        && !same_sign(score.institutional_alignment, score.cross_stock_correlation))
+        || score
+            .sector_coherence
+            .map(|value| value < Decimal::ZERO)
+            .unwrap_or(false);
+    let missing_price = price_low.is_none() || price_high.is_none();
+    let wide_spread = match (price_low, price_high) {
+        (Some(low), Some(high)) if high > low => {
+            let mid = (low + high) / Decimal::TWO;
+            mid <= Decimal::ZERO || (high - low) / mid > Decimal::new(5, 3)
+        }
+        _ => false,
+    };
+
+    low_confidence || structural_disagreement || missing_price || wide_spread
+}
+
+fn estimate_transaction_cost(price_low: Option<Decimal>, price_high: Option<Decimal>) -> Decimal {
+    match (price_low, price_high) {
+        (Some(low), Some(high)) if high > low => {
+            let mid = (low + high) / Decimal::TWO;
+            if mid > Decimal::ZERO {
+                (high - low) / mid
+            } else {
+                Decimal::ZERO
+            }
+        }
+        _ => Decimal::new(5, 3), // fallback 0.5% when the book is too sparse to estimate
+    }
+}
+
+fn clamp_unit(value: Decimal) -> Decimal {
+    value.clamp(Decimal::ZERO, Decimal::ONE)
+}
+
+fn scale_to_unit(value: Decimal, floor: Decimal, ceiling: Decimal) -> Decimal {
+    if ceiling <= floor {
+        return Decimal::ZERO;
+    }
+    clamp_unit((value - floor) / (ceiling - floor))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarketRegimeBias {
+    RiskOn,
+    Neutral,
+    RiskOff,
+}
+
+impl MarketRegimeBias {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RiskOn => "risk_on",
+            Self::Neutral => "neutral",
+            Self::RiskOff => "risk_off",
+        }
+    }
+}
+
+impl std::fmt::Display for MarketRegimeBias {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MarketRegimeFilter {
+    pub bias: MarketRegimeBias,
+    pub confidence: Decimal,
+    pub breadth_up: Decimal,
+    pub breadth_down: Decimal,
+    pub average_return: Decimal,
+    pub leader_return: Option<Decimal>,
+    pub directional_consensus: Decimal,
+    pub external_bias: Option<MarketRegimeBias>,
+    pub external_confidence: Option<Decimal>,
+    pub external_driver: Option<String>,
+}
+
+impl MarketRegimeFilter {
+    pub fn neutral() -> Self {
+        Self {
+            bias: MarketRegimeBias::Neutral,
+            confidence: Decimal::ZERO,
+            breadth_up: Decimal::ZERO,
+            breadth_down: Decimal::ZERO,
+            average_return: Decimal::ZERO,
+            leader_return: None,
+            directional_consensus: Decimal::ZERO,
+            external_bias: None,
+            external_confidence: None,
+            external_driver: None,
+        }
+    }
+
+    fn compute(
+        links: &LinkSnapshot,
+        convergence_scores: &HashMap<Symbol, ConvergenceScore>,
+    ) -> Self {
+        const LEADER_SYMBOLS: &[&str] = &[
+            "700.HK", "9988.HK", "3690.HK", "1810.HK", "388.HK", "5.HK", "939.HK", "883.HK",
+        ];
+
+        let returns = links
+            .quotes
+            .iter()
+            .filter_map(|quote| {
+                if quote.prev_close > Decimal::ZERO {
+                    Some((
+                        quote.symbol.clone(),
+                        (quote.last_done - quote.prev_close) / quote.prev_close,
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        let total_returns = Decimal::from(returns.len() as i64);
+        let breadth_up = if total_returns > Decimal::ZERO {
+            Decimal::from(returns.iter().filter(|item| item.1 > Decimal::ZERO).count() as i64)
+                / total_returns
+        } else {
+            Decimal::ZERO
+        };
+        let breadth_down = if total_returns > Decimal::ZERO {
+            Decimal::from(returns.iter().filter(|item| item.1 < Decimal::ZERO).count() as i64)
+                / total_returns
+        } else {
+            Decimal::ZERO
+        };
+        let average_return = if total_returns > Decimal::ZERO {
+            returns.iter().map(|(_, value)| *value).sum::<Decimal>() / total_returns
+        } else {
+            Decimal::ZERO
+        };
+
+        let leader_returns = returns
+            .iter()
+            .filter_map(|(symbol, value)| {
+                LEADER_SYMBOLS
+                    .contains(&symbol.0.as_str())
+                    .then_some(*value)
+            })
+            .collect::<Vec<_>>();
+        let leader_return = if leader_returns.is_empty() {
+            None
+        } else {
+            Some(
+                leader_returns.iter().copied().sum::<Decimal>()
+                    / Decimal::from(leader_returns.len() as i64),
+            )
+        };
+
+        let directional_consensus = if convergence_scores.is_empty() {
+            Decimal::ZERO
+        } else {
+            convergence_scores
+                .values()
+                .map(|score| {
+                    score.composite.signum()
+                        * clamp_unit(score.composite.abs() / Decimal::new(4, 1))
+                })
+                .sum::<Decimal>()
+                / Decimal::from(convergence_scores.len() as i64)
+        };
+
+        let leader_proxy = leader_return.unwrap_or(average_return);
+        let risk_off_score = [
+            scale_to_unit(breadth_down, Decimal::new(58, 2), Decimal::new(82, 2)),
+            scale_to_unit(-average_return, Decimal::new(6, 3), Decimal::new(3, 2)),
+            scale_to_unit(-leader_proxy, Decimal::new(12, 3), Decimal::new(5, 2)),
+            scale_to_unit(
+                -directional_consensus,
+                Decimal::new(15, 2),
+                Decimal::new(75, 2),
+            ),
+        ]
+        .iter()
+        .copied()
+        .sum::<Decimal>()
+            / Decimal::from(4);
+        let risk_on_score = [
+            scale_to_unit(breadth_up, Decimal::new(58, 2), Decimal::new(82, 2)),
+            scale_to_unit(average_return, Decimal::new(6, 3), Decimal::new(3, 2)),
+            scale_to_unit(leader_proxy, Decimal::new(12, 3), Decimal::new(5, 2)),
+            scale_to_unit(
+                directional_consensus,
+                Decimal::new(15, 2),
+                Decimal::new(75, 2),
+            ),
+        ]
+        .iter()
+        .copied()
+        .sum::<Decimal>()
+            / Decimal::from(4);
+
+        let min_score = Decimal::new(60, 2);
+        let min_gap = Decimal::new(15, 2);
+        let bias = if risk_off_score >= min_score && risk_off_score - risk_on_score >= min_gap {
+            MarketRegimeBias::RiskOff
+        } else if risk_on_score >= min_score && risk_on_score - risk_off_score >= min_gap {
+            MarketRegimeBias::RiskOn
+        } else {
+            MarketRegimeBias::Neutral
+        };
+        let confidence = match bias {
+            MarketRegimeBias::RiskOff => risk_off_score,
+            MarketRegimeBias::RiskOn => risk_on_score,
+            MarketRegimeBias::Neutral => risk_off_score.max(risk_on_score),
+        };
+
+        Self {
+            bias,
+            confidence,
+            breadth_up,
+            breadth_down,
+            average_return,
+            leader_return,
+            directional_consensus,
+            external_bias: None,
+            external_confidence: None,
+            external_driver: None,
+        }
+    }
+
+    pub fn apply_polymarket_snapshot(&mut self, snapshot: &PolymarketSnapshot) {
+        let strongest = snapshot
+            .priors
+            .iter()
+            .filter(|prior| prior.active && !prior.closed)
+            .filter(|prior| matches!(prior.scope, crate::ontology::ReasoningScope::Market))
+            .filter(|prior| prior.is_material())
+            .max_by(|a, b| a.probability.cmp(&b.probability));
+
+        let Some(prior) = strongest else {
+            self.external_bias = None;
+            self.external_confidence = None;
+            self.external_driver = None;
+            return;
+        };
+
+        self.external_bias = match prior.bias {
+            PolymarketBias::RiskOn => Some(MarketRegimeBias::RiskOn),
+            PolymarketBias::RiskOff => Some(MarketRegimeBias::RiskOff),
+            PolymarketBias::Neutral => Some(MarketRegimeBias::Neutral),
+        };
+        self.external_confidence = Some(prior.probability);
+        self.external_driver = Some(format!(
+            "polymarket {}={} on {}",
+            prior.selected_outcome,
+            prior.probability.round_dp(3),
+            prior.label
+        ));
+    }
+
+    fn effective_blocking_bias(&self) -> Option<MarketRegimeBias> {
+        let local_bias = (!matches!(self.bias, MarketRegimeBias::Neutral)).then_some(self.bias);
+        let external_bias = self
+            .external_bias
+            .filter(|bias| !matches!(bias, MarketRegimeBias::Neutral));
+        let external_confidence = self.external_confidence.unwrap_or(Decimal::ZERO);
+
+        match (local_bias, external_bias) {
+            (Some(local), Some(external)) if local == external => Some(local),
+            (Some(_local), Some(external))
+                if external_confidence >= Decimal::new(75, 2)
+                    && self.confidence < Decimal::new(70, 2) =>
+            {
+                Some(external)
+            }
+            (Some(local), _) => Some(local),
+            (None, Some(external)) if external_confidence >= Decimal::new(65, 2) => Some(external),
+            _ => None,
+        }
+    }
+
+    pub fn blocks(&self, direction: OrderDirection) -> bool {
+        matches!(
+            (self.effective_blocking_bias(), direction),
+            (Some(MarketRegimeBias::RiskOff), OrderDirection::Buy)
+                | (Some(MarketRegimeBias::RiskOn), OrderDirection::Sell)
+        )
+    }
+
+    pub fn gate_reason(&self, direction: OrderDirection) -> Option<String> {
+        if !self.blocks(direction) {
+            return None;
+        }
+
+        let blocked_side = match direction {
+            OrderDirection::Buy => "long",
+            OrderDirection::Sell => "short",
+        };
+        let blocking_bias = self.effective_blocking_bias().unwrap_or(self.bias);
+        let leader_fragment = self
+            .leader_return
+            .map(|value| {
+                format!(
+                    " leader_return={:+.2}%",
+                    (value * Decimal::from(100)).round_dp(2)
+                )
+            })
+            .unwrap_or_default();
+        let external_fragment = self
+            .external_driver
+            .as_ref()
+            .map(|driver| {
+                format!(
+                    " external={} ext_conf={:.0}%",
+                    driver,
+                    (self.external_confidence.unwrap_or(Decimal::ZERO) * Decimal::from(100))
+                        .round_dp(0)
+                )
+            })
+            .unwrap_or_default();
+
+        Some(format!(
+            "market regime {} blocks {} entries (breadth_down={:.0}% breadth_up={:.0}% avg_return={:+.2}% consensus={:+.2}{}{} conf={:.0}%)",
+            blocking_bias,
+            blocked_side,
+            (self.breadth_down * Decimal::from(100)).round_dp(0),
+            (self.breadth_up * Decimal::from(100)).round_dp(0),
+            (self.average_return * Decimal::from(100)).round_dp(2),
+            self.directional_consensus.round_dp(2),
+            leader_fragment,
+            external_fragment,
+            (self.confidence * Decimal::from(100)).round_dp(0),
+        ))
+    }
+}
+
 // ── Order Suggestion ──
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -331,7 +688,17 @@ pub struct OrderSuggestion {
     pub suggested_quantity: i32,
     pub price_low: Option<Decimal>,
     pub price_high: Option<Decimal>,
+    pub estimated_cost: Decimal,
+    pub heuristic_edge: Decimal,
     pub requires_confirmation: bool,
+    pub convergence_score: Decimal,
+    pub effective_confidence: Decimal,
+    pub external_confirmation: Option<String>,
+    pub external_conflict: Option<String>,
+    pub external_support_slug: Option<String>,
+    pub external_support_probability: Option<Decimal>,
+    pub external_conflict_slug: Option<String>,
+    pub external_conflict_probability: Option<Decimal>,
 }
 
 // ── Decision Snapshot ──
@@ -340,6 +707,7 @@ pub struct OrderSuggestion {
 pub struct DecisionSnapshot {
     pub timestamp: OffsetDateTime,
     pub convergence_scores: HashMap<Symbol, ConvergenceScore>,
+    pub market_regime: MarketRegimeFilter,
     pub order_suggestions: Vec<OrderSuggestion>,
     pub degradations: HashMap<Symbol, StructuralDegradation>,
 }
@@ -359,6 +727,7 @@ impl DecisionSnapshot {
                 convergence_scores.insert(symbol.clone(), score);
             }
         }
+        let market_regime = MarketRegimeFilter::compute(links, &convergence_scores);
 
         // Build order book price lookup
         let mut best_bid: HashMap<Symbol, Decimal> = HashMap::new();
@@ -387,20 +756,32 @@ impl DecisionSnapshot {
             } else {
                 OrderDirection::Sell
             };
-            let lot_size = store
-                .stocks
-                .get(symbol)
-                .map(|s| s.lot_size)
-                .unwrap_or(100);
+            let lot_size = store.stocks.get(symbol).map(|s| s.lot_size).unwrap_or(100);
+            let price_low = best_bid.get(symbol).copied();
+            let price_high = best_ask.get(symbol).copied();
+            let estimated_cost = estimate_transaction_cost(price_low, price_high);
+            let heuristic_edge = score.composite.abs() - estimated_cost;
+            let macro_requires_review = market_regime.blocks(direction);
 
             order_suggestions.push(OrderSuggestion {
                 symbol: symbol.clone(),
                 direction,
                 convergence: score.clone(),
                 suggested_quantity: lot_size,
-                price_low: best_bid.get(symbol).copied(),
-                price_high: best_ask.get(symbol).copied(),
-                requires_confirmation: true,
+                price_low,
+                price_high,
+                estimated_cost,
+                heuristic_edge,
+                requires_confirmation: requires_manual_confirmation(score, price_low, price_high)
+                    || macro_requires_review,
+                convergence_score: clamp_unit(score.composite.abs()),
+                effective_confidence: clamp_unit(score.composite.abs()),
+                external_confirmation: None,
+                external_conflict: None,
+                external_support_slug: None,
+                external_support_probability: None,
+                external_conflict_slug: None,
+                external_conflict_probability: None,
             });
         }
 
@@ -414,15 +795,145 @@ impl DecisionSnapshot {
         DecisionSnapshot {
             timestamp: brain.timestamp,
             convergence_scores,
+            market_regime,
             order_suggestions,
             degradations,
         }
+    }
+
+    pub fn apply_polymarket_snapshot(&mut self, snapshot: &PolymarketSnapshot, store: &ObjectStore) {
+        self.market_regime.apply_polymarket_snapshot(snapshot);
+        for suggestion in &mut self.order_suggestions {
+            let sector_id = store
+                .stocks
+                .get(&suggestion.symbol)
+                .and_then(|stock| stock.sector_id.as_ref());
+            apply_external_convergence_to_suggestion(suggestion, snapshot, sector_id);
+            if self.market_regime.blocks(suggestion.direction) {
+                suggestion.requires_confirmation = true;
+            }
+        }
+    }
+}
+
+fn apply_external_convergence_to_suggestion(
+    suggestion: &mut OrderSuggestion,
+    snapshot: &PolymarketSnapshot,
+    sector_id: Option<&SectorId>,
+) {
+    let supportive = strongest_relevant_prior(snapshot, &suggestion.symbol, sector_id, suggestion.direction, true);
+    let conflicting =
+        strongest_relevant_prior(snapshot, &suggestion.symbol, sector_id, suggestion.direction, false);
+    let base_confidence = clamp_unit(suggestion.convergence.composite.abs());
+
+    suggestion.effective_confidence = base_confidence;
+    suggestion.convergence_score = base_confidence;
+    suggestion.external_confirmation = None;
+    suggestion.external_conflict = None;
+    suggestion.external_support_slug = None;
+    suggestion.external_support_probability = None;
+    suggestion.external_conflict_slug = None;
+    suggestion.external_conflict_probability = None;
+
+    if let Some(prior) = supportive {
+        suggestion.external_support_slug = Some(prior.slug.clone());
+        suggestion.external_support_probability = Some(prior.probability);
+        suggestion.external_confirmation = Some(format!(
+            "{} confirms {} at {:.0}%",
+            prior.label,
+            direction_label(suggestion.direction),
+            (prior.probability * Decimal::from(100)).round_dp(0),
+        ));
+        if conflicting.is_none() {
+            suggestion.convergence_score =
+                Decimal::ONE - (Decimal::ONE - base_confidence) * (Decimal::ONE - prior.probability);
+            suggestion.effective_confidence = suggestion.convergence_score;
+        }
+    }
+
+    if let Some(prior) = conflicting {
+        suggestion.external_conflict_slug = Some(prior.slug.clone());
+        suggestion.external_conflict_probability = Some(prior.probability);
+        suggestion.external_conflict = Some(format!(
+            "{} contradicts {} at {:.0}%",
+            prior.label,
+            direction_label(suggestion.direction),
+            (prior.probability * Decimal::from(100)).round_dp(0),
+        ));
+        suggestion.requires_confirmation = true;
+    }
+}
+
+fn strongest_relevant_prior<'a>(
+    snapshot: &'a PolymarketSnapshot,
+    symbol: &Symbol,
+    sector_id: Option<&SectorId>,
+    direction: OrderDirection,
+    support: bool,
+) -> Option<&'a PolymarketPrior> {
+    snapshot
+        .priors
+        .iter()
+        .filter(|prior| prior.active && !prior.closed && prior.is_material())
+        .filter(|prior| prior_relevant_to_symbol(prior, symbol, sector_id))
+        .filter(|prior| prior_supports_direction(prior, direction) == support)
+        .max_by(|a, b| a.probability.cmp(&b.probability))
+}
+
+fn prior_relevant_to_symbol(
+    prior: &PolymarketPrior,
+    symbol: &Symbol,
+    sector_id: Option<&SectorId>,
+) -> bool {
+    let explicit_targets = prior.parsed_target_scopes();
+    if !explicit_targets.is_empty() {
+        return explicit_targets
+            .iter()
+            .any(|scope| scope_matches_symbol(scope, symbol, sector_id));
+    }
+
+    scope_matches_symbol(&prior.scope, symbol, sector_id)
+}
+
+fn scope_matches_symbol(
+    scope: &crate::ontology::ReasoningScope,
+    symbol: &Symbol,
+    sector_id: Option<&SectorId>,
+) -> bool {
+    match scope {
+        crate::ontology::ReasoningScope::Market => true,
+        crate::ontology::ReasoningScope::Sector(sector) => {
+            sector_id.map(|value| value.0.as_str()) == Some(sector.as_str())
+        }
+        crate::ontology::ReasoningScope::Symbol(scope_symbol) => scope_symbol == symbol,
+        crate::ontology::ReasoningScope::Region(region) => {
+            matches!(region.as_str(), "china" | "hk" | "hong_kong")
+        }
+        crate::ontology::ReasoningScope::Theme(_)
+        | crate::ontology::ReasoningScope::Custom(_)
+        | crate::ontology::ReasoningScope::Institution(_) => false,
+    }
+}
+
+fn prior_supports_direction(prior: &PolymarketPrior, direction: OrderDirection) -> bool {
+    matches!(
+        (prior.bias, direction),
+        (PolymarketBias::RiskOn, OrderDirection::Buy)
+            | (PolymarketBias::RiskOff, OrderDirection::Sell)
+    )
+}
+
+fn direction_label(direction: OrderDirection) -> &'static str {
+    match direction {
+        OrderDirection::Buy => "long",
+        OrderDirection::Sell => "short",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::external::polymarket::{PolymarketBias, PolymarketPrior, PolymarketSnapshot};
     use crate::action::narrative::{
         DimensionReading, Direction, NarrativeSnapshot, Regime, SymbolNarrative,
     };
@@ -430,6 +941,7 @@ mod tests {
     use crate::logic::tension::Dimension;
     use crate::ontology::links::*;
     use crate::ontology::objects::*;
+    use crate::ReasoningScope;
     use rust_decimal_macros::dec;
 
     fn sym(s: &str) -> Symbol {
@@ -488,7 +1000,7 @@ mod tests {
             capital_flow_direction: cfd,
             capital_size_divergence: csd,
             institutional_direction: id,
-            depth_structure_imbalance: Decimal::ZERO,
+            ..Default::default()
         }
     }
 
@@ -496,10 +1008,13 @@ mod tests {
         LinkSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             broker_queues: vec![],
+            calc_indexes: vec![],
+            candlesticks: vec![],
             institution_activities: vec![],
             cross_stock_presences: vec![],
             capital_flows: vec![],
             capital_breakdowns: vec![],
+            market_temperature: None,
             order_books: vec![],
             quotes: vec![],
             trade_activities: vec![],
@@ -532,7 +1047,10 @@ mod tests {
         narratives.insert(sym("9988.HK"), make_narrative(dec!(0.7), dec!(0.5)));
 
         let mut dimensions = HashMap::new();
-        dimensions.insert(sym("700.HK"), make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)));
+        dimensions.insert(
+            sym("700.HK"),
+            make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)),
+        );
         dimensions.insert(
             sym("9988.HK"),
             make_dims(dec!(0.4), dec!(0.4), dec!(0.4), dec!(0.4)),
@@ -570,7 +1088,10 @@ mod tests {
         narratives.insert(sym("9988.HK"), make_narrative(dec!(0.3), dec!(-0.5)));
 
         let mut dimensions = HashMap::new();
-        dimensions.insert(sym("700.HK"), make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)));
+        dimensions.insert(
+            sym("700.HK"),
+            make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)),
+        );
         dimensions.insert(
             sym("9988.HK"),
             make_dims(dec!(-0.4), dec!(-0.4), dec!(-0.4), dec!(-0.4)),
@@ -605,7 +1126,10 @@ mod tests {
         narratives.insert(sym("700.HK"), make_narrative(dec!(0.5), dec!(0.3)));
 
         let mut dimensions = HashMap::new();
-        dimensions.insert(sym("700.HK"), make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)));
+        dimensions.insert(
+            sym("700.HK"),
+            make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)),
+        );
 
         let links = empty_links();
         let store = make_store_with_stocks(vec![]);
@@ -625,7 +1149,10 @@ mod tests {
         narratives.insert(sym("700.HK"), make_narrative(dec!(0.5), dec!(0.3)));
 
         let mut dimensions = HashMap::new();
-        dimensions.insert(sym("700.HK"), make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)));
+        dimensions.insert(
+            sym("700.HK"),
+            make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)),
+        );
 
         let links = empty_links();
         let store = make_store_with_stocks(vec![]);
@@ -648,7 +1175,10 @@ mod tests {
         narratives.insert(sym("9988.HK"), make_narrative(dec!(0.3), dec!(0.1)));
 
         let mut dimensions = HashMap::new();
-        dimensions.insert(sym("700.HK"), make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)));
+        dimensions.insert(
+            sym("700.HK"),
+            make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)),
+        );
         dimensions.insert(
             sym("9988.HK"),
             make_dims(dec!(0.4), dec!(0.4), dec!(0.4), dec!(0.4)),
@@ -670,12 +1200,7 @@ mod tests {
         });
 
         let store = make_store_with_stocks(vec![]);
-        let entry_brain = build_brain(
-            narratives.clone(),
-            dimensions.clone(),
-            &links,
-            &store,
-        );
+        let entry_brain = build_brain(narratives.clone(), dimensions.clone(), &links, &store);
         let mut fp = StructuralFingerprint::capture(&sym("700.HK"), &entry_brain).unwrap();
         fp.entry_composite = dec!(0.5);
 
@@ -710,7 +1235,10 @@ mod tests {
         narratives.insert(sym("9988.HK"), make_narrative(dec!(0.7), dec!(0.5)));
 
         let mut dimensions = HashMap::new();
-        dimensions.insert(sym("700.HK"), make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)));
+        dimensions.insert(
+            sym("700.HK"),
+            make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)),
+        );
         dimensions.insert(
             sym("9988.HK"),
             make_dims(dec!(0.4), dec!(0.4), dec!(0.4), dec!(0.4)),
@@ -753,7 +1281,10 @@ mod tests {
         narratives.insert(sym("9988.HK"), make_narrative(dec!(0.7), dec!(0.5)));
 
         let mut dimensions = HashMap::new();
-        dimensions.insert(sym("700.HK"), make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)));
+        dimensions.insert(
+            sym("700.HK"),
+            make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)),
+        );
         dimensions.insert(
             sym("9988.HK"),
             make_dims(dec!(0.4), dec!(0.4), dec!(0.4), dec!(0.4)),
@@ -812,6 +1343,183 @@ mod tests {
     }
 
     #[test]
+    fn confirmation_logic_only_flags_risky_orders() {
+        let confident = ConvergenceScore {
+            symbol: sym("700.HK"),
+            institutional_alignment: dec!(0.7),
+            sector_coherence: Some(dec!(0.6)),
+            cross_stock_correlation: dec!(0.5),
+            composite: dec!(0.6),
+        };
+        assert!(!requires_manual_confirmation(
+            &confident,
+            Some(dec!(350)),
+            Some(dec!(351)),
+        ));
+
+        let conflicted = ConvergenceScore {
+            cross_stock_correlation: dec!(-0.5),
+            ..confident.clone()
+        };
+        assert!(requires_manual_confirmation(
+            &conflicted,
+            Some(dec!(350)),
+            Some(dec!(351)),
+        ));
+    }
+
+    #[test]
+    fn market_regime_flags_broad_selloff_as_risk_off() {
+        let mut links = empty_links();
+        links.quotes = vec![
+            QuoteObservation {
+                symbol: sym("700.HK"),
+                last_done: dec!(519),
+                prev_close: dec!(550.5),
+                open: dec!(545),
+                high: dec!(546),
+                low: dec!(515),
+                volume: 100,
+                turnover: dec!(52000),
+                timestamp: OffsetDateTime::UNIX_EPOCH,
+                market_status: MarketStatus::Normal,
+            },
+            QuoteObservation {
+                symbol: sym("9988.HK"),
+                last_done: dec!(72.3),
+                prev_close: dec!(75.0),
+                open: dec!(74.8),
+                high: dec!(74.9),
+                low: dec!(71.9),
+                volume: 100,
+                turnover: dec!(7230),
+                timestamp: OffsetDateTime::UNIX_EPOCH,
+                market_status: MarketStatus::Normal,
+            },
+            QuoteObservation {
+                symbol: sym("3690.HK"),
+                last_done: dec!(118),
+                prev_close: dec!(123),
+                open: dec!(122),
+                high: dec!(122.5),
+                low: dec!(117),
+                volume: 100,
+                turnover: dec!(11800),
+                timestamp: OffsetDateTime::UNIX_EPOCH,
+                market_status: MarketStatus::Normal,
+            },
+            QuoteObservation {
+                symbol: sym("1810.HK"),
+                last_done: dec!(14.8),
+                prev_close: dec!(15.2),
+                open: dec!(15.1),
+                high: dec!(15.1),
+                low: dec!(14.6),
+                volume: 100,
+                turnover: dec!(1480),
+                timestamp: OffsetDateTime::UNIX_EPOCH,
+                market_status: MarketStatus::Normal,
+            },
+            QuoteObservation {
+                symbol: sym("883.HK"),
+                last_done: dec!(19.1),
+                prev_close: dec!(19.8),
+                open: dec!(19.7),
+                high: dec!(19.7),
+                low: dec!(18.9),
+                volume: 100,
+                turnover: dec!(1910),
+                timestamp: OffsetDateTime::UNIX_EPOCH,
+                market_status: MarketStatus::Normal,
+            },
+            QuoteObservation {
+                symbol: sym("939.HK"),
+                last_done: dec!(5.91),
+                prev_close: dec!(6.05),
+                open: dec!(6.02),
+                high: dec!(6.03),
+                low: dec!(5.88),
+                volume: 100,
+                turnover: dec!(591),
+                timestamp: OffsetDateTime::UNIX_EPOCH,
+                market_status: MarketStatus::Normal,
+            },
+            QuoteObservation {
+                symbol: sym("6060.HK"),
+                last_done: dec!(14.96),
+                prev_close: dec!(14.5),
+                open: dec!(14.6),
+                high: dec!(15.1),
+                low: dec!(14.4),
+                volume: 100,
+                turnover: dec!(1496),
+                timestamp: OffsetDateTime::UNIX_EPOCH,
+                market_status: MarketStatus::Normal,
+            },
+            QuoteObservation {
+                symbol: sym("688.HK"),
+                last_done: dec!(11.9),
+                prev_close: dec!(12.3),
+                open: dec!(12.2),
+                high: dec!(12.2),
+                low: dec!(11.8),
+                volume: 100,
+                turnover: dec!(1190),
+                timestamp: OffsetDateTime::UNIX_EPOCH,
+                market_status: MarketStatus::Normal,
+            },
+        ];
+
+        let convergence_scores = HashMap::from([
+            (
+                sym("700.HK"),
+                ConvergenceScore {
+                    symbol: sym("700.HK"),
+                    institutional_alignment: dec!(-0.4),
+                    sector_coherence: Some(dec!(-0.3)),
+                    cross_stock_correlation: dec!(-0.5),
+                    composite: dec!(-0.4),
+                },
+            ),
+            (
+                sym("9988.HK"),
+                ConvergenceScore {
+                    symbol: sym("9988.HK"),
+                    institutional_alignment: dec!(-0.3),
+                    sector_coherence: Some(dec!(-0.2)),
+                    cross_stock_correlation: dec!(-0.4),
+                    composite: dec!(-0.3),
+                },
+            ),
+            (
+                sym("6060.HK"),
+                ConvergenceScore {
+                    symbol: sym("6060.HK"),
+                    institutional_alignment: dec!(0.2),
+                    sector_coherence: Some(dec!(0.1)),
+                    cross_stock_correlation: dec!(0.1),
+                    composite: dec!(0.15),
+                },
+            ),
+            (
+                sym("688.HK"),
+                ConvergenceScore {
+                    symbol: sym("688.HK"),
+                    institutional_alignment: dec!(-0.2),
+                    sector_coherence: Some(dec!(-0.1)),
+                    cross_stock_correlation: dec!(-0.2),
+                    composite: dec!(-0.2),
+                },
+            ),
+        ]);
+
+        let regime = MarketRegimeFilter::compute(&links, &convergence_scores);
+        assert_eq!(regime.bias, MarketRegimeBias::RiskOff);
+        assert!(regime.blocks(OrderDirection::Buy));
+        assert!(!regime.blocks(OrderDirection::Sell));
+    }
+
+    #[test]
     fn zero_composite_no_suggestions() {
         let mut narratives = HashMap::new();
         narratives.insert(sym("700.HK"), make_narrative(dec!(0), dec!(0)));
@@ -830,5 +1538,110 @@ mod tests {
             .iter()
             .find(|o| o.symbol == sym("700.HK"));
         assert!(suggestion.is_none());
+    }
+
+    #[test]
+    fn polymarket_market_prior_soft_blocks_when_local_regime_is_neutral() {
+        let mut regime = MarketRegimeFilter::neutral();
+        regime.apply_polymarket_snapshot(&PolymarketSnapshot {
+            fetched_at: OffsetDateTime::UNIX_EPOCH,
+            priors: vec![PolymarketPrior {
+                slug: "fed-cut".into(),
+                label: "Fed cut".into(),
+                question: "Will the Fed cut?".into(),
+                scope: ReasoningScope::Market,
+                target_scopes: vec![],
+                bias: PolymarketBias::RiskOn,
+                selected_outcome: "Yes".into(),
+                probability: dec!(0.72),
+                conviction_threshold: dec!(0.60),
+                active: true,
+                closed: false,
+                category: None,
+                volume: None,
+                liquidity: None,
+                end_date: None,
+            }],
+        });
+
+        assert!(regime.blocks(OrderDirection::Sell));
+        assert!(!regime.blocks(OrderDirection::Buy));
+        assert!(regime
+            .gate_reason(OrderDirection::Sell)
+            .unwrap_or_default()
+            .contains("external="));
+    }
+
+    #[test]
+    fn explicit_target_scopes_drive_polymarket_symbol_relevance() {
+        let store = make_store_with_stocks(vec![Stock {
+            symbol: sym("981.HK"),
+            name_en: "SMIC".into(),
+            name_cn: String::new(),
+            name_hk: String::new(),
+            exchange: "SEHK".into(),
+            lot_size: 100,
+            sector_id: Some(SectorId("semiconductor".into())),
+            total_shares: 0,
+            circulating_shares: 0,
+            eps_ttm: Decimal::ZERO,
+            bps: Decimal::ZERO,
+            dividend_yield: Decimal::ZERO,
+        }]);
+        let mut suggestion = OrderSuggestion {
+            symbol: sym("981.HK"),
+            direction: OrderDirection::Sell,
+            convergence: ConvergenceScore {
+                symbol: sym("981.HK"),
+                institutional_alignment: dec!(-0.5),
+                sector_coherence: Some(dec!(-0.4)),
+                cross_stock_correlation: dec!(-0.3),
+                composite: dec!(-0.55),
+            },
+            suggested_quantity: 100,
+            price_low: Some(dec!(20)),
+            price_high: Some(dec!(20.1)),
+            estimated_cost: dec!(0.005),
+            heuristic_edge: dec!(0.54),
+            requires_confirmation: false,
+            convergence_score: dec!(0.55),
+            effective_confidence: dec!(0.55),
+            external_confirmation: None,
+            external_conflict: None,
+            external_support_slug: None,
+            external_support_probability: None,
+            external_conflict_slug: None,
+            external_conflict_probability: None,
+        };
+        let snapshot = PolymarketSnapshot {
+            fetched_at: OffsetDateTime::UNIX_EPOCH,
+            priors: vec![PolymarketPrior {
+                slug: "chip-sanctions".into(),
+                label: "AI chip sanctions".into(),
+                question: "Will AI chip sanctions tighten?".into(),
+                scope: ReasoningScope::Theme("ai_semis".into()),
+                target_scopes: vec!["sector:semiconductor".into()],
+                bias: PolymarketBias::RiskOff,
+                selected_outcome: "Yes".into(),
+                probability: dec!(0.66),
+                conviction_threshold: dec!(0.60),
+                active: true,
+                closed: false,
+                category: None,
+                volume: None,
+                liquidity: None,
+                end_date: None,
+            }],
+        };
+
+        let sector_id = store
+            .stocks
+            .get(&sym("981.HK"))
+            .and_then(|stock| stock.sector_id.as_ref());
+        apply_external_convergence_to_suggestion(&mut suggestion, &snapshot, sector_id);
+
+        assert!(suggestion.external_confirmation.is_some());
+        assert_eq!(suggestion.external_support_slug.as_deref(), Some("chip-sanctions"));
+        assert!(suggestion.convergence_score > dec!(0.55));
     }
 }

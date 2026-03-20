@@ -2,7 +2,15 @@ use surrealdb::engine::local::{Db, RocksDb};
 use surrealdb::Surreal;
 
 use crate::ontology::links::CrossStockPresence;
-use crate::ontology::objects::Symbol;
+use crate::ontology::{ReasoningScope, Symbol};
+use crate::persistence::action_workflow::{ActionWorkflowEventRecord, ActionWorkflowRecord};
+use crate::persistence::hypothesis_track::HypothesisTrackRecord;
+use crate::persistence::lineage_metric_row::LineageMetricRowRecord;
+use crate::persistence::lineage_snapshot::LineageSnapshotRecord;
+use crate::persistence::tactical_setup::TacticalSetupRecord;
+use crate::temporal::buffer::TickHistory;
+use crate::temporal::causality::{compute_causal_timelines, CausalTimeline};
+use crate::temporal::lineage::{compute_lineage_stats, LineageStats};
 use crate::temporal::record::TickRecord;
 
 use super::schema;
@@ -23,12 +31,96 @@ impl EdenStore {
 
     /// Persist a tick record.
     pub async fn write_tick(&self, record: &TickRecord) -> Result<(), Box<dyn std::error::Error>> {
-        let id = format!("tick_{}_{}", record.timestamp.unix_timestamp(), record.tick_number);
+        let id = format!(
+            "tick_{}_{}",
+            record.timestamp.unix_timestamp(),
+            record.tick_number
+        );
         let _: Option<serde_json::Value> = self
             .db
             .upsert(("tick_record", &id))
             .content(record.clone())
             .await?;
+        Ok(())
+    }
+
+    /// Persist the latest known action workflow state.
+    pub async fn write_action_workflow(
+        &self,
+        record: &ActionWorkflowRecord,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let _: Option<serde_json::Value> = self
+            .db
+            .upsert(("action_workflow", record.record_id()))
+            .content(record.clone())
+            .await?;
+        Ok(())
+    }
+
+    /// Persist an append-only action workflow event.
+    pub async fn write_action_workflow_event(
+        &self,
+        record: &ActionWorkflowEventRecord,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let _: Option<serde_json::Value> = self
+            .db
+            .upsert(("action_workflow_event", record.record_id()))
+            .content(record.clone())
+            .await?;
+        Ok(())
+    }
+
+    /// Persist the latest tactical setup projection.
+    pub async fn write_tactical_setup(
+        &self,
+        record: &TacticalSetupRecord,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let _: Option<serde_json::Value> = self
+            .db
+            .upsert(("tactical_setup", record.record_id()))
+            .content(record.clone())
+            .await?;
+        Ok(())
+    }
+
+    /// Persist the latest hypothesis track projection.
+    pub async fn write_hypothesis_track(
+        &self,
+        record: &HypothesisTrackRecord,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let _: Option<serde_json::Value> = self
+            .db
+            .upsert(("hypothesis_track", record.record_id()))
+            .content(record.clone())
+            .await?;
+        Ok(())
+    }
+
+    /// Persist one lineage evaluation snapshot for historical leaderboard review.
+    pub async fn write_lineage_snapshot(
+        &self,
+        record: &LineageSnapshotRecord,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let _: Option<serde_json::Value> = self
+            .db
+            .upsert(("lineage_snapshot", record.record_id()))
+            .content(record.clone())
+            .await?;
+        Ok(())
+    }
+
+    /// Persist flattened lineage metric rows for fast filtered lookups.
+    pub async fn write_lineage_metric_rows(
+        &self,
+        records: &[LineageMetricRowRecord],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for record in records {
+            let _: Option<serde_json::Value> = self
+                .db
+                .upsert(("lineage_metric_row", &record.row_id))
+                .content(record.clone())
+                .await?;
+        }
         Ok(())
     }
 
@@ -84,5 +176,136 @@ impl EdenStore {
         let mut result = self.db.query(&query).await?;
         let records: Vec<TickRecord> = result.take(0)?;
         Ok(records)
+    }
+
+    /// Query a recent tick window in chronological order.
+    pub async fn recent_tick_window(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<TickRecord>, Box<dyn std::error::Error>> {
+        let query = format!(
+            "SELECT * FROM tick_record ORDER BY tick_number DESC LIMIT {limit}",
+            limit = limit,
+        );
+        let mut result = self.db.query(&query).await?;
+        let mut records: Vec<TickRecord> = result.take(0)?;
+        records.sort_by_key(|record| record.tick_number);
+        Ok(records)
+    }
+
+    /// Query recent tick records whose backward reasoning includes the requested leaf scope.
+    pub async fn recent_causal_history(
+        &self,
+        leaf_scope_key: &str,
+        limit: usize,
+    ) -> Result<Vec<TickRecord>, Box<dyn std::error::Error>> {
+        let mut records = self.recent_tick_window(limit).await?;
+        records.retain(|record| {
+            record
+                .backward_reasoning
+                .investigations
+                .iter()
+                .any(|investigation| causal_scope_key(&investigation.leaf_scope) == leaf_scope_key)
+        });
+        Ok(records)
+    }
+
+    /// Reconstruct the recent causal timeline for one leaf scope from persisted tick records.
+    pub async fn recent_causal_timeline(
+        &self,
+        leaf_scope_key: &str,
+        limit: usize,
+    ) -> Result<Option<CausalTimeline>, Box<dyn std::error::Error>> {
+        let records = self.recent_causal_history(leaf_scope_key, limit).await?;
+        if records.is_empty() {
+            return Ok(None);
+        }
+
+        let mut history = TickHistory::new(records.len().max(1));
+        for record in records {
+            history.push(record);
+        }
+
+        Ok(compute_causal_timelines(&history).remove(leaf_scope_key))
+    }
+
+    /// Reconstruct recent lineage evaluation statistics from persisted tick history.
+    pub async fn recent_lineage_stats(
+        &self,
+        limit: usize,
+    ) -> Result<LineageStats, Box<dyn std::error::Error>> {
+        let records = self.recent_tick_window(limit).await?;
+        if records.is_empty() {
+            return Ok(LineageStats::default());
+        }
+
+        let mut history = TickHistory::new(records.len().max(1));
+        for record in records {
+            history.push(record);
+        }
+
+        Ok(compute_lineage_stats(&history, limit))
+    }
+
+    /// Query recent persisted lineage snapshots in reverse chronological order.
+    pub async fn recent_lineage_snapshots(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<LineageSnapshotRecord>, Box<dyn std::error::Error>> {
+        let query = format!(
+            "SELECT * FROM lineage_snapshot ORDER BY tick_number DESC LIMIT {limit}",
+            limit = limit,
+        );
+        let mut result = self.db.query(&query).await?;
+        let records: Vec<LineageSnapshotRecord> = result.take(0)?;
+        Ok(records)
+    }
+
+    /// Query recent flattened lineage metric rows in reverse chronological order.
+    pub async fn recent_lineage_metric_rows(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<LineageMetricRowRecord>, Box<dyn std::error::Error>> {
+        let query = format!(
+            "SELECT * FROM lineage_metric_row ORDER BY tick_number DESC, bucket ASC, rank ASC LIMIT {limit}",
+            limit = limit,
+        );
+        let mut result = self.db.query(&query).await?;
+        let records: Vec<LineageMetricRowRecord> = result.take(0)?;
+        Ok(records)
+    }
+
+    /// Query recent flattened lineage rows with a bounded rank range and headroom for filtering.
+    pub async fn recent_ranked_lineage_metric_rows(
+        &self,
+        snapshots: usize,
+        max_rank: usize,
+    ) -> Result<Vec<LineageMetricRowRecord>, Box<dyn std::error::Error>> {
+        let rank_limit = max_rank.max(1);
+        let max_rows = snapshots
+            .saturating_mul(rank_limit)
+            .saturating_mul(6)
+            .saturating_mul(8)
+            .max(64);
+        let query = format!(
+            "SELECT * FROM lineage_metric_row WHERE rank < {rank_limit} ORDER BY tick_number DESC, bucket ASC, rank ASC LIMIT {max_rows}",
+            rank_limit = rank_limit,
+            max_rows = max_rows,
+        );
+        let mut result = self.db.query(&query).await?;
+        let records: Vec<LineageMetricRowRecord> = result.take(0)?;
+        Ok(records)
+    }
+}
+
+fn causal_scope_key(scope: &ReasoningScope) -> String {
+    match scope {
+        ReasoningScope::Market => "market".into(),
+        ReasoningScope::Symbol(symbol) => symbol.to_string(),
+        ReasoningScope::Sector(sector) => format!("sector:{}", sector),
+        ReasoningScope::Institution(institution) => format!("institution:{}", institution),
+        ReasoningScope::Theme(theme) => format!("theme:{}", theme),
+        ReasoningScope::Region(region) => format!("region:{}", region),
+        ReasoningScope::Custom(value) => format!("custom:{}", value),
     }
 }

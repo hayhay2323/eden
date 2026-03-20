@@ -4,7 +4,7 @@ use rust_decimal::Decimal;
 
 use crate::ontology::objects::Symbol;
 
-use super::record::{TickRecord, SymbolSignals};
+use super::record::{SymbolSignals, TickRecord};
 
 /// Ring buffer of recent tick records.
 /// Capacity is fixed at creation; oldest ticks are evicted when full.
@@ -62,12 +62,14 @@ impl TickHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ontology::world::{BackwardReasoningSnapshot, WorldStateSnapshot};
     use rust_decimal_macros::dec;
     use std::collections::HashMap;
     use time::OffsetDateTime;
 
     fn make_signal(composite: Decimal) -> SymbolSignals {
         SymbolSignals {
+            mark_price: None,
             composite,
             institutional_alignment: Decimal::ZERO,
             sector_coherence: None,
@@ -87,6 +89,7 @@ mod tests {
             buy_volume: 0,
             sell_volume: 0,
             vwap: None,
+            convergence_score: None,
             composite_degradation: None,
             institution_retention: None,
         }
@@ -99,6 +102,24 @@ mod tests {
             tick_number,
             timestamp: OffsetDateTime::UNIX_EPOCH,
             signals,
+            observations: vec![],
+            events: vec![],
+            derived_signals: vec![],
+            action_workflows: vec![],
+            polymarket_priors: vec![],
+            hypotheses: vec![],
+            propagation_paths: vec![],
+            tactical_setups: vec![],
+            hypothesis_tracks: vec![],
+            case_clusters: vec![],
+            world_state: WorldStateSnapshot {
+                timestamp: OffsetDateTime::UNIX_EPOCH,
+                entities: vec![],
+            },
+            backward_reasoning: BackwardReasoningSnapshot {
+                timestamp: OffsetDateTime::UNIX_EPOCH,
+                investigations: vec![],
+            },
         }
     }
 
