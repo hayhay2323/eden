@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 use crate::ontology::objects::Symbol;
 use crate::pipeline::dimensions::{DimensionSnapshot, SymbolDimensions};
 
-/// The five Pipeline dimensions, named for pairing.
+/// Pipeline dimensions, named for pairing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Dimension {
     OrderBookPressure,
@@ -14,15 +14,21 @@ pub enum Dimension {
     CapitalSizeDivergence,
     InstitutionalDirection,
     DepthStructureImbalance,
+    ValuationSupport,
+    ActivityMomentum,
+    CandlestickConviction,
 }
 
 impl Dimension {
-    pub const ALL: [Dimension; 5] = [
+    pub const ALL: [Dimension; 8] = [
         Dimension::OrderBookPressure,
         Dimension::CapitalFlowDirection,
         Dimension::CapitalSizeDivergence,
         Dimension::InstitutionalDirection,
         Dimension::DepthStructureImbalance,
+        Dimension::ValuationSupport,
+        Dimension::ActivityMomentum,
+        Dimension::CandlestickConviction,
     ];
 
     pub fn short_name(&self) -> &'static str {
@@ -32,6 +38,9 @@ impl Dimension {
             Dimension::CapitalSizeDivergence => "size",
             Dimension::InstitutionalDirection => "inst",
             Dimension::DepthStructureImbalance => "depth",
+            Dimension::ValuationSupport => "value",
+            Dimension::ActivityMomentum => "activity",
+            Dimension::CandlestickConviction => "candle",
         }
     }
 }
@@ -93,6 +102,9 @@ fn get_value(sd: &SymbolDimensions, dim: Dimension) -> Decimal {
         Dimension::CapitalSizeDivergence => sd.capital_size_divergence,
         Dimension::InstitutionalDirection => sd.institutional_direction,
         Dimension::DepthStructureImbalance => sd.depth_structure_imbalance,
+        Dimension::ValuationSupport => sd.valuation_support,
+        Dimension::ActivityMomentum => sd.activity_momentum,
+        Dimension::CandlestickConviction => sd.candlestick_conviction,
     }
 }
 
@@ -141,13 +153,18 @@ mod tests {
     use super::*;
     use rust_decimal_macros::dec;
 
-    fn make_dims(book: Decimal, capital: Decimal, size: Decimal, inst: Decimal) -> SymbolDimensions {
+    fn make_dims(
+        book: Decimal,
+        capital: Decimal,
+        size: Decimal,
+        inst: Decimal,
+    ) -> SymbolDimensions {
         SymbolDimensions {
             order_book_pressure: book,
             capital_flow_direction: capital,
             capital_size_divergence: size,
             institutional_direction: inst,
-            depth_structure_imbalance: Decimal::ZERO,
+            ..Default::default()
         }
     }
 
@@ -157,7 +174,10 @@ mod tests {
     fn all_positive_is_coherent() {
         let sd = make_dims(dec!(0.5), dec!(0.3), dec!(0.4), dec!(0.6));
         let t = compute_symbol_tension(&sd);
-        assert!(t.coherence > Decimal::ZERO, "all positive → positive coherence");
+        assert!(
+            t.coherence > Decimal::ZERO,
+            "all positive → positive coherence"
+        );
         assert!(t.mean_direction > Decimal::ZERO);
     }
 
@@ -165,7 +185,10 @@ mod tests {
     fn all_negative_is_coherent() {
         let sd = make_dims(dec!(-0.5), dec!(-0.3), dec!(-0.4), dec!(-0.6));
         let t = compute_symbol_tension(&sd);
-        assert!(t.coherence > Decimal::ZERO, "all negative → positive coherence (products are positive)");
+        assert!(
+            t.coherence > Decimal::ZERO,
+            "all negative → positive coherence (products are positive)"
+        );
         assert!(t.mean_direction < Decimal::ZERO);
     }
 
@@ -174,7 +197,10 @@ mod tests {
         // 2 positive, 2 negative → 4 pairs disagree, 2 agree → net negative coherence
         let sd = make_dims(dec!(0.5), dec!(0.5), dec!(-0.5), dec!(-0.5));
         let t = compute_symbol_tension(&sd);
-        assert!(t.coherence < Decimal::ZERO, "split signals → negative coherence");
+        assert!(
+            t.coherence < Decimal::ZERO,
+            "split signals → negative coherence"
+        );
     }
 
     #[test]
@@ -187,7 +213,7 @@ mod tests {
 
     #[test]
     fn one_outlier_creates_tension() {
-        // 3 positive, 1 negative → 3 tense pairs, 3 agreeing pairs
+        // Zero-valued dimensions are neutral, so only the nonzero outlier pairs turn tense.
         let sd = make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(-0.5));
         let t = compute_symbol_tension(&sd);
         let tense_count = t.pairs.iter().filter(|p| p.product < Decimal::ZERO).count();
@@ -197,11 +223,13 @@ mod tests {
     // ── pair count ──
 
     #[test]
-    fn always_ten_pairs() {
-        // C(5,2) = 10 pairs for 5 dimensions
+    fn pair_count_matches_dimension_count() {
         let sd = make_dims(dec!(0.1), dec!(0.2), dec!(0.3), dec!(0.4));
         let t = compute_symbol_tension(&sd);
-        assert_eq!(t.pairs.len(), 10);
+        assert_eq!(
+            t.pairs.len(),
+            Dimension::ALL.len() * (Dimension::ALL.len() - 1) / 2,
+        );
     }
 
     // ── mean_direction ──
@@ -210,8 +238,8 @@ mod tests {
     fn mean_direction_calculation() {
         let sd = make_dims(dec!(0.4), dec!(0.2), dec!(-0.2), dec!(0.6));
         let t = compute_symbol_tension(&sd);
-        // (0.4 + 0.2 + (-0.2) + 0.6 + 0) / 5 = 1.0 / 5 = 0.2
-        assert_eq!(t.mean_direction, dec!(0.2));
+        // Four populated dimensions plus four zero-valued dimensions.
+        assert_eq!(t.mean_direction, dec!(0.125));
     }
 
     // ── pair sorting ──
@@ -236,9 +264,14 @@ mod tests {
         let sd = make_dims(dec!(0.6), dec!(-0.4), dec!(0.3), dec!(0.2));
         let t = compute_symbol_tension(&sd);
         // Find book × capital pair
-        let bc = t.pairs.iter().find(|p| {
-            p.dim_a == Dimension::OrderBookPressure && p.dim_b == Dimension::CapitalFlowDirection
-        }).unwrap();
+        let bc = t
+            .pairs
+            .iter()
+            .find(|p| {
+                p.dim_a == Dimension::OrderBookPressure
+                    && p.dim_b == Dimension::CapitalFlowDirection
+            })
+            .unwrap();
         assert_eq!(bc.product, dec!(-0.24)); // 0.6 × -0.4
     }
 
@@ -249,8 +282,14 @@ mod tests {
         let dim_snap = DimensionSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             dimensions: HashMap::from([
-                (Symbol("700.HK".into()), make_dims(dec!(0.4), dec!(-0.2), dec!(-0.3), dec!(0.1))),
-                (Symbol("9988.HK".into()), make_dims(dec!(0.5), dec!(0.3), dec!(0.4), dec!(0.6))),
+                (
+                    Symbol("700.HK".into()),
+                    make_dims(dec!(0.4), dec!(-0.2), dec!(-0.3), dec!(0.1)),
+                ),
+                (
+                    Symbol("9988.HK".into()),
+                    make_dims(dec!(0.5), dec!(0.3), dec!(0.4), dec!(0.6)),
+                ),
             ]),
         };
 
@@ -259,7 +298,11 @@ mod tests {
 
         // 700.HK has mixed signals → should have some tension
         let t700 = &snap.tensions[&Symbol("700.HK".into())];
-        let tense_count = t700.pairs.iter().filter(|p| p.product < Decimal::ZERO).count();
+        let tense_count = t700
+            .pairs
+            .iter()
+            .filter(|p| p.product < Decimal::ZERO)
+            .count();
         assert!(tense_count > 0, "700.HK has mixed signals");
 
         // 9988.HK all positive → coherent
@@ -271,38 +314,31 @@ mod tests {
 
     #[test]
     fn perfect_agreement() {
-        // All 4 explicit dims = 1, depth_structure_imbalance = 0
-        // Products: C(5,2)=10 pairs. 4 dims at 1 give C(4,2)=6 products of 1,
-        // plus 4 products of 1*0=0 (each of the 4 vs depth=0).
-        // Sum = 6, coherence = 6/10 = 0.6
+        // Four explicit dims are 1, the remaining four dims are zero.
+        // Sum of pairwise products = C(4,2) = 6, pair count = C(8,2) = 28.
         let sd = make_dims(dec!(1), dec!(1), dec!(1), dec!(1));
         let t = compute_symbol_tension(&sd);
-        assert_eq!(t.coherence, dec!(0.6));
-        // mean_direction = (1+1+1+1+0)/5 = 0.8
-        assert_eq!(t.mean_direction, dec!(0.8));
+        let expected = Decimal::from(6) / Decimal::from(28);
+        assert_eq!(t.coherence.round_dp(10), expected.round_dp(10));
+        assert_eq!(t.mean_direction, dec!(0.5));
     }
 
     #[test]
     fn perfect_split() {
-        // [1, 1, -1, -1, 0] — 5 dims
-        // Pairs with products:
-        //   1*1=1, 1*-1=-1, 1*-1=-1, 1*0=0,
-        //          1*-1=-1, 1*-1=-1, 1*0=0,
-        //                   -1*-1=1, -1*0=0,
-        //                            -1*0=0
-        // Sum = 1-1-1+0-1-1+0+1+0+0 = -2, coherence = -2/10
+        // [1, 1, -1, -1] plus four neutral dimensions.
+        // Pairwise sum remains -2, but over C(8,2)=28 total pairs.
         let sd = make_dims(dec!(1), dec!(1), dec!(-1), dec!(-1));
         let t = compute_symbol_tension(&sd);
-        let expected = Decimal::from(-2) / Decimal::from(10);
+        let expected = Decimal::from(-2) / Decimal::from(28);
         assert_eq!(t.coherence.round_dp(10), expected.round_dp(10));
     }
 
     #[test]
     fn single_dimension_active() {
-        // Only book has a value, rest (including depth) are zero → all products are 0
+        // Only book has a value, the remaining seven dimensions are zero.
         let sd = make_dims(dec!(0.8), dec!(0), dec!(0), dec!(0));
         let t = compute_symbol_tension(&sd);
         assert_eq!(t.coherence, dec!(0));
-        assert_eq!(t.mean_direction, dec!(0.16)); // 0.8/5
+        assert_eq!(t.mean_direction, dec!(0.1)); // 0.8/8
     }
 }

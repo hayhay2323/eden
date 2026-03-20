@@ -2,23 +2,27 @@ use std::collections::HashMap;
 
 use futures::future::join_all;
 use longport::quote::{
-    CapitalDistributionResponse, CapitalFlowLine, QuoteContext, SecurityBrokers, SecurityDepth,
-    SecurityQuote,
+    Candlestick, CapitalDistributionResponse, CapitalFlowLine, MarketTemperature, QuoteContext,
+    SecurityBrokers, SecurityCalcIndex, SecurityDepth, SecurityQuote, Trade,
 };
 use time::OffsetDateTime;
 
 use super::objects::Symbol;
 
-/// Raw API responses from a single polling cycle.
+/// Raw API responses — combines WebSocket push state and REST data.
 /// This struct isolates longport types — downstream code (links.rs) works with this,
 /// not with longport directly.
 pub struct RawSnapshot {
     pub timestamp: OffsetDateTime,
     pub brokers: HashMap<Symbol, SecurityBrokers>,
+    pub calc_indexes: HashMap<Symbol, SecurityCalcIndex>,
+    pub candlesticks: HashMap<Symbol, Vec<Candlestick>>,
     pub capital_flows: HashMap<Symbol, Vec<CapitalFlowLine>>,
     pub capital_distributions: HashMap<Symbol, CapitalDistributionResponse>,
     pub depths: HashMap<Symbol, SecurityDepth>,
+    pub market_temperature: Option<MarketTemperature>,
     pub quotes: HashMap<Symbol, SecurityQuote>,
+    pub trades: HashMap<Symbol, Vec<Trade>>,
 }
 
 impl RawSnapshot {
@@ -27,10 +31,31 @@ impl RawSnapshot {
         RawSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             brokers: HashMap::new(),
+            calc_indexes: HashMap::new(),
+            candlesticks: HashMap::new(),
             capital_flows: HashMap::new(),
             capital_distributions: HashMap::new(),
             depths: HashMap::new(),
+            market_temperature: None,
             quotes: HashMap::new(),
+            trades: HashMap::new(),
+        }
+    }
+}
+
+pub async fn fetch_quotes_only(
+    ctx: &QuoteContext,
+    watchlist: &[Symbol],
+) -> HashMap<Symbol, SecurityQuote> {
+    let symbols_vec: Vec<String> = watchlist.iter().map(|s| s.0.clone()).collect();
+    match ctx.quote(symbols_vec).await {
+        Ok(quotes) => quotes
+            .into_iter()
+            .map(|q| (Symbol(q.symbol.clone()), q))
+            .collect(),
+        Err(e) => {
+            eprintln!("Warning: quote bootstrap failed: {}", e);
+            HashMap::new()
         }
     }
 }
@@ -40,15 +65,16 @@ impl RawSnapshot {
 pub async fn fetch(ctx: &QuoteContext, watchlist: &[Symbol]) -> RawSnapshot {
     let timestamp = OffsetDateTime::now_utc();
 
-    // Fetch all three APIs for each symbol concurrently
+    // Fire all per-symbol requests concurrently via join_all.
+    // Longport SDK handles internal queuing; a few transient failures are acceptable
+    // since we refresh capital data every 60s anyway.
     let broker_futures: Vec<_> = watchlist
         .iter()
         .map(|sym| {
             let ctx = ctx.clone();
-            let symbol_str = sym.0.clone();
             let sym = sym.clone();
             async move {
-                match ctx.brokers(symbol_str).await {
+                match ctx.brokers(sym.0.clone()).await {
                     Ok(b) => Some((sym, b)),
                     Err(e) => {
                         eprintln!("Warning: brokers({}) failed: {}", sym, e);
@@ -63,10 +89,9 @@ pub async fn fetch(ctx: &QuoteContext, watchlist: &[Symbol]) -> RawSnapshot {
         .iter()
         .map(|sym| {
             let ctx = ctx.clone();
-            let symbol_str = sym.0.clone();
             let sym = sym.clone();
             async move {
-                match ctx.capital_flow(symbol_str).await {
+                match ctx.capital_flow(sym.0.clone()).await {
                     Ok(f) => Some((sym, f)),
                     Err(e) => {
                         eprintln!("Warning: capital_flow({}) failed: {}", sym, e);
@@ -81,10 +106,9 @@ pub async fn fetch(ctx: &QuoteContext, watchlist: &[Symbol]) -> RawSnapshot {
         .iter()
         .map(|sym| {
             let ctx = ctx.clone();
-            let symbol_str = sym.0.clone();
             let sym = sym.clone();
             async move {
-                match ctx.capital_distribution(symbol_str).await {
+                match ctx.capital_distribution(sym.0.clone()).await {
                     Ok(d) => Some((sym, d)),
                     Err(e) => {
                         eprintln!("Warning: capital_distribution({}) failed: {}", sym, e);
@@ -99,10 +123,9 @@ pub async fn fetch(ctx: &QuoteContext, watchlist: &[Symbol]) -> RawSnapshot {
         .iter()
         .map(|sym| {
             let ctx = ctx.clone();
-            let symbol_str = sym.0.clone();
             let sym = sym.clone();
             async move {
-                match ctx.depth(symbol_str).await {
+                match ctx.depth(sym.0.clone()).await {
                     Ok(d) => Some((sym, d)),
                     Err(e) => {
                         eprintln!("Warning: depth({}) failed: {}", sym, e);
@@ -135,14 +158,12 @@ pub async fn fetch(ctx: &QuoteContext, watchlist: &[Symbol]) -> RawSnapshot {
         quote_future,
     );
 
-    let brokers: HashMap<Symbol, SecurityBrokers> =
-        broker_results.into_iter().flatten().collect();
+    let brokers: HashMap<Symbol, SecurityBrokers> = broker_results.into_iter().flatten().collect();
     let capital_flows: HashMap<Symbol, Vec<CapitalFlowLine>> =
         flow_results.into_iter().flatten().collect();
     let capital_distributions: HashMap<Symbol, CapitalDistributionResponse> =
         dist_results.into_iter().flatten().collect();
-    let depths: HashMap<Symbol, SecurityDepth> =
-        depth_results.into_iter().flatten().collect();
+    let depths: HashMap<Symbol, SecurityDepth> = depth_results.into_iter().flatten().collect();
     let quotes: HashMap<Symbol, SecurityQuote> = quote_results
         .into_iter()
         .map(|q| (Symbol(q.symbol.clone()), q))
@@ -151,9 +172,13 @@ pub async fn fetch(ctx: &QuoteContext, watchlist: &[Symbol]) -> RawSnapshot {
     RawSnapshot {
         timestamp,
         brokers,
+        calc_indexes: HashMap::new(),
+        candlesticks: HashMap::new(),
         capital_flows,
         capital_distributions,
         depths,
+        market_temperature: None,
         quotes,
+        trades: HashMap::new(), // REST fetch doesn't include trades; populated from WebSocket push
     }
 }

@@ -12,6 +12,7 @@ pub struct BrokerId(pub i32);
 pub struct InstitutionId(pub i32);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Symbol(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -56,9 +57,7 @@ impl InstitutionClass {
     /// Only Stock Connect (broker IDs 6996-6999) can be programmatically identified.
     /// All others start as Unknown and are reclassified through behavioral observation.
     pub fn classify_from_brokers(broker_ids: &HashSet<BrokerId>) -> Self {
-        let is_stock_connect = broker_ids
-            .iter()
-            .any(|b| (6996..=6999).contains(&b.0));
+        let is_stock_connect = broker_ids.iter().any(|b| (6996..=6999).contains(&b.0));
         if is_stock_connect {
             Self::StockConnectChannel
         } else {
@@ -157,7 +156,12 @@ mod tests {
 
     #[test]
     fn classify_stock_connect_all_four() {
-        let ids = HashSet::from([BrokerId(6996), BrokerId(6997), BrokerId(6998), BrokerId(6999)]);
+        let ids = HashSet::from([
+            BrokerId(6996),
+            BrokerId(6997),
+            BrokerId(6998),
+            BrokerId(6999),
+        ]);
         assert_eq!(
             InstitutionClass::classify_from_brokers(&ids),
             InstitutionClass::StockConnectChannel,

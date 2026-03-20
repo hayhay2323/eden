@@ -48,7 +48,7 @@ pub fn jaccard<T: Eq + Hash>(a: &HashSet<T>, b: &HashSet<T>) -> Decimal {
 }
 
 /// Newton's method square root for Decimal. Converges to 28 decimal places.
-fn decimal_sqrt(x: Decimal) -> Decimal {
+pub fn decimal_sqrt(x: Decimal) -> Decimal {
     if x <= Decimal::ZERO {
         return Decimal::ZERO;
     }

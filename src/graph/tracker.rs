@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rust_decimal::Decimal;
 
@@ -75,8 +75,24 @@ impl PositionTracker {
         convergence_scores: &HashMap<Symbol, super::decision::ConvergenceScore>,
         brain: &BrainGraph,
     ) -> Vec<Symbol> {
+        self.auto_enter_allowed(convergence_scores, None, brain)
+    }
+
+    /// Auto-capture fingerprints only for symbols that are currently actionable.
+    pub fn auto_enter_allowed(
+        &mut self,
+        convergence_scores: &HashMap<Symbol, super::decision::ConvergenceScore>,
+        allowed_symbols: Option<&HashSet<Symbol>>,
+        brain: &BrainGraph,
+    ) -> Vec<Symbol> {
         let mut newly_entered = Vec::new();
         for (symbol, score) in convergence_scores {
+            if allowed_symbols
+                .map(|symbols| !symbols.contains(symbol))
+                .unwrap_or(false)
+            {
+                continue;
+            }
             if score.composite == Decimal::ZERO {
                 continue;
             }
@@ -119,7 +135,7 @@ mod tests {
                 capital_flow_direction: Decimal::ZERO,
                 capital_size_divergence: Decimal::ZERO,
                 institutional_direction: Decimal::ZERO,
-                depth_structure_imbalance: Decimal::ZERO,
+                ..Default::default()
             },
         }
     }

@@ -6,7 +6,8 @@ use time::OffsetDateTime;
 
 use crate::action::narrative::{NarrativeSnapshot, Regime};
 use crate::math::{cosine_similarity, jaccard, normalized_ratio};
-use crate::ontology::links::LinkSnapshot;
+use crate::ontology::domain::{ProvenanceMetadata, ProvenanceSource};
+use crate::ontology::links::{LinkSnapshot, MarketTemperatureObservation};
 use crate::ontology::objects::{InstitutionId, SectorId, Symbol};
 use crate::ontology::store::ObjectStore;
 use crate::pipeline::dimensions::{DimensionSnapshot, SymbolDimensions};
@@ -52,24 +53,28 @@ pub enum NodeKind {
 pub struct InstitutionToStock {
     pub direction: Decimal,
     pub seat_count: usize,
-    pub _timestamp: Option<OffsetDateTime>,
+    pub timestamp: OffsetDateTime,
+    pub provenance: ProvenanceMetadata,
 }
 
 #[derive(Debug, Clone)]
 pub struct StockToSector {
-    pub _timestamp: Option<OffsetDateTime>,
+    pub timestamp: OffsetDateTime,
+    pub provenance: ProvenanceMetadata,
 }
 
 #[derive(Debug, Clone)]
 pub struct StockToStock {
     pub similarity: Decimal,
-    pub _timestamp: Option<OffsetDateTime>,
+    pub timestamp: OffsetDateTime,
+    pub provenance: ProvenanceMetadata,
 }
 
 #[derive(Debug, Clone)]
 pub struct InstitutionToInstitution {
     pub jaccard: Decimal,
-    pub _timestamp: Option<OffsetDateTime>,
+    pub timestamp: OffsetDateTime,
+    pub provenance: ProvenanceMetadata,
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +91,7 @@ pub enum EdgeKind {
 pub struct BrainGraph {
     pub timestamp: OffsetDateTime,
     pub graph: DiGraph<NodeKind, EdgeKind>,
+    pub market_temperature: Option<MarketTemperatureObservation>,
     pub stock_nodes: HashMap<Symbol, NodeIndex>,
     pub institution_nodes: HashMap<InstitutionId, NodeIndex>,
     pub sector_nodes: HashMap<SectorId, NodeIndex>,
@@ -106,17 +112,7 @@ impl BrainGraph {
 
         // 1. Create stock nodes from NarrativeSnapshot + DimensionSnapshot
         for (sym, narr) in &narrative.narratives {
-            let dims = dimensions
-                .dimensions
-                .get(sym)
-                .cloned()
-                .unwrap_or(SymbolDimensions {
-                    order_book_pressure: Decimal::ZERO,
-                    capital_flow_direction: Decimal::ZERO,
-                    capital_size_divergence: Decimal::ZERO,
-                    institutional_direction: Decimal::ZERO,
-                    depth_structure_imbalance: Decimal::ZERO,
-                });
+            let dims = dimensions.dimensions.get(sym).cloned().unwrap_or_default();
             let node = StockNode {
                 symbol: sym.clone(),
                 regime: narr.regime,
@@ -133,11 +129,7 @@ impl BrainGraph {
             let member_stocks: Vec<&Symbol> = stock_nodes
                 .keys()
                 .filter(|sym| {
-                    store
-                        .stocks
-                        .get(*sym)
-                        .and_then(|s| s.sector_id.as_ref())
-                        == Some(&sector.id)
+                    store.stocks.get(*sym).and_then(|s| s.sector_id.as_ref()) == Some(&sector.id)
                 })
                 .collect();
 
@@ -170,7 +162,14 @@ impl BrainGraph {
                     graph.add_edge(
                         stock_idx,
                         sector_idx,
-                        EdgeKind::StockToSector(StockToSector { _timestamp: None }),
+                        EdgeKind::StockToSector(StockToSector {
+                            timestamp: links.timestamp,
+                            provenance: computed_edge_provenance(
+                                links.timestamp,
+                                Decimal::ONE,
+                                [format!("sector_membership:{}", sym)],
+                            ),
+                        }),
                     );
                 }
             }
@@ -211,7 +210,15 @@ impl BrainGraph {
                     EdgeKind::InstitutionToStock(InstitutionToStock {
                         direction,
                         seat_count: act.seat_count,
-                        _timestamp: None,
+                        timestamp: links.timestamp,
+                        provenance: computed_edge_provenance(
+                            links.timestamp,
+                            direction.abs(),
+                            [
+                                format!("institution_activity:{}", act.symbol),
+                                format!("institution:{}", act.institution_id),
+                            ],
+                        ),
                     }),
                 );
             }
@@ -264,7 +271,15 @@ impl BrainGraph {
                 idx_b,
                 EdgeKind::StockToStock(StockToStock {
                     similarity: *similarity,
-                    _timestamp: None,
+                    timestamp: links.timestamp,
+                    provenance: computed_edge_provenance(
+                        links.timestamp,
+                        similarity.abs(),
+                        [
+                            format!("dimension_similarity:{}", stock_syms[*i]),
+                            format!("dimension_similarity:{}", stock_syms[*j]),
+                        ],
+                    ),
                 }),
             );
             graph.add_edge(
@@ -272,7 +287,15 @@ impl BrainGraph {
                 idx_a,
                 EdgeKind::StockToStock(StockToStock {
                     similarity: *similarity,
-                    _timestamp: None,
+                    timestamp: links.timestamp,
+                    provenance: computed_edge_provenance(
+                        links.timestamp,
+                        similarity.abs(),
+                        [
+                            format!("dimension_similarity:{}", stock_syms[*j]),
+                            format!("dimension_similarity:{}", stock_syms[*i]),
+                        ],
+                    ),
                 }),
             );
         }
@@ -297,7 +320,15 @@ impl BrainGraph {
                         idx_b,
                         EdgeKind::InstitutionToInstitution(InstitutionToInstitution {
                             jaccard: j_coeff,
-                            _timestamp: None,
+                            timestamp: links.timestamp,
+                            provenance: computed_edge_provenance(
+                                links.timestamp,
+                                j_coeff,
+                                [
+                                    format!("institution_overlap:{}", id_a),
+                                    format!("institution_overlap:{}", id_b),
+                                ],
+                            ),
                         }),
                     );
                     graph.add_edge(
@@ -305,7 +336,15 @@ impl BrainGraph {
                         idx_a,
                         EdgeKind::InstitutionToInstitution(InstitutionToInstitution {
                             jaccard: j_coeff,
-                            _timestamp: None,
+                            timestamp: links.timestamp,
+                            provenance: computed_edge_provenance(
+                                links.timestamp,
+                                j_coeff,
+                                [
+                                    format!("institution_overlap:{}", id_b),
+                                    format!("institution_overlap:{}", id_a),
+                                ],
+                            ),
                         }),
                     );
                 }
@@ -315,6 +354,7 @@ impl BrainGraph {
         BrainGraph {
             timestamp: narrative.timestamp,
             graph,
+            market_temperature: links.market_temperature.clone(),
             stock_nodes,
             institution_nodes,
             sector_nodes,
@@ -322,14 +362,31 @@ impl BrainGraph {
     }
 }
 
-/// Convert SymbolDimensions to a 5-element array for cosine similarity.
-pub fn dims_to_array(d: &SymbolDimensions) -> [Decimal; 5] {
+fn computed_edge_provenance<I, S>(
+    observed_at: OffsetDateTime,
+    confidence: Decimal,
+    inputs: I,
+) -> ProvenanceMetadata
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    ProvenanceMetadata::new(ProvenanceSource::Computed, observed_at)
+        .with_confidence(confidence.clamp(Decimal::ZERO, Decimal::ONE))
+        .with_inputs(inputs)
+}
+
+/// Convert SymbolDimensions to an array for cosine similarity.
+pub fn dims_to_array(d: &SymbolDimensions) -> [Decimal; 8] {
     [
         d.order_book_pressure,
         d.capital_flow_direction,
         d.capital_size_divergence,
         d.institutional_direction,
         d.depth_structure_imbalance,
+        d.valuation_support,
+        d.activity_momentum,
+        d.candlestick_conviction,
     ]
 }
 
@@ -404,7 +461,7 @@ mod tests {
             capital_flow_direction: cfd,
             capital_size_divergence: csd,
             institutional_direction: id,
-            depth_structure_imbalance: Decimal::ZERO,
+            ..Default::default()
         }
     }
 
@@ -412,10 +469,13 @@ mod tests {
         LinkSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             broker_queues: vec![],
+            calc_indexes: vec![],
+            candlesticks: vec![],
             institution_activities: vec![],
             cross_stock_presences: vec![],
             capital_flows: vec![],
             capital_breakdowns: vec![],
+            market_temperature: None,
             order_books: vec![],
             quotes: vec![],
             trade_activities: vec![],
@@ -452,7 +512,10 @@ mod tests {
             narratives,
         };
         let mut dimensions = HashMap::new();
-        dimensions.insert(sym("700.HK"), make_dims(dec!(0.2), dec!(0.1), dec!(0.3), dec!(0.4)));
+        dimensions.insert(
+            sym("700.HK"),
+            make_dims(dec!(0.2), dec!(0.1), dec!(0.3), dec!(0.4)),
+        );
 
         let dims = DimensionSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -486,8 +549,14 @@ mod tests {
             narratives,
         };
         let mut dimensions = HashMap::new();
-        dimensions.insert(sym("700.HK"), make_dims(dec!(0.2), dec!(0.1), dec!(0.3), dec!(0.4)));
-        dimensions.insert(sym("9988.HK"), make_dims(dec!(0.1), dec!(0.1), dec!(0.1), dec!(0.1)));
+        dimensions.insert(
+            sym("700.HK"),
+            make_dims(dec!(0.2), dec!(0.1), dec!(0.3), dec!(0.4)),
+        );
+        dimensions.insert(
+            sym("9988.HK"),
+            make_dims(dec!(0.1), dec!(0.1), dec!(0.1), dec!(0.1)),
+        );
 
         let dims = DimensionSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -527,6 +596,11 @@ mod tests {
             .filter(|e| matches!(brain.graph[*e], EdgeKind::StockToSector(_)))
             .count();
         assert_eq!(edge_count, 2);
+        for edge_idx in brain.graph.edge_indices() {
+            if let EdgeKind::StockToSector(edge) = &brain.graph[edge_idx] {
+                assert_eq!(edge.timestamp, OffsetDateTime::UNIX_EPOCH);
+            }
+        }
     }
 
     #[test]
@@ -540,8 +614,14 @@ mod tests {
             narratives,
         };
         let mut dimensions = HashMap::new();
-        dimensions.insert(sym("700.HK"), make_dims(dec!(0.2), dec!(0.1), dec!(0.3), dec!(0.4)));
-        dimensions.insert(sym("9988.HK"), make_dims(dec!(0.1), dec!(0.1), dec!(0.1), dec!(0.1)));
+        dimensions.insert(
+            sym("700.HK"),
+            make_dims(dec!(0.2), dec!(0.1), dec!(0.3), dec!(0.4)),
+        );
+        dimensions.insert(
+            sym("9988.HK"),
+            make_dims(dec!(0.1), dec!(0.1), dec!(0.1), dec!(0.1)),
+        );
 
         let dims = DimensionSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -582,6 +662,7 @@ mod tests {
                 let expected = Decimal::from(-1) / Decimal::from(3);
                 assert_eq!(e.direction.round_dp(10), expected.round_dp(10));
                 assert_eq!(e.seat_count, 3);
+                assert_eq!(e.timestamp, OffsetDateTime::UNIX_EPOCH);
             }
             _ => panic!("expected InstitutionToStock"),
         }
@@ -599,7 +680,10 @@ mod tests {
         };
         let mut dimensions = HashMap::new();
         // Similar vectors
-        dimensions.insert(sym("700.HK"), make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)));
+        dimensions.insert(
+            sym("700.HK"),
+            make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)),
+        );
         dimensions.insert(
             sym("9988.HK"),
             make_dims(dec!(0.4), dec!(0.4), dec!(0.4), dec!(0.4)),
@@ -643,9 +727,18 @@ mod tests {
             narratives,
         };
         let mut dimensions = HashMap::new();
-        dimensions.insert(sym("700.HK"), make_dims(dec!(0.1), dec!(0.1), dec!(0.1), dec!(0.1)));
-        dimensions.insert(sym("9988.HK"), make_dims(dec!(0.1), dec!(0.1), dec!(0.1), dec!(0.1)));
-        dimensions.insert(sym("3690.HK"), make_dims(dec!(0.1), dec!(0.1), dec!(0.1), dec!(0.1)));
+        dimensions.insert(
+            sym("700.HK"),
+            make_dims(dec!(0.1), dec!(0.1), dec!(0.1), dec!(0.1)),
+        );
+        dimensions.insert(
+            sym("9988.HK"),
+            make_dims(dec!(0.1), dec!(0.1), dec!(0.1), dec!(0.1)),
+        );
+        dimensions.insert(
+            sym("3690.HK"),
+            make_dims(dec!(0.1), dec!(0.1), dec!(0.1), dec!(0.1)),
+        );
 
         let dims = DimensionSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -698,7 +791,10 @@ mod tests {
             narratives,
         };
         let mut dimensions = HashMap::new();
-        dimensions.insert(sym("700.HK"), make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)));
+        dimensions.insert(
+            sym("700.HK"),
+            make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)),
+        );
 
         let dims = DimensionSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -729,9 +825,15 @@ mod tests {
             narratives,
         };
         let mut dimensions = HashMap::new();
-        dimensions.insert(sym("700.HK"), make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)));
+        dimensions.insert(
+            sym("700.HK"),
+            make_dims(dec!(0.5), dec!(0.5), dec!(0.5), dec!(0.5)),
+        );
         // All-zero vector
-        dimensions.insert(sym("9988.HK"), make_dims(dec!(0), dec!(0), dec!(0), dec!(0)));
+        dimensions.insert(
+            sym("9988.HK"),
+            make_dims(dec!(0), dec!(0), dec!(0), dec!(0)),
+        );
 
         let dims = DimensionSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,

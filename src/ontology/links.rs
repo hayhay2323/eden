@@ -124,6 +124,37 @@ pub struct QuoteObservation {
     pub market_status: MarketStatus,
 }
 
+#[derive(Debug, Clone)]
+pub struct CalcIndexObservation {
+    pub symbol: Symbol,
+    pub turnover_rate: Option<Decimal>,
+    pub volume_ratio: Option<Decimal>,
+    pub pe_ttm_ratio: Option<Decimal>,
+    pub pb_ratio: Option<Decimal>,
+    pub dividend_ratio_ttm: Option<Decimal>,
+    pub amplitude: Option<Decimal>,
+    pub five_minutes_change_rate: Option<Decimal>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CandlestickObservation {
+    pub symbol: Symbol,
+    pub candle_count: usize,
+    pub window_return: Decimal,
+    pub body_bias: Decimal,
+    pub volume_ratio: Decimal,
+    pub range_ratio: Decimal,
+}
+
+#[derive(Debug, Clone)]
+pub struct MarketTemperatureObservation {
+    pub temperature: Decimal,
+    pub valuation: Decimal,
+    pub sentiment: Decimal,
+    pub description: String,
+    pub timestamp: OffsetDateTime,
+}
+
 // ── Trade types ──
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,10 +192,13 @@ pub struct TradeActivity {
 pub struct LinkSnapshot {
     pub timestamp: OffsetDateTime,
     pub broker_queues: Vec<BrokerQueueEntry>,
+    pub calc_indexes: Vec<CalcIndexObservation>,
+    pub candlesticks: Vec<CandlestickObservation>,
     pub institution_activities: Vec<InstitutionActivity>,
     pub cross_stock_presences: Vec<CrossStockPresence>,
     pub capital_flows: Vec<CapitalFlow>,
     pub capital_breakdowns: Vec<CapitalBreakdown>,
+    pub market_temperature: Option<MarketTemperatureObservation>,
     pub order_books: Vec<OrderBookObservation>,
     pub quotes: Vec<QuoteObservation>,
     pub trade_activities: Vec<TradeActivity>,
@@ -175,10 +209,13 @@ impl LinkSnapshot {
     /// Pure synchronous function — no I/O, fully testable with synthetic data.
     pub fn compute(raw: &RawSnapshot, store: &ObjectStore) -> Self {
         let broker_queues = compute_broker_queues(raw);
+        let calc_indexes = compute_calc_indexes(raw);
+        let candlesticks = compute_candlesticks(raw);
         let institution_activities = compute_institution_activities(&broker_queues, store);
         let cross_stock_presences = compute_cross_stock_presences(&institution_activities);
         let capital_flows = compute_capital_flows(raw);
         let capital_breakdowns = compute_capital_breakdowns(raw);
+        let market_temperature = compute_market_temperature(raw);
         let order_books = compute_order_books(raw);
         let quotes = compute_quotes(raw);
         let trade_activities = compute_trade_activities(raw);
@@ -186,10 +223,13 @@ impl LinkSnapshot {
         LinkSnapshot {
             timestamp: raw.timestamp,
             broker_queues,
+            calc_indexes,
+            candlesticks,
             institution_activities,
             cross_stock_presences,
             capital_flows,
             capital_breakdowns,
+            market_temperature,
             order_books,
             quotes,
             trade_activities,
@@ -237,8 +277,10 @@ fn compute_institution_activities(
     store: &ObjectStore,
 ) -> Vec<InstitutionActivity> {
     // Key: (Symbol, InstitutionId) → (ask_positions, bid_positions, unique broker_ids)
-    let mut map: HashMap<(Symbol, InstitutionId), (Vec<i32>, Vec<i32>, std::collections::HashSet<BrokerId>)> =
-        HashMap::new();
+    let mut map: HashMap<
+        (Symbol, InstitutionId),
+        (Vec<i32>, Vec<i32>, std::collections::HashSet<BrokerId>),
+    > = HashMap::new();
 
     for entry in broker_queues {
         let institution_id = match store.broker_to_institution.get(&entry.broker_id) {
@@ -247,9 +289,9 @@ fn compute_institution_activities(
         };
 
         let key = (entry.symbol.clone(), institution_id);
-        let record = map.entry(key).or_insert_with(|| {
-            (Vec::new(), Vec::new(), std::collections::HashSet::new())
-        });
+        let record = map
+            .entry(key)
+            .or_insert_with(|| (Vec::new(), Vec::new(), std::collections::HashSet::new()));
 
         match entry.side {
             Side::Ask => record.0.push(entry.position),
@@ -259,29 +301,29 @@ fn compute_institution_activities(
     }
 
     map.into_iter()
-        .map(|((symbol, institution_id), (ask_positions, bid_positions, broker_ids))| {
-            InstitutionActivity {
-                symbol,
-                institution_id,
-                ask_positions,
-                bid_positions,
-                seat_count: broker_ids.len(),
-            }
-        })
+        .map(
+            |((symbol, institution_id), (ask_positions, bid_positions, broker_ids))| {
+                InstitutionActivity {
+                    symbol,
+                    institution_id,
+                    ask_positions,
+                    bid_positions,
+                    seat_count: broker_ids.len(),
+                }
+            },
+        )
         .collect()
 }
 
 /// Find institutions present in ≥2 stocks.
-fn compute_cross_stock_presences(
-    activities: &[InstitutionActivity],
-) -> Vec<CrossStockPresence> {
+fn compute_cross_stock_presences(activities: &[InstitutionActivity]) -> Vec<CrossStockPresence> {
     // Group by institution_id
     let mut map: HashMap<InstitutionId, (Vec<Symbol>, Vec<Symbol>, Vec<Symbol>)> = HashMap::new();
 
     for act in activities {
-        let entry = map.entry(act.institution_id).or_insert_with(|| {
-            (Vec::new(), Vec::new(), Vec::new())
-        });
+        let entry = map
+            .entry(act.institution_id)
+            .or_insert_with(|| (Vec::new(), Vec::new(), Vec::new()));
         // Add to overall symbols list (deduplicated below)
         if !entry.0.contains(&act.symbol) {
             entry.0.push(act.symbol.clone());
@@ -296,12 +338,14 @@ fn compute_cross_stock_presences(
 
     map.into_iter()
         .filter(|(_, (symbols, _, _))| symbols.len() >= 2)
-        .map(|(institution_id, (symbols, ask_symbols, bid_symbols))| CrossStockPresence {
-            institution_id,
-            symbols,
-            ask_symbols,
-            bid_symbols,
-        })
+        .map(
+            |(institution_id, (symbols, ask_symbols, bid_symbols))| CrossStockPresence {
+                institution_id,
+                symbols,
+                ask_symbols,
+                bid_symbols,
+            },
+        )
         .collect()
 }
 
@@ -318,6 +362,22 @@ fn compute_capital_flows(raw: &RawSnapshot) -> Vec<CapitalFlow> {
         .collect()
 }
 
+fn compute_calc_indexes(raw: &RawSnapshot) -> Vec<CalcIndexObservation> {
+    raw.calc_indexes
+        .iter()
+        .map(|(symbol, idx)| CalcIndexObservation {
+            symbol: symbol.clone(),
+            turnover_rate: idx.turnover_rate,
+            volume_ratio: idx.volume_ratio,
+            pe_ttm_ratio: idx.pe_ttm_ratio,
+            pb_ratio: idx.pb_ratio,
+            dividend_ratio_ttm: idx.dividend_ratio_ttm,
+            amplitude: idx.amplitude,
+            five_minutes_change_rate: idx.five_minutes_change_rate,
+        })
+        .collect()
+}
+
 /// Compute net capital by size tier for each symbol.
 fn compute_capital_breakdowns(raw: &RawSnapshot) -> Vec<CapitalBreakdown> {
     raw.capital_distributions
@@ -327,6 +387,82 @@ fn compute_capital_breakdowns(raw: &RawSnapshot) -> Vec<CapitalBreakdown> {
             large_net: dist.capital_in.large - dist.capital_out.large,
             medium_net: dist.capital_in.medium - dist.capital_out.medium,
             small_net: dist.capital_in.small - dist.capital_out.small,
+        })
+        .collect()
+}
+
+fn clamp_unit(value: Decimal) -> Decimal {
+    value.clamp(-Decimal::ONE, Decimal::ONE)
+}
+
+fn compute_candlesticks(raw: &RawSnapshot) -> Vec<CandlestickObservation> {
+    raw.candlesticks
+        .iter()
+        .filter_map(|(symbol, candles)| {
+            let latest = candles.last()?;
+            let first = candles
+                .iter()
+                .rev()
+                .take(5)
+                .last()
+                .copied()
+                .unwrap_or(*latest);
+
+            let window_high = candles
+                .iter()
+                .rev()
+                .take(5)
+                .map(|c| c.high)
+                .max()
+                .unwrap_or(latest.high);
+            let window_low = candles
+                .iter()
+                .rev()
+                .take(5)
+                .map(|c| c.low)
+                .min()
+                .unwrap_or(latest.low);
+
+            let window_return = if first.open > Decimal::ZERO {
+                clamp_unit((latest.close - first.open) / first.open / Decimal::new(2, 2))
+            } else {
+                Decimal::ZERO
+            };
+
+            let latest_range = latest.high - latest.low;
+            let body_bias = if latest_range > Decimal::ZERO {
+                clamp_unit((latest.close - latest.open) / latest_range)
+            } else {
+                Decimal::ZERO
+            };
+
+            let recent = candles.iter().rev().take(5).collect::<Vec<_>>();
+            let average_volume = if recent.is_empty() {
+                Decimal::ZERO
+            } else {
+                Decimal::from(recent.iter().map(|c| c.volume).sum::<i64>())
+                    / Decimal::from(recent.len() as i64)
+            };
+            let volume_ratio = if average_volume > Decimal::ZERO {
+                Decimal::from(latest.volume) / average_volume
+            } else {
+                Decimal::ZERO
+            };
+
+            let range_ratio = if first.open > Decimal::ZERO {
+                clamp_unit((window_high - window_low) / first.open / Decimal::new(8, 2))
+            } else {
+                Decimal::ZERO
+            };
+
+            Some(CandlestickObservation {
+                symbol: symbol.clone(),
+                candle_count: candles.len(),
+                window_return,
+                body_bias,
+                volume_ratio,
+                range_ratio,
+            })
         })
         .collect()
 }
@@ -500,6 +636,7 @@ fn compute_trade_activities(raw: &RawSnapshot) -> Vec<TradeActivity> {
 
 fn market_status_from_trade_status(status: longport::quote::TradeStatus) -> MarketStatus {
     use longport::quote::TradeStatus;
+    #[allow(unreachable_patterns)] // forward-compat: new SDK variants map to Other
     match status {
         TradeStatus::Normal => MarketStatus::Normal,
         TradeStatus::Halted => MarketStatus::Halted,
@@ -535,13 +672,28 @@ fn compute_quotes(raw: &RawSnapshot) -> Vec<QuoteObservation> {
         .collect()
 }
 
+fn compute_market_temperature(raw: &RawSnapshot) -> Option<MarketTemperatureObservation> {
+    raw.market_temperature
+        .as_ref()
+        .map(|temp| MarketTemperatureObservation {
+            temperature: Decimal::from(temp.temperature),
+            valuation: Decimal::from(temp.valuation),
+            sentiment: Decimal::from(temp.sentiment),
+            description: temp.description.clone(),
+            timestamp: temp.timestamp,
+        })
+}
+
 // ── Tests ──
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use longport::quote::{Brokers, CapitalDistribution, CapitalDistributionResponse, CapitalFlowLine, Depth as LPDepth, SecurityBrokers, SecurityDepth, SecurityQuote, TradeStatus};
     use super::super::objects::{Institution, InstitutionClass};
+    use super::*;
+    use longport::quote::{
+        Brokers, CapitalDistribution, CapitalDistributionResponse, CapitalFlowLine,
+        Depth as LPDepth, SecurityBrokers, SecurityDepth, SecurityQuote, TradeStatus,
+    };
 
     fn sym(s: &str) -> Symbol {
         Symbol(s.into())
@@ -551,9 +703,12 @@ mod tests {
         RawSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             brokers: data.into_iter().collect(),
+            calc_indexes: HashMap::new(),
+            candlesticks: HashMap::new(),
             capital_flows: HashMap::new(),
             capital_distributions: HashMap::new(),
             depths: HashMap::new(),
+            market_temperature: None,
             quotes: HashMap::new(),
             trades: HashMap::new(),
         }
@@ -582,7 +737,10 @@ mod tests {
         let raw = make_raw_with_brokers(vec![(
             sym("700.HK"),
             SecurityBrokers {
-                ask_brokers: vec![Brokers { position: 1, broker_ids: vec![100] }],
+                ask_brokers: vec![Brokers {
+                    position: 1,
+                    broker_ids: vec![100],
+                }],
                 bid_brokers: vec![],
             },
         )]);
@@ -600,14 +758,19 @@ mod tests {
         let raw = make_raw_with_brokers(vec![(
             sym("700.HK"),
             SecurityBrokers {
-                ask_brokers: vec![Brokers { position: 1, broker_ids: vec![100, 200, 300] }],
+                ask_brokers: vec![Brokers {
+                    position: 1,
+                    broker_ids: vec![100, 200, 300],
+                }],
                 bid_brokers: vec![],
             },
         )]);
 
         let entries = compute_broker_queues(&raw);
         assert_eq!(entries.len(), 3);
-        assert!(entries.iter().all(|e| e.position == 1 && e.side == Side::Ask));
+        assert!(entries
+            .iter()
+            .all(|e| e.position == 1 && e.side == Side::Ask));
     }
 
     #[test]
@@ -615,8 +778,14 @@ mod tests {
         let raw = make_raw_with_brokers(vec![(
             sym("700.HK"),
             SecurityBrokers {
-                ask_brokers: vec![Brokers { position: 1, broker_ids: vec![100] }],
-                bid_brokers: vec![Brokers { position: 2, broker_ids: vec![100] }],
+                ask_brokers: vec![Brokers {
+                    position: 1,
+                    broker_ids: vec![100],
+                }],
+                bid_brokers: vec![Brokers {
+                    position: 2,
+                    broker_ids: vec![100],
+                }],
             },
         )]);
 
@@ -655,10 +824,19 @@ mod tests {
             sym("700.HK"),
             SecurityBrokers {
                 ask_brokers: vec![
-                    Brokers { position: 1, broker_ids: vec![100] },
-                    Brokers { position: 3, broker_ids: vec![101] },
+                    Brokers {
+                        position: 1,
+                        broker_ids: vec![100],
+                    },
+                    Brokers {
+                        position: 3,
+                        broker_ids: vec![101],
+                    },
                 ],
-                bid_brokers: vec![Brokers { position: 2, broker_ids: vec![102] }],
+                bid_brokers: vec![Brokers {
+                    position: 2,
+                    broker_ids: vec![102],
+                }],
             },
         )]);
 
@@ -681,7 +859,10 @@ mod tests {
         let raw = make_raw_with_brokers(vec![(
             sym("700.HK"),
             SecurityBrokers {
-                ask_brokers: vec![Brokers { position: 1, broker_ids: vec![100, 999] }],
+                ask_brokers: vec![Brokers {
+                    position: 1,
+                    broker_ids: vec![100, 999],
+                }],
                 bid_brokers: vec![],
             },
         )]);
@@ -703,7 +884,10 @@ mod tests {
             (
                 sym("700.HK"),
                 SecurityBrokers {
-                    ask_brokers: vec![Brokers { position: 1, broker_ids: vec![100] }],
+                    ask_brokers: vec![Brokers {
+                        position: 1,
+                        broker_ids: vec![100],
+                    }],
                     bid_brokers: vec![],
                 },
             ),
@@ -711,7 +895,10 @@ mod tests {
                 sym("9988.HK"),
                 SecurityBrokers {
                     ask_brokers: vec![],
-                    bid_brokers: vec![Brokers { position: 1, broker_ids: vec![100] }],
+                    bid_brokers: vec![Brokers {
+                        position: 1,
+                        broker_ids: vec![100],
+                    }],
                 },
             ),
         ]);
@@ -731,7 +918,10 @@ mod tests {
         let raw = make_raw_with_brokers(vec![(
             sym("700.HK"),
             SecurityBrokers {
-                ask_brokers: vec![Brokers { position: 1, broker_ids: vec![100] }],
+                ask_brokers: vec![Brokers {
+                    position: 1,
+                    broker_ids: vec![100],
+                }],
                 bid_brokers: vec![],
             },
         )]);
@@ -749,6 +939,8 @@ mod tests {
         let raw = RawSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             brokers: HashMap::new(),
+            calc_indexes: HashMap::new(),
+            candlesticks: HashMap::new(),
             capital_flows: HashMap::from([(
                 sym("700.HK"),
                 vec![
@@ -768,6 +960,7 @@ mod tests {
             )]),
             capital_distributions: HashMap::new(),
             depths: HashMap::new(),
+            market_temperature: None,
             quotes: HashMap::new(),
             trades: HashMap::new(),
         };
@@ -782,9 +975,12 @@ mod tests {
         let raw = RawSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             brokers: HashMap::new(),
+            calc_indexes: HashMap::new(),
+            candlesticks: HashMap::new(),
             capital_flows: HashMap::from([(sym("700.HK"), vec![])]),
             capital_distributions: HashMap::new(),
             depths: HashMap::new(),
+            market_temperature: None,
             quotes: HashMap::new(),
             trades: HashMap::new(),
         };
@@ -800,6 +996,8 @@ mod tests {
         let raw = RawSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             brokers: HashMap::new(),
+            calc_indexes: HashMap::new(),
+            candlesticks: HashMap::new(),
             capital_flows: HashMap::new(),
             capital_distributions: HashMap::from([(
                 sym("700.HK"),
@@ -818,6 +1016,7 @@ mod tests {
                 },
             )]),
             depths: HashMap::new(),
+            market_temperature: None,
             quotes: HashMap::new(),
             trades: HashMap::new(),
         };
@@ -833,10 +1032,7 @@ mod tests {
 
     #[test]
     fn full_snapshot_integration() {
-        let store = make_store_with_institutions(vec![
-            (100, &[100, 101]),
-            (200, &[200]),
-        ]);
+        let store = make_store_with_institutions(vec![(100, &[100, 101]), (200, &[200])]);
 
         let raw = RawSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -844,30 +1040,48 @@ mod tests {
                 (
                     sym("700.HK"),
                     SecurityBrokers {
-                        ask_brokers: vec![Brokers { position: 1, broker_ids: vec![100, 200] }],
-                        bid_brokers: vec![Brokers { position: 1, broker_ids: vec![101] }],
+                        ask_brokers: vec![Brokers {
+                            position: 1,
+                            broker_ids: vec![100, 200],
+                        }],
+                        bid_brokers: vec![Brokers {
+                            position: 1,
+                            broker_ids: vec![101],
+                        }],
                     },
                 ),
                 (
                     sym("9988.HK"),
                     SecurityBrokers {
-                        ask_brokers: vec![Brokers { position: 2, broker_ids: vec![100] }],
+                        ask_brokers: vec![Brokers {
+                            position: 2,
+                            broker_ids: vec![100],
+                        }],
                         bid_brokers: vec![],
                     },
                 ),
             ]),
+            calc_indexes: HashMap::new(),
+            candlesticks: HashMap::new(),
             capital_flows: HashMap::from([
-                (sym("700.HK"), vec![CapitalFlowLine {
-                    inflow: Decimal::new(500, 0),
-                    timestamp: OffsetDateTime::UNIX_EPOCH,
-                }]),
-                (sym("9988.HK"), vec![CapitalFlowLine {
-                    inflow: Decimal::new(-200, 0),
-                    timestamp: OffsetDateTime::UNIX_EPOCH,
-                }]),
+                (
+                    sym("700.HK"),
+                    vec![CapitalFlowLine {
+                        inflow: Decimal::new(500, 0),
+                        timestamp: OffsetDateTime::UNIX_EPOCH,
+                    }],
+                ),
+                (
+                    sym("9988.HK"),
+                    vec![CapitalFlowLine {
+                        inflow: Decimal::new(-200, 0),
+                        timestamp: OffsetDateTime::UNIX_EPOCH,
+                    }],
+                ),
             ]),
-            capital_distributions: HashMap::from([
-                (sym("700.HK"), CapitalDistributionResponse {
+            capital_distributions: HashMap::from([(
+                sym("700.HK"),
+                CapitalDistributionResponse {
                     timestamp: OffsetDateTime::UNIX_EPOCH,
                     capital_in: CapitalDistribution {
                         large: Decimal::new(1000, 0),
@@ -879,16 +1093,29 @@ mod tests {
                         medium: Decimal::new(200, 0),
                         small: Decimal::new(100, 0),
                     },
-                }),
-            ]),
-            depths: HashMap::from([
-                (sym("700.HK"), SecurityDepth {
-                    asks: vec![LPDepth { position: 1, price: Some(Decimal::new(35000, 2)), volume: 1000, order_num: 5 }],
-                    bids: vec![LPDepth { position: 1, price: Some(Decimal::new(34980, 2)), volume: 800, order_num: 3 }],
-                }),
-            ]),
-            quotes: HashMap::from([
-                (sym("700.HK"), SecurityQuote {
+                },
+            )]),
+            depths: HashMap::from([(
+                sym("700.HK"),
+                SecurityDepth {
+                    asks: vec![LPDepth {
+                        position: 1,
+                        price: Some(Decimal::new(35000, 2)),
+                        volume: 1000,
+                        order_num: 5,
+                    }],
+                    bids: vec![LPDepth {
+                        position: 1,
+                        price: Some(Decimal::new(34980, 2)),
+                        volume: 800,
+                        order_num: 3,
+                    }],
+                },
+            )]),
+            market_temperature: None,
+            quotes: HashMap::from([(
+                sym("700.HK"),
+                SecurityQuote {
                     symbol: "700.HK".into(),
                     last_done: Decimal::new(35000, 2),
                     prev_close: Decimal::new(34800, 2),
@@ -902,8 +1129,8 @@ mod tests {
                     pre_market_quote: None,
                     post_market_quote: None,
                     overnight_quote: None,
-                }),
-            ]),
+                },
+            )]),
             trades: HashMap::new(),
         };
 
@@ -917,14 +1144,20 @@ mod tests {
 
         // Cross-stock: inst 100 appears in 2 stocks
         assert_eq!(snapshot.cross_stock_presences.len(), 1);
-        assert_eq!(snapshot.cross_stock_presences[0].institution_id, InstitutionId(100));
+        assert_eq!(
+            snapshot.cross_stock_presences[0].institution_id,
+            InstitutionId(100)
+        );
 
         // Capital flows: 2 symbols
         assert_eq!(snapshot.capital_flows.len(), 2);
 
         // Capital breakdowns: 1 symbol (only 700.HK has distribution data)
         assert_eq!(snapshot.capital_breakdowns.len(), 1);
-        assert_eq!(snapshot.capital_breakdowns[0].large_net, Decimal::new(600, 0));
+        assert_eq!(
+            snapshot.capital_breakdowns[0].large_net,
+            Decimal::new(600, 0)
+        );
 
         // Order books: 1 symbol with depth data
         assert_eq!(snapshot.order_books.len(), 1);
@@ -942,9 +1175,12 @@ mod tests {
         RawSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             brokers: HashMap::new(),
+            calc_indexes: HashMap::new(),
+            candlesticks: HashMap::new(),
             capital_flows: HashMap::new(),
             capital_distributions: HashMap::new(),
             depths: data.into_iter().collect(),
+            market_temperature: None,
             quotes: HashMap::new(),
             trades: HashMap::new(),
         }
@@ -954,9 +1190,12 @@ mod tests {
         RawSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             brokers: HashMap::new(),
+            calc_indexes: HashMap::new(),
+            candlesticks: HashMap::new(),
             capital_flows: HashMap::new(),
             capital_distributions: HashMap::new(),
             depths: HashMap::new(),
+            market_temperature: None,
             quotes: data.into_iter().collect(),
             trades: HashMap::new(),
         }
@@ -985,8 +1224,18 @@ mod tests {
         let raw = make_raw_with_depths(vec![(
             sym("700.HK"),
             SecurityDepth {
-                asks: vec![LPDepth { position: 1, price: Some(Decimal::new(35000, 2)), volume: 500, order_num: 3 }],
-                bids: vec![LPDepth { position: 1, price: Some(Decimal::new(34980, 2)), volume: 400, order_num: 2 }],
+                asks: vec![LPDepth {
+                    position: 1,
+                    price: Some(Decimal::new(35000, 2)),
+                    volume: 500,
+                    order_num: 3,
+                }],
+                bids: vec![LPDepth {
+                    position: 1,
+                    price: Some(Decimal::new(34980, 2)),
+                    volume: 400,
+                    order_num: 2,
+                }],
             },
         )]);
 
@@ -1003,13 +1252,38 @@ mod tests {
             sym("700.HK"),
             SecurityDepth {
                 asks: vec![
-                    LPDepth { position: 1, price: Some(Decimal::new(35000, 2)), volume: 100, order_num: 1 },
-                    LPDepth { position: 2, price: Some(Decimal::new(35020, 2)), volume: 200, order_num: 2 },
-                    LPDepth { position: 3, price: Some(Decimal::new(35040, 2)), volume: 300, order_num: 3 },
+                    LPDepth {
+                        position: 1,
+                        price: Some(Decimal::new(35000, 2)),
+                        volume: 100,
+                        order_num: 1,
+                    },
+                    LPDepth {
+                        position: 2,
+                        price: Some(Decimal::new(35020, 2)),
+                        volume: 200,
+                        order_num: 2,
+                    },
+                    LPDepth {
+                        position: 3,
+                        price: Some(Decimal::new(35040, 2)),
+                        volume: 300,
+                        order_num: 3,
+                    },
                 ],
                 bids: vec![
-                    LPDepth { position: 1, price: Some(Decimal::new(34980, 2)), volume: 150, order_num: 1 },
-                    LPDepth { position: 2, price: Some(Decimal::new(34960, 2)), volume: 250, order_num: 4 },
+                    LPDepth {
+                        position: 1,
+                        price: Some(Decimal::new(34980, 2)),
+                        volume: 150,
+                        order_num: 1,
+                    },
+                    LPDepth {
+                        position: 2,
+                        price: Some(Decimal::new(34960, 2)),
+                        volume: 250,
+                        order_num: 4,
+                    },
                 ],
             },
         )]);
@@ -1028,7 +1302,12 @@ mod tests {
         let raw = make_raw_with_depths(vec![(
             sym("700.HK"),
             SecurityDepth {
-                asks: vec![LPDepth { position: 1, price: Some(Decimal::new(35000, 2)), volume: 100, order_num: 1 }],
+                asks: vec![LPDepth {
+                    position: 1,
+                    price: Some(Decimal::new(35000, 2)),
+                    volume: 100,
+                    order_num: 1,
+                }],
                 bids: vec![],
             },
         )]);
@@ -1042,7 +1321,10 @@ mod tests {
     fn order_book_empty_depth() {
         let raw = make_raw_with_depths(vec![(
             sym("700.HK"),
-            SecurityDepth { asks: vec![], bids: vec![] },
+            SecurityDepth {
+                asks: vec![],
+                bids: vec![],
+            },
         )]);
 
         let books = compute_order_books(&raw);
@@ -1060,7 +1342,10 @@ mod tests {
 
     #[test]
     fn quote_basic() {
-        let raw = make_raw_with_quotes(vec![(sym("700.HK"), make_quote("700.HK", TradeStatus::Normal))]);
+        let raw = make_raw_with_quotes(vec![(
+            sym("700.HK"),
+            make_quote("700.HK", TradeStatus::Normal),
+        )]);
         let quotes = compute_quotes(&raw);
         assert_eq!(quotes.len(), 1);
         assert_eq!(quotes[0].last_done, Decimal::new(35000, 2));
@@ -1070,21 +1355,30 @@ mod tests {
 
     #[test]
     fn quote_halted_status() {
-        let raw = make_raw_with_quotes(vec![(sym("700.HK"), make_quote("700.HK", TradeStatus::Halted))]);
+        let raw = make_raw_with_quotes(vec![(
+            sym("700.HK"),
+            make_quote("700.HK", TradeStatus::Halted),
+        )]);
         let quotes = compute_quotes(&raw);
         assert_eq!(quotes[0].market_status, MarketStatus::Halted);
     }
 
     #[test]
     fn quote_suspended_status() {
-        let raw = make_raw_with_quotes(vec![(sym("700.HK"), make_quote("700.HK", TradeStatus::SuspendTrade))]);
+        let raw = make_raw_with_quotes(vec![(
+            sym("700.HK"),
+            make_quote("700.HK", TradeStatus::SuspendTrade),
+        )]);
         let quotes = compute_quotes(&raw);
         assert_eq!(quotes[0].market_status, MarketStatus::SuspendTrade);
     }
 
     #[test]
     fn quote_unknown_status() {
-        let raw = make_raw_with_quotes(vec![(sym("700.HK"), make_quote("700.HK", TradeStatus::Expired))]);
+        let raw = make_raw_with_quotes(vec![(
+            sym("700.HK"),
+            make_quote("700.HK", TradeStatus::Expired),
+        )]);
         let quotes = compute_quotes(&raw);
         assert_eq!(quotes[0].market_status, MarketStatus::Other);
     }
