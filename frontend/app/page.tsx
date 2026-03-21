@@ -96,12 +96,12 @@ export default function Dashboard() {
       {/* ── 頂欄：一句話看大盤 ── */}
       <div className="h-10 bg-[var(--bg-sidebar)] border-b border-[var(--border-gray)] flex items-center px-6 justify-between shrink-0">
         <div className="flex items-center gap-4">
-          <span className="font-display text-base font-bold text-[var(--accent-green)]">EDEN</span>
+          <span className="font-display text-lg font-bold text-[var(--accent-green)]">EDEN</span>
           <div className="flex">
-            <button onClick={() => setMarket("hk")} className={`font-mono-eden text-[10px] px-3 py-1 transition-all ${market === "hk" ? "bg-[var(--accent-green-10)] text-[var(--accent-green)] font-bold border border-[var(--accent-green)]/40" : "text-[var(--text-muted)] border border-[var(--border-gray)]"}`}>港股</button>
-            <button onClick={() => setMarket("us")} className={`font-mono-eden text-[10px] px-3 py-1 transition-all ${market === "us" ? "bg-[var(--accent-green-10)] text-[var(--accent-green)] font-bold border border-[var(--accent-green)]/40" : "text-[var(--text-muted)] border border-[var(--border-gray)]"}`}>美股</button>
+            <button onClick={() => setMarket("hk")} className={`font-mono-eden text-[13px] px-3 py-1 transition-all ${market === "hk" ? "bg-[var(--accent-green-10)] text-[var(--accent-green)] font-bold border border-[var(--accent-green)]/40" : "text-[var(--text-muted)] border border-[var(--border-gray)]"}`}>港股</button>
+            <button onClick={() => setMarket("us")} className={`font-mono-eden text-[13px] px-3 py-1 transition-all ${market === "us" ? "bg-[var(--accent-green-10)] text-[var(--accent-green)] font-bold border border-[var(--accent-green)]/40" : "text-[var(--text-muted)] border border-[var(--border-gray)]"}`}>美股</button>
           </div>
-          <span className="font-mono-eden text-[10px] text-[var(--text-muted)]">#{data?.tick ?? "—"} {data?.timestamp ? new Date(data.timestamp).toLocaleTimeString("zh-HK") : ""}</span>
+          <span className="font-mono-eden text-[13px] text-[var(--text-muted)]">#{data?.tick ?? "—"} {data?.timestamp ? new Date(data.timestamp).toLocaleTimeString("zh-HK") : ""}</span>
         </div>
         <div className="flex items-center gap-5">
           {stressVal != null && <Metric label="市場壓力" value={pct(stressVal)} color={stressVal > 0.3 ? "text-[var(--accent-red)]" : stressVal > 0.15 ? "text-[var(--accent-orange)]" : "text-[var(--accent-green)]"} />}
@@ -109,7 +109,7 @@ export default function Dashboard() {
           {hitRate != null && <Metric label="系統命中" value={pct(hitRate)} color={hitRate > 0.5 ? "text-[var(--accent-green)]" : hitRate > 0.3 ? "text-[var(--accent-orange)]" : "text-[var(--accent-red)]"} />}
           <div className="flex items-center gap-1.5">
             <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent-green)] animate-pulse" />
-            <span className="font-mono-eden text-[8px] font-bold text-[var(--accent-green)]">即時</span>
+            <span className="font-mono-eden text-[11px] font-bold text-[var(--accent-green)]">即時</span>
           </div>
         </div>
       </div>
@@ -120,8 +120,8 @@ export default function Dashboard() {
 
           {/* ═══ 行動建議 ═══ */}
           <div className="flex items-center justify-between">
-            <span className="font-display text-sm font-bold text-[var(--text-primary)]">行動建議</span>
-            <span className="font-mono-eden text-[9px] text-[var(--text-muted)]">{opportunities.filter((o: any) => o.action === "enter").length} 個進場信號</span>
+            <span className="font-display text-base font-bold text-[var(--text-primary)]">行動建議</span>
+            <span className="font-mono-eden text-[13px] text-[var(--text-muted)]">{opportunities.filter((o: any) => o.action === "enter").length} 個進場信號</span>
           </div>
 
           {opportunities.length === 0 && (
@@ -143,23 +143,23 @@ export default function Dashboard() {
                   {/* 行1：股票 + 行動 + 信心 */}
                   <div className="flex items-center justify-between mb-1.5">
                     <div className="flex items-center gap-2.5">
-                      <span className="font-display text-[15px] font-bold tracking-tight">{opp.sym}</span>
-                      <span className={`font-mono-eden text-[8px] px-2 py-0.5 rounded-full font-bold ${opp.action === "enter" ? "bg-[var(--accent-green)] text-[var(--bg-page)]" : opp.action === "review" ? "bg-[var(--accent-orange-20)] text-[var(--accent-orange)]" : "bg-[var(--bg-elevated)] text-[var(--text-muted)]"}`}>
+                      <span className="font-display text-[13px] font-bold tracking-tight">{opp.sym}</span>
+                      <span className={`font-mono-eden text-[11px] px-2 py-0.5 rounded-full font-bold ${opp.action === "enter" ? "bg-[var(--accent-green)] text-[var(--bg-page)]" : opp.action === "review" ? "bg-[var(--accent-orange-20)] text-[var(--accent-orange)]" : "bg-[var(--bg-elevated)] text-[var(--text-muted)]"}`}>
                         {opp.action === "enter" ? "建議進場" : opp.action === "review" ? "觀望" : "觀察"}
                       </span>
                     </div>
                     <div className="flex items-center gap-3">
-                      <span className="font-mono-eden text-[12px] font-bold">{pct(opp.confidence)}</span>
-                      <span className="font-mono-eden text-[9px] text-[var(--text-muted)]">{isExpanded ? "▲" : "▼"}</span>
+                      <span className="font-mono-eden text-[13px] font-bold">{pct(opp.confidence)}</span>
+                      <span className="font-mono-eden text-[13px] text-[var(--text-muted)]">{isExpanded ? "▲" : "▼"}</span>
                     </div>
                   </div>
                   {/* 行2：一句話原因 */}
-                  <div className="font-mono-eden text-[10px] text-[var(--text-secondary)] leading-relaxed">
+                  <div className="font-mono-eden text-[13px] text-[var(--text-secondary)] leading-relaxed">
                     {reason.length > 100 ? reason.slice(0, 100) + "..." : reason}
                   </div>
                   {/* 行3：策略命中率 */}
                   {lin && (
-                    <div className="font-mono-eden text-[8px] text-[var(--text-muted)] mt-1.5">
+                    <div className="font-mono-eden text-[11px] text-[var(--text-muted)] mt-1.5">
                       此策略歷史命中率 <span className={pctColor(lin.hit_rate)}>{pct(lin.hit_rate)}</span>
                       <span className="ml-1">({lin.resolved}筆已驗證)</span>
                     </div>
@@ -172,18 +172,18 @@ export default function Dashboard() {
                     {/* 證據鏈 */}
                     {opp.chain?.evidence && (
                       <div className="flex flex-col gap-1">
-                        <span className="font-mono-eden text-[8px] font-bold text-[var(--text-muted)] tracking-wider">推理證據</span>
+                        <span className="font-mono-eden text-[11px] font-bold text-[var(--text-muted)] tracking-wider">推理證據</span>
                         {opp.chain.evidence.slice(0, 5).map((e: any, j: number) => (
                           <div key={j} className="flex justify-between items-center">
-                            <span className="font-mono-eden text-[9px] text-[var(--text-secondary)]">{e.description}</span>
-                            <span className={`font-mono-eden text-[9px] font-bold ${pctColor(e.direction)}`}>{pct(e.weight)}</span>
+                            <span className="font-mono-eden text-[13px] text-[var(--text-secondary)]">{e.description}</span>
+                            <span className={`font-mono-eden text-[13px] font-bold ${pctColor(e.direction)}`}>{pct(e.weight)}</span>
                           </div>
                         ))}
                       </div>
                     )}
 
                     {/* 壓力 + 因果 */}
-                    <div className="flex gap-4 font-mono-eden text-[8px] text-[var(--text-muted)] flex-wrap">
+                    <div className="flex gap-4 font-mono-eden text-[11px] text-[var(--text-muted)] flex-wrap">
                       {opp.pressure && <>
                         <span>資金={pct(opp.pressure.capital_flow_pressure ?? opp.pressure.net_pressure ?? "0")}</span>
                         <span>動量={pct(opp.pressure.momentum ?? "0")}</span>
@@ -194,7 +194,7 @@ export default function Dashboard() {
                     </div>
 
                     {/* 信心細節 */}
-                    <div className="flex gap-4 font-mono-eden text-[8px] text-[var(--text-muted)]">
+                    <div className="flex gap-4 font-mono-eden text-[11px] text-[var(--text-muted)]">
                       <span>信心差距={pct(opp.confidence_gap)}</span>
                       <span>邊際={pct(opp.heuristic_edge)}</span>
                     </div>
@@ -202,20 +202,20 @@ export default function Dashboard() {
                     {/* 行動按鈕 */}
                     {acted ? (
                       <div className="flex items-center justify-center gap-2 py-1">
-                        <span className={`font-mono-eden text-[10px] font-bold ${acted === "enter" ? "text-[var(--accent-green)]" : acted === "review" ? "text-[var(--accent-orange)]" : "text-[var(--text-muted)]"}`}>
+                        <span className={`font-mono-eden text-[13px] font-bold ${acted === "enter" ? "text-[var(--accent-green)]" : acted === "review" ? "text-[var(--accent-orange)]" : "text-[var(--text-muted)]"}`}>
                           {acted === "enter" ? "✓ 已確認進場" : acted === "review" ? "⟳ 已標記觀望" : "— 已忽略"}
                         </span>
                         <button onClick={(e) => { e.stopPropagation(); setActions(p => { const n = { ...p }; delete n[opp.sym]; return n; }); }}
-                          className="font-mono-eden text-[8px] text-[var(--text-muted)] hover:text-[var(--text-primary)] underline">撤回</button>
+                          className="font-mono-eden text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)] underline">撤回</button>
                       </div>
                     ) : (
                       <div className="flex gap-2">
                         <button onClick={(e) => { e.stopPropagation(); handleAction(opp.sym, "enter"); }}
-                          className="flex-1 py-1.5 bg-[var(--accent-green)] font-mono-eden text-[9px] font-bold text-[var(--bg-page)] rounded hover:brightness-110 active:scale-[0.98] transition-all">確認進場</button>
+                          className="flex-1 py-1.5 bg-[var(--accent-green)] font-mono-eden text-[13px] font-bold text-[var(--bg-page)] rounded hover:brightness-110 active:scale-[0.98] transition-all">確認進場</button>
                         <button onClick={(e) => { e.stopPropagation(); handleAction(opp.sym, "review"); }}
-                          className="flex-1 py-1.5 border border-[var(--accent-orange)]/40 font-mono-eden text-[9px] font-semibold text-[var(--accent-orange)] rounded hover:bg-[var(--accent-orange-20)] active:scale-[0.98] transition-all">觀望</button>
+                          className="flex-1 py-1.5 border border-[var(--accent-orange)]/40 font-mono-eden text-[13px] font-semibold text-[var(--accent-orange)] rounded hover:bg-[var(--accent-orange-20)] active:scale-[0.98] transition-all">觀望</button>
                         <button onClick={(e) => { e.stopPropagation(); handleAction(opp.sym, "dismiss"); }}
-                          className="flex-1 py-1.5 border border-[var(--border-gray)] font-mono-eden text-[9px] text-[var(--text-muted)] rounded hover:text-[var(--text-secondary)] active:scale-[0.98] transition-all">忽略</button>
+                          className="flex-1 py-1.5 border border-[var(--border-gray)] font-mono-eden text-[13px] text-[var(--text-muted)] rounded hover:text-[var(--text-secondary)] active:scale-[0.98] transition-all">忽略</button>
                       </div>
                     )}
                   </div>
@@ -227,14 +227,14 @@ export default function Dashboard() {
           {/* ═══ 異動監察 ═══ */}
           {movers.length > 0 && (<>
             <div className="h-px bg-[var(--border-gray)] mt-2" />
-            <span className="font-display text-sm font-bold text-[var(--text-muted)]">異動監察</span>
+            <span className="font-display text-base font-bold text-[var(--text-muted)]">異動監察</span>
             <div className="bg-[var(--bg-card)] border border-[var(--border-gray)] rounded-lg overflow-hidden">
               {movers.map((m: any, i: number) => (
                 <div key={i} className={`flex items-center gap-3 px-3 py-1.5 ${i > 0 ? "border-t border-[var(--border-gray)]" : ""} hover:bg-[var(--bg-elevated)] transition-colors cursor-pointer`}
                   onClick={() => setExpanded(expanded === m.sym ? null : m.sym)}>
                   <span className="font-mono-eden text-[11px] font-bold w-20">{m.sym.replace(".HK", "").replace(".US", "")}</span>
                   <span className={`font-mono-eden text-[11px] font-bold w-14 text-right ${pctColor(m.comp)}`}>{pct(m.comp)}</span>
-                  <span className="font-mono-eden text-[9px] text-[var(--text-muted)] flex-1 truncate">{m.reason.replace(m.sym + " ", "")}</span>
+                  <span className="font-mono-eden text-[13px] text-[var(--text-muted)] flex-1 truncate">{m.reason.replace(m.sym + " ", "")}</span>
                 </div>
               ))}
             </div>
@@ -243,29 +243,29 @@ export default function Dashboard() {
           {/* ═══ 資金動向 ═══ */}
           {flows.length > 0 && (<>
             <div className="h-px bg-[var(--border-gray)] mt-2" />
-            <span className="font-display text-sm font-bold text-[var(--text-muted)]">資金動向</span>
+            <span className="font-display text-base font-bold text-[var(--text-muted)]">資金動向</span>
             <div className="grid grid-cols-2 gap-2">
               {/* 流入 */}
               <div className="bg-[var(--accent-green-10)] border border-[var(--accent-green)]/10 rounded-lg p-2.5">
-                <span className="font-mono-eden text-[8px] font-bold text-[var(--accent-green)] tracking-wider">流入 ▲</span>
+                <span className="font-mono-eden text-[11px] font-bold text-[var(--accent-green)] tracking-wider">流入 ▲</span>
                 {flows.filter((f: any) => f.flow > 0).slice(0, 4).map((f: any, i: number) => (
                   <div key={i} className="flex justify-between mt-1">
-                    <span className="font-mono-eden text-[10px] font-semibold">{f.sym.replace(".HK", "").replace(".US", "")}</span>
-                    <span className="font-mono-eden text-[10px] font-bold text-[var(--accent-green)]">+{pct(f.flow)}</span>
+                    <span className="font-mono-eden text-[13px] font-semibold">{f.sym.replace(".HK", "").replace(".US", "")}</span>
+                    <span className="font-mono-eden text-[13px] font-bold text-[var(--accent-green)]">+{pct(f.flow)}</span>
                   </div>
                 ))}
-                {flows.filter((f: any) => f.flow > 0).length === 0 && <div className="font-mono-eden text-[9px] text-[var(--text-muted)] mt-1">暫無</div>}
+                {flows.filter((f: any) => f.flow > 0).length === 0 && <div className="font-mono-eden text-[13px] text-[var(--text-muted)] mt-1">暫無</div>}
               </div>
               {/* 流出 */}
               <div className="bg-[var(--accent-red-20)] border border-[var(--accent-red)]/10 rounded-lg p-2.5">
-                <span className="font-mono-eden text-[8px] font-bold text-[var(--accent-red)] tracking-wider">流出 ▼</span>
+                <span className="font-mono-eden text-[11px] font-bold text-[var(--accent-red)] tracking-wider">流出 ▼</span>
                 {flows.filter((f: any) => f.flow < 0).slice(0, 4).map((f: any, i: number) => (
                   <div key={i} className="flex justify-between mt-1">
-                    <span className="font-mono-eden text-[10px] font-semibold">{f.sym.replace(".HK", "").replace(".US", "")}</span>
-                    <span className="font-mono-eden text-[10px] font-bold text-[var(--accent-red)]">{pct(f.flow)}</span>
+                    <span className="font-mono-eden text-[13px] font-semibold">{f.sym.replace(".HK", "").replace(".US", "")}</span>
+                    <span className="font-mono-eden text-[13px] font-bold text-[var(--accent-red)]">{pct(f.flow)}</span>
                   </div>
                 ))}
-                {flows.filter((f: any) => f.flow < 0).length === 0 && <div className="font-mono-eden text-[9px] text-[var(--text-muted)] mt-1">暫無</div>}
+                {flows.filter((f: any) => f.flow < 0).length === 0 && <div className="font-mono-eden text-[13px] text-[var(--text-muted)] mt-1">暫無</div>}
               </div>
             </div>
           </>)}
@@ -273,13 +273,13 @@ export default function Dashboard() {
           {/* ═══ HK 專屬：機構活動 ═══ */}
           {market === "hk" && data?.pair_trades?.length > 0 && (<>
             <div className="h-px bg-[var(--border-gray)] mt-2" />
-            <span className="font-display text-sm font-bold text-[var(--text-muted)]">機構活動</span>
+            <span className="font-display text-base font-bold text-[var(--text-muted)]">機構活動</span>
             {data.pair_trades.slice(0, 3).map((pt: any, i: number) => (
               <div key={i} className="bg-[var(--bg-card)] border border-[var(--border-gray)] rounded-lg p-2.5">
-                <span className="font-mono-eden text-[10px] font-semibold">{pt.institution}</span>
+                <span className="font-mono-eden text-[13px] font-semibold">{pt.institution}</span>
                 <div className="flex gap-1.5 mt-1 flex-wrap">
-                  {pt.buy_symbols?.map((s: string) => <span key={s} className="font-mono-eden text-[8px] text-[var(--accent-green)] bg-[var(--accent-green-10)] px-1.5 py-0.5 rounded">▲{s}</span>)}
-                  {pt.sell_symbols?.map((s: string) => <span key={s} className="font-mono-eden text-[8px] text-[var(--accent-red)] bg-[var(--accent-red-20)] px-1.5 py-0.5 rounded">▼{s}</span>)}
+                  {pt.buy_symbols?.map((s: string) => <span key={s} className="font-mono-eden text-[11px] text-[var(--accent-green)] bg-[var(--accent-green-10)] px-1.5 py-0.5 rounded">▲{s}</span>)}
+                  {pt.sell_symbols?.map((s: string) => <span key={s} className="font-mono-eden text-[11px] text-[var(--accent-red)] bg-[var(--accent-red-20)] px-1.5 py-0.5 rounded">▼{s}</span>)}
                 </div>
               </div>
             ))}
@@ -288,9 +288,9 @@ export default function Dashboard() {
           {/* ═══ HK 專屬：機構撤退 ═══ */}
           {market === "hk" && data?.exoduses?.length > 0 && (<>
             <div className="h-px bg-[var(--border-gray)] mt-2" />
-            <span className="font-display text-sm font-bold text-[var(--accent-red)]">機構撤退</span>
+            <span className="font-display text-base font-bold text-[var(--accent-red)]">機構撤退</span>
             {data.exoduses.slice(0, 3).map((e: any, i: number) => (
-              <div key={i} className="font-mono-eden text-[9px] text-[var(--accent-red)]">
+              <div key={i} className="font-mono-eden text-[13px] text-[var(--accent-red)]">
                 {e.institution} {e.prev_stock_count}→{e.curr_stock_count} (-{e.dropped_count})
               </div>
             ))}
@@ -306,14 +306,14 @@ export default function Dashboard() {
         <div className="h-8 bg-[var(--bg-sidebar)] border-t border-[var(--border-gray)] flex items-center px-6 gap-6 shrink-0">
           {lineage.map((l, i) => (
             <div key={i} className="flex items-center gap-1.5">
-              <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">{l.template}</span>
-              <span className={`font-mono-eden text-[9px] font-bold ${pctColor(l.hit_rate)}`}>{pct(l.hit_rate)}</span>
-              <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">({l.resolved}筆)</span>
+              <span className="font-mono-eden text-[11px] text-[var(--text-muted)]">{l.template}</span>
+              <span className={`font-mono-eden text-[13px] font-bold ${pctColor(l.hit_rate)}`}>{pct(l.hit_rate)}</span>
+              <span className="font-mono-eden text-[11px] text-[var(--text-muted)]">({l.resolved}筆)</span>
             </div>
           ))}
           {data?.active_positions > 0 && (
             <div className="flex items-center gap-1.5 ml-auto">
-              <span className="font-mono-eden text-[8px] text-[var(--accent-orange)]">持倉 {data.active_positions}</span>
+              <span className="font-mono-eden text-[11px] text-[var(--accent-orange)]">持倉 {data.active_positions}</span>
             </div>
           )}
         </div>
@@ -324,7 +324,7 @@ export default function Dashboard() {
         <div className="fixed inset-0 flex items-center justify-center bg-black/80 z-50">
           <div className="bg-[var(--bg-card)] border border-[var(--border-gray)] p-8 max-w-md text-center rounded-lg">
             <div className="font-display text-xl font-bold mb-2">Eden 未連接</div>
-            <div className="font-mono-eden text-sm text-[var(--text-muted)]">請先啟動 Eden 後端</div>
+            <div className="font-mono-eden text-base text-[var(--text-muted)]">請先啟動 Eden 後端</div>
           </div>
         </div>
       )}
@@ -335,8 +335,8 @@ export default function Dashboard() {
 function Metric({ label, value, color }: { label: string; value: string; color: string }) {
   return (
     <div className="flex items-center gap-1.5">
-      <span className="font-mono-eden text-[9px] text-[var(--text-muted)]">{label}</span>
-      <span className={`font-mono-eden text-[10px] font-bold ${color}`}>{value}</span>
+      <span className="font-mono-eden text-[13px] text-[var(--text-muted)]">{label}</span>
+      <span className={`font-mono-eden text-[13px] font-bold ${color}`}>{value}</span>
     </div>
   );
 }
