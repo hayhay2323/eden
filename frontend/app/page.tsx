@@ -152,12 +152,12 @@ export default function Dashboard() {
     return { ...t, s, chain: d?.backward_chains?.find((c: any) => c.symbol === s), pr: d?.pressures?.find((p: any) => p.symbol === s), dims, causal };
   }), [d]);
 
-  const movers = useMemo(() => (d?.convergence_scores || d?.top_signals || []).slice(0, 8).map((c: any) => {
+  const movers = useMemo(() => (d?.convergence_scores || d?.top_signals || []).slice(0, 20).map((c: any) => {
     const s = c.symbol, v = parseFloat(c.composite || c.dimension_composite || "0");
     return { s, v, why: d?.backward_chains?.find((ch: any) => ch.symbol === s)?.conclusion || "" };
   }), [d]);
 
-  const flows = useMemo(() => (d?.pressures || []).slice(0, 8).map((p: any) => ({
+  const flows = useMemo(() => (d?.pressures || []).slice(0, 20).map((p: any) => ({
     s: p.symbol, f: parseFloat(p.capital_flow_pressure ?? p.net_pressure ?? "0"), m: parseFloat(p.momentum ?? "0"),
   })), [d]);
 
@@ -329,7 +329,7 @@ export default function Dashboard() {
         </div>
 
         {/* ─── 中：異動 + 資金 ─── */}
-        <div className="w-[320px] flex flex-col border-r border-[var(--border-gray)] shrink-0">
+        <div className="w-[260px] flex flex-col border-r border-[var(--border-gray)] shrink-0">
           {/* 異動 */}
           <div className="flex-1 flex flex-col min-h-0">
             <div className="px-3 pt-2 pb-1"><span className="font-bold text-[11px] t-s" style={{fontFamily:"Space Grotesk,sans-serif"}}>異動監察</span></div>
