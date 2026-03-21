@@ -28,7 +28,9 @@ export default function Dashboard() {
 
   const opps = useMemo(() => (d?.tactical_cases || []).slice(0, 5).map((t: any) => {
     const s = t.title?.split(" ")[0] || "";
-    return { ...t, s, chain: d?.backward_chains?.find((c: any) => c.symbol === s), pr: d?.pressures?.find((p: any) => p.symbol === s) };
+    const dims = d?.top_signals?.find((ts: any) => ts.symbol === s);
+    const causal = d?.causal_leaders?.find((c: any) => c.symbol === s);
+    return { ...t, s, chain: d?.backward_chains?.find((c: any) => c.symbol === s), pr: d?.pressures?.find((p: any) => p.symbol === s), dims, causal };
   }), [d]);
 
   const movers = useMemo(() => (d?.convergence_scores || d?.top_signals || []).slice(0, 8).map((c: any) => {
@@ -99,11 +101,70 @@ export default function Dashboard() {
                   </div>
                   <div className="t-s mt-0.5 leading-snug">{reason.length > 80 ? reason.slice(0, 80) + "…" : reason}</div>
                   {open && (
-                    <div className="mt-1.5 pt-1.5 border-t border-[var(--border-gray)] flex flex-col gap-1">
+                    <div className="mt-1.5 pt-1.5 border-t border-[var(--border-gray)] flex flex-col gap-1.5">
+
+                      {/* ① 收斂分解 — 87% 從哪來 */}
+                      {o.dims && (
+                        <div className="flex flex-col gap-0.5">
+                          <span className="text-[9px] t-m font-bold tracking-wider">維度收斂</span>
+                          {[
+                            { k: "capital_flow_direction", label: "資金流" },
+                            { k: "price_momentum", label: "動量" },
+                            { k: "volume_profile", label: "量能" },
+                            { k: "pre_post_market_anomaly", label: "盤前" },
+                            { k: "valuation", label: "估值" },
+                          ].map(({ k, label }) => {
+                            const v = parseFloat(o.dims[k] ?? "0");
+                            const w = Math.min(Math.abs(v) * 100, 100);
+                            return (
+                              <div key={k} className="flex items-center gap-1.5">
+                                <span className="text-[10px] w-8 text-right t-m">{label}</span>
+                                <div className="flex-1 h-[6px] bg-[var(--bg-elevated)] rounded-full overflow-hidden relative">
+                                  <div className={`absolute top-0 h-full rounded-full ${v > 0 ? "bg-[var(--accent-green)]" : "bg-[var(--accent-red)]"}`} style={{ width: `${w}%`, left: v > 0 ? "50%" : `${50 - w}%` }} />
+                                  <div className="absolute top-0 left-1/2 w-px h-full bg-[var(--border-gray)]" />
+                                </div>
+                                <span className={`text-[10px] w-12 text-right font-bold ${C(v)}`}>{v ? (v > 0 ? "+" : "") + (v * 100).toFixed(0) + "%" : "—"}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* ② 假說競爭 — 正反兩面 */}
+                      <div className="flex gap-2">
+                        <div className="flex-1 bg-[var(--accent-green-10)] rounded p-1.5">
+                          <div className="text-[9px] t-g font-bold">正面假說</div>
+                          <div className="text-[11px] font-bold">{P(o.confidence)}</div>
+                          <div className="text-[9px] t-s truncate">{o.title?.split(" — ")[1] || "延續"}</div>
+                        </div>
+                        <div className="flex-1 bg-[var(--accent-red-20)] rounded p-1.5">
+                          <div className="text-[9px] t-r font-bold">反面假說</div>
+                          <div className="text-[11px] font-bold">{P(1 - parseFloat(o.confidence))}</div>
+                          <div className="text-[9px] t-s truncate">{o.title?.split(" — ")[1]?.replace("Continuation","Reversal").replace("Positioning","Fakeout") || "反轉"}</div>
+                        </div>
+                      </div>
+
+                      {/* ③ 證據鏈 */}
                       {o.chain?.evidence?.slice(0, 4).map((e: any, j: number) => (
-                        <div key={j} className="flex justify-between"><span className="t-s">{e.description}</span><b className={C(e.direction)}>{P(e.weight)}</b></div>
+                        <div key={j} className="flex justify-between"><span className="t-s text-[11px]">{e.description}</span><b className={C(e.direction)}>{P(e.weight)}</b></div>
                       ))}
-                      <div className="t-m text-[10px] mt-0.5">差距={P(o.confidence_gap)} 邊際={P(o.heuristic_edge)}</div>
+
+                      {/* ④ 壓力 + 因果 leader */}
+                      <div className="flex gap-3 t-m text-[10px] flex-wrap">
+                        {o.pr && <>
+                          <span>資金={P(o.pr.capital_flow_pressure ?? o.pr.net_pressure ?? "0")}</span>
+                          <span>持續={o.pr.pressure_duration}次</span>
+                          {o.pr.accelerating && <span className="t-o">↑加速</span>}
+                        </>}
+                        {o.causal && <span>主導: <b className="t-s">{o.causal.current_leader}</b> {o.causal.leader_streak}次</span>}
+                        <span>差距={P(o.confidence_gap)}</span>
+                        <span>邊際={P(o.heuristic_edge)}</span>
+                      </div>
+
+                      {/* ⑤ 圖譜連接 */}
+                      {d?.edge_count && <div className="text-[10px] t-m">圖譜: {d.stock_count}隻股票 · {d.edge_count}條關聯邊 · {d.hypothesis_count}個假說正在競爭</div>}
+
+                      {/* 行動按鈕 */}
                       {acted ? (
                         <div className="flex items-center gap-2 justify-center py-0.5">
                           <b className={acted === "enter" ? "t-g" : "t-m"}>{acted === "enter" ? "✓ 已進場" : acted === "review" ? "⟳ 觀望" : "— 忽略"}</b>
