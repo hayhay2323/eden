@@ -31,9 +31,12 @@ body {
 }
 
 /* Hidden scrollbars — scroll works, bar invisible */
-* {
-  scrollbar-width: none;
+*, *::before, *::after {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
 }
 *::-webkit-scrollbar {
-  display: none;
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
 }
