@@ -338,107 +338,139 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* ─── 中：異動 + 資金 ─── */}
+        {/* ─── 中：4 格情報面板 ─── */}
         <div className="w-[260px] flex flex-col border-r border-[var(--border-gray)] shrink-0">
-          {/* 異動 */}
+          {/* ① 異動監察 */}
           <div className="flex-1 flex flex-col min-h-0">
             <div className="px-3 pt-2 pb-1"><span className="font-bold text-[11px] t-s" style={{fontFamily:"Space Grotesk,sans-serif"}}>異動監察</span></div>
             <div className="flex-1 overflow-y-auto px-3 pb-1">
               {movers.map((m: any, i: number) => (
-                <div key={i} className="flex items-center gap-2 py-[3px] hover:bg-[var(--bg-elevated)] rounded px-1 -mx-1 cursor-pointer transition-colors">
-                  <span className="font-bold w-[70px] truncate">{m.s.replace(".HK", "").replace(".US", "")}</span>
-                  <span className={`font-bold w-12 text-right ${C(m.v)}`}>{P(m.v)}</span>
-                  <span className="t-m text-[10px] flex-1 truncate">{m.why.replace(m.s + " ", "").slice(0, 35)}</span>
+                <div key={i} className="flex items-center gap-1.5 py-[2px] hover:bg-[var(--bg-elevated)] rounded px-1 -mx-1 cursor-pointer transition-colors">
+                  <span className="font-bold w-[60px] truncate text-[11px]">{m.s.replace(".HK", "").replace(".US", "")}</span>
+                  <span className={`font-bold w-12 text-right text-[11px] ${C(m.v)}`}>{P(m.v)}</span>
+                  <span className="t-m text-[9px] flex-1 truncate">{m.why.replace(m.s + " ", "").slice(0, 30)}</span>
                 </div>
               ))}
             </div>
           </div>
-          {/* 資金 */}
+          {/* ② 資金動向 */}
           <div className="border-t border-[var(--border-gray)] flex-1 flex flex-col min-h-0">
-            <div className="px-3 pt-2 pb-1"><span className="font-bold text-[11px] t-s" style={{fontFamily:"Space Grotesk,sans-serif"}}>資金動向</span></div>
-            <div className="flex-1 flex px-3 pb-2 gap-2 min-h-0">
-              <div className="flex-1 bg-[var(--accent-green-10)] rounded p-2 overflow-y-auto">
-                <div className="text-[9px] font-bold t-g mb-1">流入 ▲</div>
-                {flows.filter((f: any) => f.f > 0).slice(0, 5).map((f: any, i: number) => (
+            <div className="px-3 pt-1.5 pb-1"><span className="font-bold text-[11px] t-s" style={{fontFamily:"Space Grotesk,sans-serif"}}>資金動向</span></div>
+            <div className="flex-1 flex px-3 pb-1 gap-1.5 min-h-0">
+              <div className="flex-1 bg-[var(--accent-green-10)] rounded p-1.5 overflow-y-auto">
+                <div className="text-[9px] font-bold t-g mb-0.5">流入 ▲</div>
+                {flows.filter((f: any) => f.f > 0).slice(0, 8).map((f: any, i: number) => (
                   <div key={i} className="flex justify-between py-px">
-                    <span className="text-[11px]">{f.s.replace(".HK","").replace(".US","")}</span>
-                    <span className="font-bold t-g text-[11px]">+{P(f.f)}</span>
+                    <span className="text-[10px]">{f.s.replace(".HK","").replace(".US","")}</span>
+                    <span className="font-bold t-g text-[10px]">+{P(f.f)}</span>
                   </div>
                 ))}
-                {flows.filter((f: any) => f.f > 0).length === 0 && <span className="t-m">暫無</span>}
+                {flows.filter((f: any) => f.f > 0).length === 0 && <span className="t-m text-[10px]">暫無</span>}
               </div>
-              <div className="flex-1 bg-[var(--accent-red-20)] rounded p-2 overflow-y-auto">
-                <div className="text-[9px] font-bold t-r mb-1">流出 ▼</div>
-                {flows.filter((f: any) => f.f < 0).slice(0, 5).map((f: any, i: number) => (
+              <div className="flex-1 bg-[var(--accent-red-20)] rounded p-1.5 overflow-y-auto">
+                <div className="text-[9px] font-bold t-r mb-0.5">流出 ▼</div>
+                {flows.filter((f: any) => f.f < 0).slice(0, 8).map((f: any, i: number) => (
                   <div key={i} className="flex justify-between py-px">
-                    <span className="text-[11px]">{f.s.replace(".HK","").replace(".US","")}</span>
-                    <span className="font-bold t-r text-[11px]">{P(f.f)}</span>
+                    <span className="text-[10px]">{f.s.replace(".HK","").replace(".US","")}</span>
+                    <span className="font-bold t-r text-[10px]">{P(f.f)}</span>
                   </div>
                 ))}
-                {flows.filter((f: any) => f.f < 0).length === 0 && <span className="t-m">暫無</span>}
+                {flows.filter((f: any) => f.f < 0).length === 0 && <span className="t-m text-[10px]">暫無</span>}
               </div>
+            </div>
+          </div>
+          {/* ③ 假說動態 — 信號在增強還是減弱 */}
+          <div className="border-t border-[var(--border-gray)] flex-1 flex flex-col min-h-0">
+            <div className="px-3 pt-1.5 pb-1"><span className="font-bold text-[11px] t-s" style={{fontFamily:"Space Grotesk,sans-serif"}}>假說動態</span></div>
+            <div className="flex-1 overflow-y-auto px-3 pb-1">
+              {d?.hypothesis_tracks?.filter((h: any) => h.status !== "stable").slice(0, 15).map((h: any, i: number) => (
+                <div key={i} className="flex items-center gap-1.5 py-[2px]">
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${h.status === "strengthening" ? "bg-[var(--accent-green)]" : h.status === "weakening" ? "bg-[var(--accent-red)]" : h.status === "new" ? "bg-[var(--accent-orange)]" : "bg-[var(--text-muted)]"}`} />
+                  <span className="font-bold text-[10px] w-[55px] truncate">{h.title?.split(" ")[0]}</span>
+                  <span className={`text-[10px] font-bold ${h.status === "strengthening" ? "t-g" : h.status === "weakening" ? "t-r" : "t-o"}`}>
+                    {h.status === "strengthening" ? "↑增強" : h.status === "weakening" ? "↓減弱" : h.status === "new" ? "⊕新" : "✗失效"}
+                  </span>
+                  <span className="t-m text-[9px]">{P(h.confidence)}</span>
+                </div>
+              ))}
+              {(!d?.hypothesis_tracks || d.hypothesis_tracks.filter((h: any) => h.status !== "stable").length === 0) && <span className="t-m text-[10px]">全部穩定</span>}
+            </div>
+          </div>
+          {/* ④ 板塊氣氛 */}
+          <div className="border-t border-[var(--border-gray)] flex-1 flex flex-col min-h-0">
+            <div className="px-3 pt-1.5 pb-1"><span className="font-bold text-[11px] t-s" style={{fontFamily:"Space Grotesk,sans-serif"}}>板塊氣氛</span></div>
+            <div className="flex-1 overflow-y-auto px-3 pb-1">
+              {(() => {
+                const sf: Record<string, number[]> = {};
+                (d?.pressures || []).forEach((p: any) => {
+                  const v = parseFloat(p.capital_flow_pressure ?? p.net_pressure ?? "0") + parseFloat(p.momentum ?? "0") * 0.3;
+                  const s = p.symbol as string;
+                  let sec = "";
+                  if (s.match(/^(AAPL|MSFT|GOOGL|META|AMZN|CRM|ORCL|ADBE|SNOW|PLTR|DDOG|CRWD|NET|PANW)\./)) sec = "科技";
+                  else if (s.match(/^(NVDA|AMD|AVGO|QCOM|TSM|INTC|MU|ASML|ARM)\./)) sec = "半導體";
+                  else if (s.match(/^(BABA|NIO|XPEV|PDD|JD|BIDU|LI|TCOM|TME|FUTU|TIGR)\./)) sec = "中概";
+                  else if (s.match(/^(JPM|GS|MS|BAC|V|MA)\./)) sec = "金融";
+                  else if (s.match(/^(XOM|CVX|OXY|SLB|COP)\./)) sec = "能源";
+                  else if (s.match(/^(TSLA|RIVN|GM|F)\./)) sec = "電動車";
+                  else if (s.match(/^(UNH|JNJ|LLY|ABBV|PFE|MRK)\./)) sec = "醫療";
+                  else if (s.match(/^(SPY|QQQ|IWM|DIA)\./)) sec = "ETF";
+                  if (sec) { if (!sf[sec]) sf[sec] = []; sf[sec].push(v); }
+                });
+                return Object.entries(sf).map(([sec, vals]) => {
+                  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+                  const pctVal = (avg * 100).toFixed(1);
+                  return { sec, avg, pctVal };
+                }).sort((a, b) => b.avg - a.avg).map((s, i) => (
+                  <div key={i} className="flex items-center justify-between py-[2px]">
+                    <span className="text-[11px] w-14">{s.sec}</span>
+                    <div className="flex-1 h-[4px] bg-[var(--bg-elevated)] rounded-full mx-1.5 overflow-hidden">
+                      <div className={`h-full rounded-full ${s.avg > 0 ? "bg-[var(--accent-green)]" : "bg-[var(--accent-red)]"}`} style={{ width: `${Math.min(Math.abs(s.avg) * 300, 100)}%`, marginLeft: s.avg < 0 ? "auto" : undefined }} />
+                    </div>
+                    <span className={`text-[10px] font-bold w-10 text-right ${C(s.avg)}`}>{s.avg > 0 ? "+" : ""}{s.pctVal}%</span>
+                  </div>
+                ));
+              })()}
             </div>
           </div>
         </div>
 
-        {/* ─── 右：事件 + 板塊 + 系統 ─── */}
-        <div className="w-[200px] shrink-0 flex flex-col overflow-y-auto">
-          {/* 板塊 */}
-          <div className="px-3 pt-2 pb-1 border-b border-[var(--border-gray)]">
-            <div className="text-[9px] font-bold t-m tracking-wider mb-1">板塊</div>
-            {(() => {
-              const sf: Record<string, number[]> = {};
-              (d?.pressures || []).forEach((p: any) => {
-                const v = parseFloat(p.capital_flow_pressure ?? p.net_pressure ?? "0") + parseFloat(p.momentum ?? "0") * 0.3;
-                const s = p.symbol as string;
-                let sec = "";
-                if (s.match(/^(AAPL|MSFT|GOOGL|META|AMZN|CRM|ORCL|ADBE|SNOW|PLTR|DDOG|CRWD|NET|PANW)\./)) sec = "科技";
-                else if (s.match(/^(NVDA|AMD|AVGO|QCOM|TSM|INTC|MU|ASML|ARM)\./)) sec = "半導體";
-                else if (s.match(/^(BABA|NIO|XPEV|PDD|JD|BIDU|LI|TCOM|TME|FUTU|TIGR)\./)) sec = "中概";
-                else if (s.match(/^(JPM|GS|MS|BAC|V|MA)\./)) sec = "金融";
-                else if (s.match(/^(XOM|CVX|OXY|SLB|COP)\./)) sec = "能源";
-                else if (s.match(/^(TSLA|RIVN|GM|F)\./)) sec = "電動車";
-                else if (s.match(/^(UNH|JNJ|LLY|ABBV|PFE|MRK)\./)) sec = "醫療";
-                if (sec) { if (!sf[sec]) sf[sec] = []; sf[sec].push(v); }
-              });
-              return Object.entries(sf).map(([sec, vals]) => {
-                const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-                return { sec, avg };
-              }).sort((a, b) => b.avg - a.avg).map((s, i) => (
-                <div key={i} className="flex justify-between py-px">
-                  <span className="text-[11px]">{s.sec}</span>
-                  <span className={`text-[11px] font-bold ${C(s.avg)}`}>{s.avg > 0 ? "▲" : s.avg < 0 ? "▼" : "—"}</span>
+        {/* ─── 右：跨市場 + 系統 ─── */}
+        <div className="w-[170px] shrink-0 flex flex-col">
+          {/* 跨市場 */}
+          <div className="px-3 pt-2 pb-1 flex-1 border-b border-[var(--border-gray)]">
+            <div className="text-[9px] font-bold t-m tracking-wider mb-1">跨市場</div>
+            {d?.cross_market_signals?.slice(0, 5).map((cm: any, i: number) => (
+              <div key={i} className="flex flex-col py-0.5">
+                <div className="flex items-center gap-1">
+                  <span className="w-1 h-1 rounded-full shrink-0 bg-[var(--accent-orange)]" />
+                  <span className="text-[10px] t-o font-bold">{cm.us_symbol}←{cm.hk_symbol}</span>
                 </div>
-              ));
-            })()}
+                <span className="text-[9px] t-m pl-2.5">信心={P(cm.propagation_confidence)} {cm.time_since_hk_close_minutes}分鐘前</span>
+              </div>
+            ))}
+            {d?.cross_market_anomalies?.slice(0, 3).map((a: any, i: number) => (
+              <div key={`a${i}`} className="flex items-center gap-1 py-0.5">
+                <span className="w-1 h-1 rounded-full shrink-0 bg-[var(--accent-red)]" />
+                <span className="text-[10px] t-r">{a.us_symbol} 方向矛盾</span>
+              </div>
+            ))}
+            {!d?.cross_market_signals?.length && !d?.cross_market_anomalies?.length && <span className="t-m text-[10px]">港股未連線</span>}
           </div>
 
-          {/* 事件流 */}
-          <div className="px-3 pt-2 pb-1 flex-1">
+          {/* 事件 */}
+          <div className="px-3 pt-1.5 pb-1 flex-1 border-b border-[var(--border-gray)]">
             <div className="text-[9px] font-bold t-m tracking-wider mb-1">事件</div>
-            {d?.hypothesis_tracks?.filter((h: any) => h.status === "strengthening" || h.status === "weakening").slice(0, 4).map((h: any, i: number) => (
-              <div key={`h${i}`} className="flex items-center gap-1 py-px">
-                <span className={`w-1 h-1 rounded-full shrink-0 ${h.status === "strengthening" ? "bg-[var(--accent-green)]" : "bg-[var(--accent-red)]"}`} />
-                <span className="text-[10px] truncate">{h.title?.split(" ")[0]} {h.status === "strengthening" ? "↑" : "↓"}</span>
+            {d?.events?.filter((e: any) => parseFloat(e.magnitude) < 0.99).slice(0, 6).map((e: any, i: number) => (
+              <div key={i} className="flex items-center gap-1 py-px">
+                <span className={`w-1 h-1 rounded-full shrink-0 ${parseFloat(e.magnitude) > 0.5 ? "bg-[var(--accent-red)]" : "bg-[var(--accent-orange)]"}`} />
+                <span className="text-[9px] t-s truncate">{e.summary?.slice(0, 22)}</span>
               </div>
             ))}
-            {d?.cross_market_signals?.slice(0, 3).map((cm: any, i: number) => (
-              <div key={`c${i}`} className="flex items-center gap-1 py-px">
-                <span className="w-1 h-1 rounded-full shrink-0 bg-[var(--accent-orange)]" />
-                <span className="text-[10px] t-o truncate">{cm.us_symbol}←{cm.hk_symbol}</span>
-              </div>
-            ))}
-            {d?.events?.filter((e: any) => parseFloat(e.magnitude) < 0.99).slice(0, 3).map((e: any, i: number) => (
-              <div key={`e${i}`} className="flex items-center gap-1 py-px">
-                <span className="w-1 h-1 rounded-full shrink-0 bg-[var(--text-muted)]" />
-                <span className="text-[10px] t-m truncate">{e.summary?.slice(0, 25)}</span>
-              </div>
-            ))}
-            {!d?.hypothesis_tracks?.length && !d?.cross_market_signals?.length && <span className="t-m text-[10px]">等待盤中...</span>}
+            {(!d?.events || d.events.filter((e: any) => parseFloat(e.magnitude) < 0.99).length === 0) && <span className="t-m text-[10px]">等待盤中...</span>}
           </div>
 
           {/* 系統 */}
-          <div className="px-3 py-2 border-t border-[var(--border-gray)] t-m text-[10px] flex flex-col gap-px">
+          <div className="px-3 py-2 t-m text-[10px] flex flex-col gap-px">
             <span>{d?.stock_count ?? "—"}隻 · {d?.edge_count ?? "—"}邊</span>
             <span>{d?.hypothesis_count ?? "—"}假說 · {d?.observation_count ?? "—"}觀察</span>
             {(d?.active_positions ?? 0) > 0 && <span className="t-o font-bold">持倉 {d.active_positions}</span>}
