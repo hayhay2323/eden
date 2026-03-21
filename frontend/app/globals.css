@@ -1,39 +1,31 @@
 @import "tailwindcss";
 
 :root {
-  --bg-page: #0C0C0C;
-  --bg-sidebar: #080808;
-  --bg-card: #0A0A0A;
-  --bg-elevated: #141414;
-  --bg-subtle: #1A1A1A;
-  --text-primary: #FFFFFF;
-  --text-secondary: #8a8a8a;
-  --text-muted: #6a6a6a;
-  --accent-green: #00FF88;
-  --accent-green-20: #00FF8820;
-  --accent-green-10: #00FF8810;
-  --accent-orange: #FF8800;
-  --accent-orange-20: #FF880020;
-  --accent-red: #FF4444;
-  --accent-red-20: #FF444420;
-  --border-gray: #2f2f2f;
-  --border-light: #3f3f3f;
+  --bg-page: #09090b;
+  --bg-sidebar: #0a0a0f;
+  --bg-card: #0f0f14;
+  --bg-elevated: #16161e;
+  --text-primary: #e4e4e7;
+  --text-secondary: #a1a1aa;
+  --text-muted: #52525b;
+  --accent-green: #22c55e;
+  --accent-green-20: #22c55e20;
+  --accent-green-10: #22c55e10;
+  --accent-orange: #f59e0b;
+  --accent-orange-20: #f59e0b20;
+  --accent-red: #ef4444;
+  --accent-red-20: #ef444420;
+  --border-gray: #1e1e26;
 }
 
 @layer base {
-  html, body {
-    height: 100%;
-  }
-  .font-mono-eden {
-    font-family: "JetBrains Mono", monospace;
-    font-size: 13px;
-  }
-  .font-display {
-    font-family: "Space Grotesk", sans-serif;
-  }
+  html, body { height: 100%; overflow: hidden; }
 }
 
 body {
   background: var(--bg-page);
   color: var(--text-primary);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  line-height: 1.4;
 }
