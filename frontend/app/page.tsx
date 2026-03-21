@@ -9,22 +9,141 @@ const KEY = process.env.NEXT_PUBLIC_EDEN_API_KEY || "";
 const P = (v: any) => { const n = parseFloat(v); return isNaN(n) ? "—" : `${(n * 100).toFixed(1)}%`; };
 const C = (v: any) => { const n = parseFloat(v); return isNaN(n) || n === 0 ? "t-m" : n > 0 ? "t-g" : "t-r"; };
 
+type NarrEntry = { t: number; level: "tick" | "min" | "hr"; text: string; color: string };
+
+// Generate narrative entries by diffing two snapshots
+function diffNarr(prev: any, curr: any): NarrEntry[] {
+  if (!prev || !curr) return [];
+  const now = Date.now();
+  const entries: NarrEntry[] = [];
+
+  // Convergence changes (top movers shift)
+  const prevCs: Map<string, number> = new Map((prev.convergence_scores || prev.top_signals || []).map((c: any) => [c.symbol, parseFloat(c.composite || c.dimension_composite || "0")] as [string, number]));
+  for (const c of (curr.convergence_scores || curr.top_signals || []).slice(0, 10)) {
+    const sym = c.symbol;
+    const val = parseFloat(c.composite || c.dimension_composite || "0");
+    const pv = prevCs.get(sym);
+    if (pv != null) {
+      const delta = val - pv;
+      if (Math.abs(delta) > 0.01) {
+        entries.push({ t: now, level: "tick", text: `${sym} 收斂${delta > 0 ? "增強" : "減弱"} ${(pv*100).toFixed(1)}%→${(val*100).toFixed(1)}%`, color: delta > 0 ? "t-g" : "t-r" });
+      }
+    } else if (Math.abs(val) > 0.2) {
+      entries.push({ t: now, level: "tick", text: `${sym} 新進異動 ${(val*100).toFixed(1)}%`, color: val > 0 ? "t-g" : "t-r" });
+    }
+  }
+
+  // Capital flow reversals
+  const prevPr: Map<string, number> = new Map((prev.pressures || []).map((p: any) => [p.symbol, parseFloat(p.capital_flow_pressure ?? p.net_pressure ?? "0")] as [string, number]));
+  for (const p of (curr.pressures || []).slice(0, 10)) {
+    const pv = prevPr.get(p.symbol);
+    const cv = parseFloat(p.capital_flow_pressure ?? p.net_pressure ?? "0");
+    if (pv != null && pv !== 0 && cv !== 0 && Math.sign(pv) !== Math.sign(cv)) {
+      entries.push({ t: now, level: "tick", text: `${p.symbol} 資金流反轉 ${pv > 0 ? "流入→流出" : "流出→流入"}`, color: "t-o" });
+    }
+    if (p.accelerating && !(prev.pressures || []).find((pp: any) => pp.symbol === p.symbol)?.accelerating) {
+      entries.push({ t: now, level: "tick", text: `${p.symbol} 壓力開始加速`, color: "t-o" });
+    }
+  }
+
+  // Tactical case changes
+  const prevTc: Map<string, { action: string; confidence: number }> = new Map((prev.tactical_cases || []).map((t: any) => [t.title?.split(" ")[0], { action: t.action, confidence: parseFloat(t.confidence) }] as [string, { action: string; confidence: number }]));
+  for (const tc of (curr.tactical_cases || []).slice(0, 10)) {
+    const sym = tc.title?.split(" ")[0];
+    const pt = prevTc.get(sym);
+    const cc = parseFloat(tc.confidence);
+    if (pt) {
+      const delta = cc - pt.confidence;
+      if (Math.abs(delta) > 0.01) {
+        entries.push({ t: now, level: "tick", text: `${sym} 信心${delta > 0 ? "↑" : "↓"} ${(pt.confidence*100).toFixed(0)}%→${(cc*100).toFixed(0)}%`, color: delta > 0 ? "t-g" : "t-r" });
+      }
+      if (pt.action !== tc.action) {
+        entries.push({ t: now, level: "tick", text: `${sym} 行動升降級 ${pt.action}→${tc.action}`, color: tc.action === "enter" ? "t-g" : "t-o" });
+      }
+    } else {
+      entries.push({ t: now, level: "tick", text: `${sym} 新戰術案件 [${tc.action}] ${(cc*100).toFixed(0)}%`, color: "t-g" });
+    }
+  }
+
+  // Stress change
+  const prevStress = parseFloat(prev.stress?.composite_stress ?? "0");
+  const currStress = parseFloat(curr.stress?.composite_stress ?? "0");
+  if (Math.abs(currStress - prevStress) > 0.02) {
+    entries.push({ t: now, level: "tick", text: `市場壓力 ${(prevStress*100).toFixed(0)}%→${(currStress*100).toFixed(0)}%`, color: currStress > prevStress ? "t-r" : "t-g" });
+  }
+
+  return entries;
+}
+
+// Aggregate tick entries into minute/hour summaries
+function aggregateNarr(entries: NarrEntry[]): NarrEntry[] {
+  const now = Date.now();
+  const oneMin = entries.filter(e => e.level === "tick" && now - e.t < 60_000);
+  const fiveMin = entries.filter(e => e.level === "tick" && now - e.t < 300_000);
+  const result: NarrEntry[] = [];
+
+  // Minute summary: count by stock direction
+  if (oneMin.length >= 3) {
+    const ups = new Set<string>(), downs = new Set<string>();
+    for (const e of oneMin) {
+      const sym = e.text.split(" ")[0];
+      if (e.color === "t-g") ups.add(sym);
+      if (e.color === "t-r") downs.add(sym);
+    }
+    if (ups.size > 0 || downs.size > 0) {
+      const parts = [];
+      if (ups.size > 0) parts.push(`${[...ups].slice(0, 3).join("/")} 走強`);
+      if (downs.size > 0) parts.push(`${[...downs].slice(0, 3).join("/")} 走弱`);
+      result.push({ t: now, level: "min", text: `1分鐘：${parts.join("，")}`, color: "t-s" });
+    }
+  }
+
+  // 5-min summary
+  if (fiveMin.length >= 5) {
+    const flowReversals = fiveMin.filter(e => e.text.includes("資金流反轉")).length;
+    const confChanges = fiveMin.filter(e => e.text.includes("信心")).length;
+    const parts = [];
+    if (flowReversals > 0) parts.push(`${flowReversals}次資金流反轉`);
+    if (confChanges > 0) parts.push(`${confChanges}次信心變動`);
+    if (parts.length > 0) result.push({ t: now, level: "hr", text: `5分鐘：${parts.join("，")} | 共${fiveMin.length}條信號`, color: "t-m" });
+  }
+
+  return result;
+}
+
 export default function Dashboard() {
   const [d, setD] = useState<any>(null);
+  const [prevD, setPrevD] = useState<any>(null);
   const [err, setErr] = useState(false);
   const [exp, setExp] = useState<string | null>(null);
   const [mkt, setMkt] = useState<"hk" | "us">("us");
   const [acts, setActs] = useState<Record<string, string>>({});
+  const [narr, setNarr] = useState<NarrEntry[]>([]);
+  const [narrLevel, setNarrLevel] = useState<"all" | "min" | "hr">("all");
 
   const fetch_ = useCallback(async () => {
     try {
       const r = await fetch(`${API}${mkt === "us" ? "/api/us/live" : "/api/live"}`, { headers: { Authorization: `Bearer ${KEY}` }, cache: "no-store" });
       if (!r.ok) throw 0;
-      setD(await r.json()); setErr(false);
+      const newData = await r.json();
+      setD((prev: any) => { setPrevD(prev); return newData; });
+      setErr(false);
     } catch { setErr(true); }
   }, [mkt]);
 
-  useEffect(() => { setD(null); setExp(null); fetch_(); const i = setInterval(fetch_, 2000); return () => clearInterval(i); }, [fetch_]);
+  useEffect(() => { setD(null); setPrevD(null); setExp(null); setNarr([]); fetch_(); const i = setInterval(fetch_, 2000); return () => clearInterval(i); }, [fetch_]);
+
+  // Generate narratives on each data update
+  useEffect(() => {
+    if (!d || !prevD) return;
+    const newEntries = diffNarr(prevD, d);
+    if (newEntries.length === 0) return;
+    setNarr(prev => {
+      const updated = [...newEntries, ...prev].slice(0, 200); // keep last 200
+      const agg = aggregateNarr(updated);
+      return [...agg, ...updated].slice(0, 200);
+    });
+  }, [d, prevD]);
 
   const opps = useMemo(() => (d?.tactical_cases || []).slice(0, 5).map((t: any) => {
     const s = t.title?.split(" ")[0] || "";
@@ -182,6 +301,30 @@ export default function Dashboard() {
                 </div>
               );
             })}
+          </div>
+
+          {/* ─── 信號情報流 ─── */}
+          <div className="border-t border-[var(--border-gray)] flex flex-col min-h-[120px] max-h-[200px]">
+            <div className="px-3 pt-1.5 pb-1 flex items-center justify-between shrink-0">
+              <span className="font-bold text-[11px]" style={{fontFamily:"Space Grotesk,sans-serif"}}>信號情報</span>
+              <div className="flex gap-0 text-[9px]">
+                <button onClick={() => setNarrLevel("all")} className={`px-1.5 py-px border ${narrLevel === "all" ? "bg-[var(--bg-elevated)] border-[var(--border-gray)] font-bold" : "border-transparent t-m"}`}>全部</button>
+                <button onClick={() => setNarrLevel("min")} className={`px-1.5 py-px border ${narrLevel === "min" ? "bg-[var(--bg-elevated)] border-[var(--border-gray)] font-bold" : "border-transparent t-m"}`}>分鐘</button>
+                <button onClick={() => setNarrLevel("hr")} className={`px-1.5 py-px border ${narrLevel === "hr" ? "bg-[var(--bg-elevated)] border-[var(--border-gray)] font-bold" : "border-transparent t-m"}`}>彙總</button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-3 pb-1">
+              {narr.filter(n => narrLevel === "all" || n.level === (narrLevel === "min" ? "min" : "hr")).length === 0 ? (
+                <div className="t-m text-[10px] text-center py-2">等待信號變動...</div>
+              ) : (
+                narr.filter(n => narrLevel === "all" || n.level === (narrLevel === "min" ? "min" : "hr")).slice(0, 30).map((n, i) => (
+                  <div key={i} className={`flex items-start gap-1.5 py-[2px] ${n.level === "min" || n.level === "hr" ? "bg-[var(--bg-elevated)] -mx-1 px-1 rounded my-0.5" : ""}`}>
+                    <span className="t-m text-[9px] w-[42px] shrink-0 text-right">{new Date(n.t).toLocaleTimeString("zh-HK", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+                    <span className={`text-[10px] leading-snug ${n.color}`}>{n.text}</span>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
 
