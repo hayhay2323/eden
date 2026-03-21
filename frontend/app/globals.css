@@ -29,3 +29,11 @@ body {
   font-size: 12px;
   line-height: 1.4;
 }
+
+/* Hidden scrollbars — scroll works, bar invisible */
+* {
+  scrollbar-width: none;
+}
+*::-webkit-scrollbar {
+  display: none;
+}
