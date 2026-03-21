@@ -33,7 +33,7 @@ interface LiveSnapshot {
   timestamp: string;
   market_regime?: { bias: string; confidence: string; breadth_up: string; breadth_down: string; average_return: string };
   stress?: { sector_synchrony: string; pressure_consensus: string; conflict_intensity_mean: string; composite_stress: string; market_temperature_stress: string };
-  pressures?: { symbol: string; net_pressure: string; pressure_delta: string; pressure_duration: number; accelerating: boolean; buy_inst_count: number; sell_inst_count: number }[];
+  pressures?: { symbol: string; net_pressure?: string; pressure_delta: string; pressure_duration: number; accelerating: boolean; buy_inst_count?: number; sell_inst_count?: number; capital_flow_pressure?: string; volume_intensity?: string; momentum?: string }[];
   pair_trades?: { institution: string; buy_symbols: string[]; sell_symbols: string[]; net_direction: string }[];
   exoduses?: { institution: string; prev_stock_count: number; curr_stock_count: number; dropped_count: number }[];
   hidden_links?: { symbol_a: string; symbol_b: string; sector_a: string | null; sector_b: string | null; jaccard: string; shared_institutions: number }[];
@@ -48,6 +48,16 @@ interface LiveSnapshot {
   observation_count?: number;
   hypothesis_count?: number;
   lineage?: { template: string; total: number; resolved: number; hits: number; hit_rate: string; mean_return: string }[];
+  // US new modules (same key names as backend JSON)
+  // note: `pressures` is reused — HK has buy/sell_inst_count, US has capital_flow_pressure
+  // `stress` is reused — HK has sector_synchrony, US has momentum_consensus
+  rotations?: { sector_a: string; sector_b: string; spread: string; spread_delta: string; widening: boolean }[];
+  clusters?: { members: string[]; directional_alignment: string; stability: string; age: number }[];
+  cross_market_anomalies?: { us_symbol: string; hk_symbol: string; expected_direction: string; actual_direction: string; divergence: string }[];
+  backward_chains?: { symbol: string; conclusion: string; primary_driver: string; confidence: string; evidence: { source: string; description: string; weight: string; direction: string }[] }[];
+  workflows?: { symbol: string; stage: string; confidence_at_entry: string; current_confidence: string; pnl: string | null; entry_tick: number }[];
+  active_positions?: number;
+  causal_leaders?: { symbol: string; current_leader: string; leader_streak: number; flips: number }[];
 }
 
 function pct(v: string | number): string {
@@ -107,7 +117,7 @@ export default function Dashboard() {
     return sigs.map((sig, i) => {
       const comp = parseFloat(sig.composite) || 0, absComp = Math.abs(comp);
       const pr = data?.pressures?.find(p => p.symbol === sig.symbol);
-      const ic = pr ? pr.buy_inst_count + pr.sell_inst_count : 2;
+      const ic = pr ? (pr.buy_inst_count ?? 0) + (pr.sell_inst_count ?? 0) || 2 : 2;
       const r = Math.max(16, 14 + ic * 3 + absComp * 30);
       const theta = i * phi, dist = Math.sqrt(i + 0.5) * 54;
       return {
@@ -161,7 +171,8 @@ export default function Dashboard() {
           </div>
           <div className="flex items-center gap-2.5">
             {data?.stress && <Badge label={`壓力 ${pct(data.stress.composite_stress)}`} color="orange" />}
-            {data?.stress && <Badge label={`同步 ${pct(data.stress.sector_synchrony)}`} color="green" />}
+            {data?.stress?.sector_synchrony && <Badge label={`同步 ${pct(data.stress.sector_synchrony)}`} color="green" />}
+            {market === "us" && data?.stress && "momentum_consensus" in data.stress && <Badge label={`共識 ${pct((data.stress as Record<string,string>).momentum_consensus)}`} color="green" />}
             <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent-green)] animate-pulse" />
             <span className="font-mono-eden text-[8px] font-bold text-[var(--accent-green)]">即時</span>
           </div>
@@ -177,8 +188,8 @@ export default function Dashboard() {
                 {data?.pressures?.slice(0, 6).map(p => (
                   <Row key={p.symbol} active={selected === p.symbol} onClick={() => selectStock(p.symbol)}>
                     <span className={`font-mono-eden text-[11px] font-semibold ${selected === p.symbol ? "text-[var(--accent-green)]" : ""}`}>{p.symbol}</span>
-                    <span className={`font-mono-eden text-[11px] font-bold ${pctColor(p.net_pressure)}`}>
-                      {parseFloat(p.net_pressure) > 0 ? "▲" : "▼"}{pct(p.net_pressure)}
+                    <span className={`font-mono-eden text-[11px] font-bold ${pctColor(p.net_pressure ?? "0")}`}>
+                      {parseFloat(p.net_pressure ?? "0") > 0 ? "▲" : "▼"}{pct(p.net_pressure ?? "0")}
                     </span>
                     <span className="font-mono-eden text-[9px] text-[var(--text-muted)]">{p.pressure_duration}次</span>
                   </Row>
@@ -228,6 +239,54 @@ export default function Dashboard() {
                   <div key={i} className="flex items-center gap-1.5">
                     <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${parseFloat(ev.magnitude) > 0.5 ? "bg-[var(--accent-red)]" : "bg-[var(--accent-orange)]"}`} />
                     <span className="font-mono-eden text-[9px] text-[var(--text-secondary)]">{ev.summary}</span>
+                  </div>
+                ))}
+              </>)}
+
+              {/* US-only: 壓力 + 板塊輪動 + 持倉 + 跨市場異常 */}
+              {market === "us" && data?.pressures && data.pressures.length > 0 && (<>
+                <Div />
+                <Lbl text="// 資金壓力" />
+                {data.pressures.slice(0, 5).map(p => (
+                  <Row key={p.symbol} active={selected === p.symbol} onClick={() => selectStock(p.symbol)}>
+                    <span className={`font-mono-eden text-[11px] font-semibold ${selected === p.symbol ? "text-[var(--accent-green)]" : ""}`}>{p.symbol}</span>
+                    <span className={`font-mono-eden text-[10px] font-bold ${pctColor(p.capital_flow_pressure ?? "0")}`}>
+                      {parseFloat(p.capital_flow_pressure ?? "0") > 0 ? "▲" : "▼"}{pct(p.capital_flow_pressure ?? "0")}
+                    </span>
+                    <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">{p.pressure_duration}次{p.accelerating ? " ↑" : ""}</span>
+                  </Row>
+                ))}
+              </>)}
+              {market === "us" && data?.rotations && data.rotations.length > 0 && (<>
+                <Div />
+                <Lbl text="// 板塊輪動" />
+                {data.rotations.slice(0, 3).map((r, i) => (
+                  <div key={i} className="flex justify-between font-mono-eden text-[9px]">
+                    <span>{r.sector_a} → {r.sector_b}</span>
+                    <span className={pctColor(r.widening ? "1" : "-1")}>{pct(r.spread)} {r.widening ? "↑擴大" : "↓收窄"}</span>
+                  </div>
+                ))}
+              </>)}
+              {market === "us" && data?.cross_market_anomalies && data.cross_market_anomalies.length > 0 && (<>
+                <Div />
+                <Lbl text="// 跨市場異常" color="red" />
+                {data.cross_market_anomalies.slice(0, 3).map((a, i) => (
+                  <div key={i} className="flex flex-col gap-0.5 bg-[var(--accent-red-20)] px-2 py-1 rounded cursor-pointer" onClick={() => selectStock(a.us_symbol)}>
+                    <span className="font-mono-eden text-[9px] font-semibold text-[var(--accent-red)]">{a.us_symbol} ← {a.hk_symbol}</span>
+                    <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">預期{parseFloat(a.expected_direction) > 0 ? "多" : "空"} 實際{parseFloat(a.actual_direction) > 0 ? "多" : "空"} 偏差={pct(a.divergence)}</span>
+                  </div>
+                ))}
+              </>)}
+              {market === "us" && (data?.active_positions ?? 0) > 0 && (<>
+                <Div />
+                <Lbl text="// 持倉追蹤" />
+                {data?.workflows?.filter(w => w.stage === "monitoring").slice(0, 3).map((w, i) => (
+                  <div key={i} className="flex justify-between items-center bg-[var(--bg-elevated)] px-2 py-1 rounded">
+                    <span className="font-mono-eden text-[10px] font-semibold">{w.symbol}</span>
+                    <div className="flex gap-2 items-center">
+                      {w.pnl && <span className={`font-mono-eden text-[9px] font-bold ${pctColor(w.pnl)}`}>{parseFloat(w.pnl) > 0 ? "+" : ""}{parseFloat(w.pnl).toFixed(2)}</span>}
+                      <Badge label="監控中" color="orange" small />
+                    </div>
                   </div>
                 ))}
               </>)}
@@ -389,7 +448,7 @@ export default function Dashboard() {
                   <div className="bg-[var(--bg-elevated)] px-2 py-1.5 rounded flex flex-col gap-0.5">
                     <div className="flex justify-between">
                       <span className="font-mono-eden text-[9px] text-[var(--text-secondary)]">淨壓力</span>
-                      <span className={`font-mono-eden text-[10px] font-bold ${pctColor(selectedPressure.net_pressure)}`}>{pct(selectedPressure.net_pressure)}</span>
+                      <span className={`font-mono-eden text-[10px] font-bold ${pctColor((selectedPressure.net_pressure ?? selectedPressure.capital_flow_pressure ?? "0"))}`}>{pct((selectedPressure.net_pressure ?? selectedPressure.capital_flow_pressure ?? "0"))}</span>
                     </div>
                     <div className="flex gap-3 font-mono-eden text-[8px] text-[var(--text-muted)]">
                       <span>變化={pct(selectedPressure.pressure_delta)}</span>
@@ -442,6 +501,34 @@ export default function Dashboard() {
                         <span className={`font-mono-eden text-[9px] font-bold ${pctColor(cm.hk_composite)}`}>{pct(cm.propagation_confidence)}</span>
                       </div>
                       <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">港股綜合={pct(cm.hk_composite)} | {cm.time_since_hk_close_minutes}分鐘前收盤</span>
+                    </div>
+                  </div>
+                ))}
+                {/* 回溯推理 */}
+                {selected && data?.backward_chains?.filter(c => c.symbol === selected).slice(0, 1).map((chain, i) => (
+                  <div key={i}>
+                    <Div />
+                    <Lbl text="// 回溯推理" />
+                    <div className="bg-[var(--bg-elevated)] px-2 py-1.5 rounded flex flex-col gap-1 mt-1">
+                      <span className="font-mono-eden text-[9px] font-semibold">{chain.conclusion}</span>
+                      {chain.evidence.slice(0, 4).map((e, j) => (
+                        <div key={j} className="flex justify-between">
+                          <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">{e.description}</span>
+                          <span className={`font-mono-eden text-[8px] font-bold ${pctColor(e.direction)}`}>{pct(e.weight)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+
+                {/* 因果 leader */}
+                {selected && data?.causal_leaders?.filter(c => c.symbol === selected).slice(0, 1).map((cl, i) => (
+                  <div key={i}>
+                    <Div />
+                    <Lbl text="// 因果追蹤" />
+                    <div className="bg-[var(--bg-elevated)] px-2 py-1.5 rounded flex gap-3 mt-1">
+                      <span className="font-mono-eden text-[9px] text-[var(--text-secondary)]">主導維度：<span className="font-semibold text-[var(--text-primary)]">{cl.current_leader}</span></span>
+                      <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">持續{cl.leader_streak}次 | {cl.flips}次翻轉</span>
                     </div>
                   </div>
                 ))}
