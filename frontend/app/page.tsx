@@ -117,7 +117,10 @@ export default function Dashboard() {
     return sigs.map((sig, i) => {
       const comp = parseFloat(sig.composite) || 0, absComp = Math.abs(comp);
       const pr = data?.pressures?.find(p => p.symbol === sig.symbol);
-      const ic = pr ? (pr.buy_inst_count ?? 0) + (pr.sell_inst_count ?? 0) || 2 : 2;
+      // US: use capital_flow magnitude for size. HK: use institution count.
+      const ic = market === "hk"
+        ? (pr ? (pr.buy_inst_count ?? 0) + (pr.sell_inst_count ?? 0) || 2 : 2)
+        : (pr ? Math.round(Math.abs(parseFloat(pr.capital_flow_pressure ?? "0")) * 20) + 2 : 2);
       const r = Math.max(16, 14 + ic * 3 + absComp * 30);
       const theta = i * phi, dist = Math.sqrt(i + 0.5) * 54;
       return {
@@ -148,8 +151,13 @@ export default function Dashboard() {
         <span className="font-display text-lg font-bold text-[var(--accent-green)]">E</span>
         <div className="mt-auto flex flex-col items-center gap-2">
           <div className="w-7 h-px bg-[var(--border-gray)]" />
-          <PinBtn label="981" color="red" onClick={() => selectStock("981.HK")} active={selected === "981.HK"} />
-          <PinBtn label="6060" color="green" onClick={() => selectStock("6060.HK")} active={selected === "6060.HK"} />
+          {market === "hk" ? (<>
+            <PinBtn label="981" color="red" onClick={() => selectStock("981.HK")} active={selected === "981.HK"} />
+            <PinBtn label="6060" color="green" onClick={() => selectStock("6060.HK")} active={selected === "6060.HK"} />
+          </>) : (<>
+            <PinBtn label="NVDA" color="green" onClick={() => selectStock("NVDA.US")} active={selected === "NVDA.US"} />
+            <PinBtn label="TSLA" color="red" onClick={() => selectStock("TSLA.US")} active={selected === "TSLA.US"} />
+          </>)}
         </div>
       </div>
 
@@ -302,29 +310,43 @@ export default function Dashboard() {
                     <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">{s.resolved}/{s.total}</span>
                   </div>
                 </div>
-              )) : <span className="font-mono-eden text-[9px] text-[var(--text-muted)]">等待信號評分</span>}
+              )) : data?.scorecard && typeof data.scorecard === "object" && "hit_rate" in data.scorecard ? (
+                <div className="flex justify-between items-center bg-[var(--bg-elevated)] px-2 py-1 rounded">
+                  <span className="font-mono-eden text-[9px] text-[var(--text-secondary)]">整體</span>
+                  <div className="flex items-center gap-2">
+                    <span className={`font-display text-sm font-bold ${pctColor(String((data.scorecard as Record<string, unknown>).hit_rate))}`}>{pct(String((data.scorecard as Record<string, unknown>).hit_rate))}</span>
+                    <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">{String((data.scorecard as Record<string, unknown>).resolved_signals)}/{String((data.scorecard as Record<string, unknown>).total_signals)}</span>
+                  </div>
+                </div>
+              ) : <span className="font-mono-eden text-[9px] text-[var(--text-muted)]">等待信號評分</span>}
 
               <Div />
               <Lbl text="// 戰術案件" />
               {data?.tactical_cases?.slice(0, 3).map((c, i) => (
                 <div key={i} className="flex items-center gap-1.5 bg-[var(--bg-elevated)] px-2 py-1 rounded cursor-pointer hover:brightness-125 transition-all"
-                  onClick={() => { const sym = c.title.match(/\d+/)?.[0]; if (sym) selectStock(market === "hk" ? `${sym}.HK` : `${sym}.US`); }}>
+                  onClick={() => { const m = c.title.match(/(\w[\w.-]+\.(HK|US))/); if (m) selectStock(m[1]); else { const num = c.title.match(/\d+/)?.[0]; if (num) selectStock(market === "hk" ? `${num}.HK` : `${num}.US`); } }}>
                   <Badge label={c.action === "enter" ? "進場" : c.action === "review" ? "觀望" : c.action === "exit" ? "退出" : c.action} color={c.action === "enter" ? "green" : c.action === "review" ? "orange" : "red"} small />
                   <span className="font-mono-eden text-[9px]">{c.title}</span>
                   <span className="font-mono-eden text-[8px] text-[var(--text-muted)] ml-auto">{pct(c.confidence)}</span>
                 </div>
               )) ?? <span className="font-mono-eden text-[9px] text-[var(--text-muted)]">等待戰術案件</span>}
 
-              {Array.isArray(data?.lineage) && data.lineage.length > 0 && (<>
-                <Div />
-                <Lbl text="// 信號追蹤" />
-                {data.lineage.slice(0, 4).map((l, i) => (
-                  <div key={i} className="flex justify-between">
-                    <span className="font-mono-eden text-[9px] text-[var(--text-secondary)]">{l.template}</span>
-                    <span className={`font-mono-eden text-[9px] font-bold ${pctColor(l.hit_rate)}`}>{pct(l.hit_rate)}</span>
-                  </div>
-                ))}
-              </>)}
+              {(() => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const raw = data?.lineage as any;
+                const lin: { template: string; total: number; resolved: number; hits: number; hit_rate: string; mean_return: string }[] | undefined =
+                  Array.isArray(raw) ? raw : raw?.by_template;
+                return lin && lin.length > 0 ? (<>
+                  <Div />
+                  <Lbl text="// 信號追蹤" />
+                  {lin.slice(0, 4).map((l, i) => (
+                    <div key={i} className="flex justify-between">
+                      <span className="font-mono-eden text-[9px] text-[var(--text-secondary)]">{l.template}</span>
+                      <span className={`font-mono-eden text-[9px] font-bold ${pctColor(l.hit_rate)}`}>{pct(l.hit_rate)}</span>
+                    </div>
+                  ))}
+                </>) : null;
+              })()}
             </div>
           </div>
 
@@ -453,7 +475,9 @@ export default function Dashboard() {
                     <div className="flex gap-3 font-mono-eden text-[8px] text-[var(--text-muted)]">
                       <span>變化={pct(selectedPressure.pressure_delta)}</span>
                       <span>持續={selectedPressure.pressure_duration}次</span>
-                      <span>買={selectedPressure.buy_inst_count} 賣={selectedPressure.sell_inst_count}</span>
+                      {selectedPressure.buy_inst_count != null && <span>買={selectedPressure.buy_inst_count} 賣={selectedPressure.sell_inst_count}</span>}
+                      {selectedPressure.momentum != null && <span>動量={pct(selectedPressure.momentum)}</span>}
+                      {selectedPressure.volume_intensity != null && <span>量能={pct(selectedPressure.volume_intensity)}</span>}
                     </div>
                   </div>
                 </>)}
