@@ -304,7 +304,7 @@ export default function Dashboard() {
           </div>
 
           {/* ─── 信號情報流 ─── */}
-          <div className="border-t border-[var(--border-gray)] flex flex-col min-h-[120px] max-h-[200px]">
+          <div className="border-t border-[var(--border-gray)] flex-1 flex flex-col min-h-0">
             <div className="px-3 pt-1.5 pb-1 flex items-center justify-between shrink-0">
               <span className="font-bold text-[11px]" style={{fontFamily:"Space Grotesk,sans-serif"}}>信號情報</span>
               <div className="flex gap-0 text-[9px]">
