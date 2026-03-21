@@ -186,7 +186,7 @@ export default function Dashboard() {
           {stress != null && <span>壓力 <b className={stress > 0.3 ? "t-r" : stress > 0.15 ? "t-o" : "t-g"}>{P(stress)}</b></span>}
           {consensus != null && <span>共識 <b>{P(consensus)}</b></span>}
           {hr != null && <span>命中 <b className={hr > 0.5 ? "t-g" : hr > 0.3 ? "t-o" : "t-r"}>{P(hr)}</b></span>}
-          {lin.map((l, i) => <span key={i} className="t-m">{l.template.replace("_continuation","").replace("_positioning","")} <b className={C(l.hit_rate)}>{P(l.hit_rate)}</b></span>)}
+          {lin.map((l, i) => <span key={i} className="t-m">{l.template === "momentum_continuation" ? "動量" : l.template === "pre_market_positioning" ? "盤前" : l.template === "cross_market_arbitrage" ? "跨市場" : l.template === "sector_rotation" ? "板塊" : l.template} <b className={C(l.hit_rate)}>{P(l.hit_rate)}</b></span>)}
           <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent-green)] animate-pulse inline-block" />
         </div>
       </div>
@@ -205,7 +205,17 @@ export default function Dashboard() {
             {opps.map((o: any, i: number) => {
               const open = exp === o.s;
               const acted = acts[o.s];
-              const reason = o.chain?.conclusion || o.entry_rationale || "";
+              const rawReason = o.chain?.conclusion || o.entry_rationale || "";
+              // Translate common English rationales to Chinese
+              const reason = rawReason
+                .replace(/pre-market move reflects institutional positioning before regular hours/gi, "盤前異動反映機構在盤前的定位行為")
+                .replace(/capital flow momentum suggests continuation/gi, "資金流動量顯示趨勢可能延續")
+                .replace(/may follow HK counterpart/gi, "可能跟隨港股對應股走勢")
+                .replace(/sector is gaining.*relative/gi, "板塊相對大盤走強")
+                .replace(/pre-market/gi, "盤前")
+                .replace(/institutional positioning/gi, "機構定位")
+                .replace(/momentum continuation/gi, "動量延續")
+                .replace(/capital flow/gi, "資金流");
               return (
                 <div key={i} className={`border rounded px-2.5 py-1.5 cursor-pointer transition-all ${o.action === "enter" ? "border-[var(--accent-green)]/20 bg-[var(--accent-green-10)]" : "border-[var(--border-gray)] bg-[var(--bg-card)]"} ${open ? "ring-1 ring-[var(--accent-green)]/20" : ""}`}
                   onClick={() => setExp(open ? null : o.s)}>
@@ -225,7 +235,7 @@ export default function Dashboard() {
                       {/* ① 收斂分解 — 87% 從哪來 */}
                       {o.dims && (
                         <div className="flex flex-col gap-0.5">
-                          <span className="text-[9px] t-m font-bold tracking-wider">維度收斂</span>
+                          <span className="text-[9px] t-s font-bold tracking-wider">維度收斂</span>
                           {[
                             { k: "capital_flow_direction", label: "資金流" },
                             { k: "price_momentum", label: "動量" },
@@ -254,12 +264,12 @@ export default function Dashboard() {
                         <div className="flex-1 bg-[var(--accent-green-10)] rounded p-1.5">
                           <div className="text-[9px] t-g font-bold">正面假說</div>
                           <div className="text-[11px] font-bold">{P(o.confidence)}</div>
-                          <div className="text-[9px] t-s truncate">{o.title?.split(" — ")[1] || "延續"}</div>
+                          <div className="text-[9px] t-s truncate">{o.title?.includes("Momentum") ? "動量延續" : o.title?.includes("Pre-Market") ? "盤前定位" : o.title?.includes("Cross") ? "跨市場套利" : "趨勢延續"}</div>
                         </div>
                         <div className="flex-1 bg-[var(--accent-red-20)] rounded p-1.5">
                           <div className="text-[9px] t-r font-bold">反面假說</div>
                           <div className="text-[11px] font-bold">{P(1 - parseFloat(o.confidence))}</div>
-                          <div className="text-[9px] t-s truncate">{o.title?.split(" — ")[1]?.replace("Continuation","Reversal").replace("Positioning","Fakeout") || "反轉"}</div>
+                          <div className="text-[9px] t-s truncate">{o.title?.includes("Momentum") ? "動量反轉" : o.title?.includes("Pre-Market") ? "盤前假突破" : o.title?.includes("Cross") ? "跨市場脫鉤" : "趨勢反轉"}</div>
                         </div>
                       </div>
 
@@ -269,7 +279,7 @@ export default function Dashboard() {
                       ))}
 
                       {/* ④ 壓力 + 因果 leader */}
-                      <div className="flex gap-3 t-m text-[10px] flex-wrap">
+                      <div className="flex gap-3 t-s text-[10px] flex-wrap">
                         {o.pr && <>
                           <span>資金={P(o.pr.capital_flow_pressure ?? o.pr.net_pressure ?? "0")}</span>
                           <span>持續={o.pr.pressure_duration}次</span>
@@ -281,7 +291,7 @@ export default function Dashboard() {
                       </div>
 
                       {/* ⑤ 圖譜連接 */}
-                      {d?.edge_count && <div className="text-[10px] t-m">圖譜: {d.stock_count}隻股票 · {d.edge_count}條關聯邊 · {d.hypothesis_count}個假說正在競爭</div>}
+                      {d?.edge_count && <div className="text-[10px] t-s">圖譜: {d.stock_count}隻股票 · {d.edge_count}條關聯邊 · {d.hypothesis_count}個假說正在競爭</div>}
 
                       {/* 行動按鈕 */}
                       {acted ? (
