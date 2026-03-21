@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/eden-us"]
+
 [package]
 name = "eden"
 version = "0.1.0"

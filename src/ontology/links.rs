@@ -350,13 +350,15 @@ fn compute_cross_stock_presences(activities: &[InstitutionActivity]) -> Vec<Cros
 }
 
 /// Extract the latest capital flow entry for each symbol.
+/// Longport inflow is in 萬元, turnover is in 元 — multiply by 10000 to align.
 fn compute_capital_flows(raw: &RawSnapshot) -> Vec<CapitalFlow> {
+    let scale = rust_decimal::Decimal::from(10000);
     raw.capital_flows
         .iter()
         .filter_map(|(symbol, lines)| {
             lines.last().map(|line| CapitalFlow {
                 symbol: symbol.clone(),
-                net_inflow: line.inflow,
+                net_inflow: line.inflow * scale,
             })
         })
         .collect()

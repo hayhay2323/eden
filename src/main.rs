@@ -2715,6 +2715,122 @@ async fn main() {
         );
         history.push(tick_record);
 
+        // ── Write live snapshot JSON for frontend API ──
+        if let Some(latest) = history.latest() {
+            let live_snapshot = serde_json::json!({
+                "tick": tick,
+                "timestamp": now.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+                "market_regime": {
+                    "bias": decision.market_regime.bias.as_str(),
+                    "confidence": decision.market_regime.confidence,
+                    "breadth_up": decision.market_regime.breadth_up,
+                    "breadth_down": decision.market_regime.breadth_down,
+                    "average_return": decision.market_regime.average_return,
+                },
+                "stress": {
+                    "sector_synchrony": graph_insights.stress.sector_synchrony,
+                    "pressure_consensus": graph_insights.stress.pressure_consensus,
+                    "conflict_intensity_mean": graph_insights.stress.conflict_intensity_mean,
+                    "market_temperature_stress": graph_insights.stress.market_temperature_stress,
+                    "composite_stress": graph_insights.stress.composite_stress,
+                },
+                "pressures": graph_insights.pressures.iter().take(10).map(|p| serde_json::json!({
+                    "symbol": p.symbol.0,
+                    "net_pressure": p.net_pressure,
+                    "pressure_delta": p.pressure_delta,
+                    "pressure_duration": p.pressure_duration,
+                    "accelerating": p.accelerating,
+                    "buy_inst_count": p.buy_inst_count,
+                    "sell_inst_count": p.sell_inst_count,
+                })).collect::<Vec<_>>(),
+                "pair_trades": graph_insights.inst_rotations.iter().take(5).map(|r| {
+                    let name = store.institutions.get(&r.institution_id).map(|i| i.name_en.as_str()).unwrap_or("?");
+                    serde_json::json!({
+                        "institution": name,
+                        "buy_symbols": r.buy_symbols.iter().take(3).map(|s| &s.0).collect::<Vec<_>>(),
+                        "sell_symbols": r.sell_symbols.iter().take(3).map(|s| &s.0).collect::<Vec<_>>(),
+                        "net_direction": r.net_direction,
+                    })
+                }).collect::<Vec<_>>(),
+                "exoduses": graph_insights.inst_exoduses.iter().take(5).map(|e| {
+                    let name = store.institutions.get(&e.institution_id).map(|i| i.name_en.as_str()).unwrap_or("?");
+                    serde_json::json!({
+                        "institution": name,
+                        "prev_stock_count": e.prev_stock_count,
+                        "curr_stock_count": e.curr_stock_count,
+                        "dropped_count": e.dropped_count,
+                    })
+                }).collect::<Vec<_>>(),
+                "hidden_links": graph_insights.shared_holders.iter().take(5).map(|s| serde_json::json!({
+                    "symbol_a": s.symbol_a.0,
+                    "symbol_b": s.symbol_b.0,
+                    "sector_a": s.sector_a.as_ref().map(|s| &s.0),
+                    "sector_b": s.sector_b.as_ref().map(|s| &s.0),
+                    "jaccard": s.jaccard,
+                    "shared_institutions": s.shared_institutions,
+                })).collect::<Vec<_>>(),
+                "conflicts": graph_insights.conflicts.iter().take(5).map(|c| {
+                    let name_a = store.institutions.get(&c.inst_a).map(|i| i.name_en.as_str()).unwrap_or("?");
+                    let name_b = store.institutions.get(&c.inst_b).map(|i| i.name_en.as_str()).unwrap_or("?");
+                    serde_json::json!({
+                        "inst_a": name_a,
+                        "inst_b": name_b,
+                        "jaccard_overlap": c.jaccard_overlap,
+                        "direction_a": c.direction_a,
+                        "direction_b": c.direction_b,
+                        "conflict_age": c.conflict_age,
+                        "intensity_delta": c.intensity_delta,
+                    })
+                }).collect::<Vec<_>>(),
+                "tactical_cases": reasoning_snapshot.tactical_setups.iter()
+                    .filter(|s| s.action == "enter" || s.action == "review")
+                    .take(10)
+                    .map(|s| serde_json::json!({
+                        "title": s.title,
+                        "action": s.action,
+                        "confidence": s.confidence,
+                        "confidence_gap": s.confidence_gap,
+                        "heuristic_edge": s.heuristic_edge,
+                    }))
+                    .collect::<Vec<_>>(),
+                "hypothesis_tracks": reasoning_snapshot.hypothesis_tracks.iter()
+                    .filter(|t| t.status.as_str() == "strengthening" || t.status.as_str() == "weakening")
+                    .take(10)
+                    .map(|t| serde_json::json!({
+                        "title": t.title,
+                        "status": t.status.as_str(),
+                        "age_ticks": t.age_ticks,
+                        "confidence": t.confidence,
+                    }))
+                    .collect::<Vec<_>>(),
+                "scorecard": scorecard.stats().iter().map(|s| serde_json::json!({
+                    "signal_type": s.signal_type.to_string(),
+                    "total": s.total,
+                    "resolved": s.resolved,
+                    "hits": s.hits,
+                    "hit_rate": s.hit_rate,
+                    "mean_return": s.mean_return,
+                })).collect::<Vec<_>>(),
+                "top_signals": latest.signals.iter()
+                    .filter(|(_, sig)| sig.composite.abs() > Decimal::new(3, 2))
+                    .map(|(sym, sig)| serde_json::json!({
+                        "symbol": sym.0,
+                        "composite": sig.composite,
+                        "institutional_alignment": sig.institutional_alignment,
+                        "sector_coherence": sig.sector_coherence,
+                        "cross_stock_correlation": sig.cross_stock_correlation,
+                        "mark_price": sig.mark_price,
+                    }))
+                    .take(20)
+                    .collect::<Vec<_>>(),
+            });
+            // Write snapshot to file (non-blocking)
+            let snapshot_json = serde_json::to_string(&live_snapshot).unwrap_or_default();
+            tokio::spawn(async move {
+                let _ = tokio::fs::write("data/live_snapshot.json", snapshot_json).await;
+            });
+        }
+
         // ── Persist to SurrealDB (non-blocking, fire-and-forget) ──
         #[cfg(feature = "persistence")]
         if let Some(ref store) = eden_store {

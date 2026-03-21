@@ -5,7 +5,9 @@ use std::sync::Arc;
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::State;
+#[cfg(feature = "persistence")]
+use axum::extract::{Path, Query};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
 use axum::middleware::{self, Next};
@@ -15,6 +17,7 @@ use axum::{Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use rand::RngCore;
+#[cfg(feature = "persistence")]
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -43,9 +46,13 @@ use crate::temporal::lineage::{
     LineageAlignmentFilter, LineageFilters, LineageSortKey, LineageStats,
 };
 
+#[cfg(feature = "persistence")]
 const DEFAULT_LIMIT: usize = 120;
+#[cfg(feature = "persistence")]
 const DEFAULT_TOP: usize = 5;
+#[cfg(feature = "persistence")]
 const MAX_LIMIT: usize = 2_000;
+#[cfg(feature = "persistence")]
 const MAX_TOP: usize = 100;
 const DEFAULT_API_SCOPE: &str = "frontend:readonly";
 const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8787";
@@ -170,6 +177,7 @@ pub struct ApiError {
     message: String,
 }
 
+#[cfg(feature = "persistence")]
 #[derive(Debug, Deserialize, Default)]
 struct LineageQuery {
     limit: Option<usize>,
@@ -183,6 +191,7 @@ struct LineageQuery {
     alignment: Option<String>,
 }
 
+#[cfg(feature = "persistence")]
 #[derive(Debug, Deserialize, Default)]
 struct LineageHistoryQuery {
     snapshots: Option<usize>,
@@ -197,6 +206,7 @@ struct LineageHistoryQuery {
     alignment: Option<String>,
 }
 
+#[cfg(feature = "persistence")]
 #[derive(Debug, Deserialize, Default)]
 struct LineageRowsQuery {
     rows: Option<usize>,
@@ -211,6 +221,7 @@ struct LineageRowsQuery {
     alignment: Option<String>,
 }
 
+#[cfg(feature = "persistence")]
 #[derive(Debug, Deserialize, Default)]
 struct CausalQuery {
     limit: Option<usize>,
@@ -231,6 +242,7 @@ impl ApiError {
         }
     }
 
+    #[cfg(feature = "persistence")]
     fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
@@ -261,6 +273,14 @@ impl IntoResponse for ApiError {
         (self.status, body).into_response()
     }
 }
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ApiError {}
 
 impl ApiKeyCipher {
     pub fn from_env() -> Result<Self, ApiError> {
@@ -390,6 +410,8 @@ pub async fn serve(bind_addr: SocketAddr) -> Result<(), Box<dyn std::error::Erro
 fn build_router(state: ApiState) -> Result<Router, ApiError> {
     let auth_state = state.clone();
     let api_routes = Router::new()
+        .route("/live", get(get_live_snapshot))
+        .route("/us/live", get(get_us_live_snapshot))
         .route("/polymarket", get(get_polymarket))
         .route("/lineage", get(get_lineage))
         .route("/lineage/history", get(get_lineage_history))
@@ -461,6 +483,28 @@ fn extract_api_key(headers: &HeaderMap) -> Option<&str> {
         .get("x-api-key")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
+}
+
+async fn get_live_snapshot() -> Result<Json<serde_json::Value>, ApiError> {
+    let path = std::env::var("EDEN_LIVE_SNAPSHOT_PATH")
+        .unwrap_or_else(|_| "data/live_snapshot.json".into());
+    let content = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|_| ApiError::bad_request("live snapshot not available — is eden running?"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| ApiError::internal(&format!("invalid snapshot json: {e}")))?;
+    Ok(Json(value))
+}
+
+async fn get_us_live_snapshot() -> Result<Json<serde_json::Value>, ApiError> {
+    let path = std::env::var("EDEN_US_LIVE_SNAPSHOT_PATH")
+        .unwrap_or_else(|_| "data/us_live_snapshot.json".into());
+    let content = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|_| ApiError::bad_request("US live snapshot not available — is eden-us running?"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| ApiError::internal(&format!("invalid US snapshot json: {e}")))?;
+    Ok(Json(value))
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -714,6 +758,7 @@ async fn get_causal_flips() -> Result<Json<serde_json::Value>, ApiError> {
     ))
 }
 
+#[cfg(feature = "persistence")]
 fn filters_from_parts(
     label: Option<String>,
     bucket: Option<String>,
@@ -730,6 +775,7 @@ fn filters_from_parts(
     }
 }
 
+#[cfg(feature = "persistence")]
 fn bounded(
     value: Option<usize>,
     default: usize,
@@ -748,6 +794,7 @@ fn bounded(
     Ok(value)
 }
 
+#[cfg(feature = "persistence")]
 fn parse_sort_key(raw: Option<&str>) -> Result<LineageSortKey, ApiError> {
     match raw.unwrap_or("net") {
         "net" | "net_return" => Ok(LineageSortKey::NetReturn),
@@ -759,6 +806,7 @@ fn parse_sort_key(raw: Option<&str>) -> Result<LineageSortKey, ApiError> {
     }
 }
 
+#[cfg(feature = "persistence")]
 fn parse_alignment(raw: Option<&str>) -> Result<LineageAlignmentFilter, ApiError> {
     match raw.unwrap_or("all") {
         "all" => Ok(LineageAlignmentFilter::All),

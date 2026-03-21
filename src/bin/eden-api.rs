@@ -1,4 +1,5 @@
 use eden::api::{default_bind_addr, serve, ApiKeyCipher};
+use std::io;
 
 fn usage() -> &'static str {
     "usage: cargo run --bin eden-api -- serve [--bind <host:port>]\n       cargo run --bin eden-api -- mint-key [--label <value>] [--ttl-hours <value>] [--scope <value>]"
@@ -32,16 +33,20 @@ async fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                 let flag = args[index].as_str();
                 let value = args
                     .get(index + 1)
-                    .ok_or_else(|| format!("missing value for {flag}"))?;
+                    .ok_or_else(|| usage_error(&format!("missing value for {flag}")))?;
                 match flag {
                     "--label" => label = value.clone(),
                     "--ttl-hours" => {
                         ttl_hours = value
                             .parse::<u64>()
-                            .map_err(|_| format!("invalid ttl-hours: {value}"))?
+                            .map_err(|_| usage_error(&format!("invalid ttl-hours: {value}")))?
                     }
                     "--scope" => scope = value.clone(),
-                    _ => return Err(format!("unknown flag: {flag}\n{usage()}").into()),
+                    _ => {
+                        return Err(
+                            usage_error(&format!("unknown flag: {flag}\n{}", usage())).into()
+                        )
+                    }
                 }
                 index += 2;
             }
@@ -55,7 +60,7 @@ async fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", usage());
             Ok(())
         }
-        Some(_) => Err(usage().into()),
+        Some(_) => Err(usage_error(usage()).into()),
     }
 }
 
@@ -65,8 +70,12 @@ fn parse_bind_arg(args: &[String]) -> Result<std::net::SocketAddr, Box<dyn std::
     }
 
     if args.len() != 2 || args[0] != "--bind" {
-        return Err(usage().into());
+        return Err(usage_error(usage()).into());
     }
 
     Ok(args[1].parse()?)
+}
+
+fn usage_error(message: &str) -> io::Error {
+    io::Error::other(message.to_string())
 }
