@@ -6,63 +6,27 @@ const API_KEY = process.env.NEXT_PUBLIC_EDEN_API_KEY || "";
 
 type Market = "hk" | "us";
 
-const HK_SECTORS: Record<string, string> = {
-  "981.HK": "半導體", "1347.HK": "半導體",
-  "700.HK": "科技", "9988.HK": "科技", "9618.HK": "科技", "3690.HK": "科技",
-  "9999.HK": "科技", "1024.HK": "科技", "9888.HK": "科技", "1810.HK": "科技",
-  "941.HK": "電訊", "728.HK": "電訊",
-  "1211.HK": "汽車", "2015.HK": "汽車", "9866.HK": "汽車",
-  "1398.HK": "金融", "3988.HK": "金融", "939.HK": "金融",
-  "2318.HK": "金融", "1299.HK": "金融", "388.HK": "金融",
-  "883.HK": "能源", "857.HK": "能源", "386.HK": "能源", "2688.HK": "能源",
-  "1928.HK": "消費", "9961.HK": "消費", "6060.HK": "消費",
-  "268.HK": "醫藥", "2269.HK": "醫藥",
-};
-const US_SECTORS: Record<string, string> = {
-  "AAPL.US": "科技", "MSFT.US": "科技", "GOOGL.US": "科技", "META.US": "科技",
-  "AMZN.US": "科技", "NVDA.US": "半導體", "AMD.US": "半導體", "INTC.US": "半導體",
-  "TSM.US": "半導體", "AVGO.US": "半導體", "QCOM.US": "半導體",
-  "BABA.US": "中概", "JD.US": "中概", "PDD.US": "中概", "BIDU.US": "中概",
-  "NIO.US": "中概", "LI.US": "中概", "XPEV.US": "中概",
-  "JPM.US": "金融", "BAC.US": "金融", "GS.US": "金融",
-  "XOM.US": "能源", "CVX.US": "能源", "TSLA.US": "汽車",
-};
-
-interface LiveSnapshot {
-  tick: number;
-  timestamp: string;
-  market_regime?: { bias: string; confidence: string; breadth_up: string; breadth_down: string; average_return: string };
-  stress?: { sector_synchrony: string; pressure_consensus: string; conflict_intensity_mean: string; composite_stress: string; market_temperature_stress: string };
-  pressures?: { symbol: string; net_pressure?: string; pressure_delta: string; pressure_duration: number; accelerating: boolean; buy_inst_count?: number; sell_inst_count?: number; capital_flow_pressure?: string; volume_intensity?: string; momentum?: string }[];
-  pair_trades?: { institution: string; buy_symbols: string[]; sell_symbols: string[]; net_direction: string }[];
-  exoduses?: { institution: string; prev_stock_count: number; curr_stock_count: number; dropped_count: number }[];
-  hidden_links?: { symbol_a: string; symbol_b: string; sector_a: string | null; sector_b: string | null; jaccard: string; shared_institutions: number }[];
-  conflicts?: { inst_a: string; inst_b: string; jaccard_overlap: string; direction_a: string; direction_b: string; conflict_age: number; intensity_delta: string }[];
-  tactical_cases?: { title: string; action: string; confidence: string; confidence_gap: string; heuristic_edge: string }[];
-  hypothesis_tracks?: { title: string; status: string; age_ticks: number; confidence: string }[];
-  scorecard?: { signal_type: string; total: number; resolved: number; hits: number; hit_rate: string; mean_return: string }[];
-  top_signals?: { symbol: string; composite: string; institutional_alignment: string; sector_coherence: string | null; cross_stock_correlation: string; mark_price: string | null }[];
-  events?: { kind: string; magnitude: string; summary: string }[];
-  convergence_scores?: { symbol: string; dimension_composite: string; cross_stock_correlation: string; sector_coherence: string; cross_market_propagation: string }[];
-  cross_market_signals?: { us_symbol: string; hk_symbol: string; hk_composite: string; propagation_confidence: string; time_since_hk_close_minutes: number }[];
-  observation_count?: number;
-  hypothesis_count?: number;
-  lineage?: { template: string; total: number; resolved: number; hits: number; hit_rate: string; mean_return: string }[];
-  // US new modules (same key names as backend JSON)
-  // note: `pressures` is reused — HK has buy/sell_inst_count, US has capital_flow_pressure
-  // `stress` is reused — HK has sector_synchrony, US has momentum_consensus
-  rotations?: { sector_a: string; sector_b: string; spread: string; spread_delta: string; widening: boolean }[];
-  clusters?: { members: string[]; directional_alignment: string; stability: string; age: number }[];
-  cross_market_anomalies?: { us_symbol: string; hk_symbol: string; expected_direction: string; actual_direction: string; divergence: string }[];
-  backward_chains?: { symbol: string; conclusion: string; primary_driver: string; confidence: string; evidence: { source: string; description: string; weight: string; direction: string }[] }[];
-  workflows?: { symbol: string; stage: string; confidence_at_entry: string; current_confidence: string; pnl: string | null; entry_tick: number }[];
-  active_positions?: number;
-  causal_leaders?: { symbol: string; current_leader: string; leader_streak: number; flips: number }[];
+/* eslint-disable @typescript-eslint/no-explicit-any */
+interface Snap {
+  tick: number; timestamp: string;
+  stress?: any; market_regime?: any;
+  pressures?: any[]; pair_trades?: any[]; exoduses?: any[];
+  hidden_links?: any[]; conflicts?: any[];
+  tactical_cases?: any[]; hypothesis_tracks?: any[];
+  scorecard?: any; top_signals?: any[];
+  events?: any[]; convergence_scores?: any[];
+  cross_market_signals?: any[];
+  lineage?: any;
+  backward_chains?: any[]; workflows?: any[];
+  active_positions?: number; causal_leaders?: any[];
+  rotations?: any[]; clusters?: any[];
+  cross_market_anomalies?: any[];
+  observation_count?: number; hypothesis_count?: number;
 }
 
 function pct(v: string | number): string {
   const n = typeof v === "string" ? parseFloat(v) : v;
-  if (isNaN(n)) return String(v);
+  if (isNaN(n)) return "—";
   return `${(n * 100).toFixed(1)}%`;
 }
 function pctColor(v: string | number): string {
@@ -70,14 +34,17 @@ function pctColor(v: string | number): string {
   if (isNaN(n) || n === 0) return "text-[var(--text-muted)]";
   return n > 0 ? "text-[var(--accent-green)]" : "text-[var(--accent-red)]";
 }
+function pctBg(v: string | number): string {
+  const n = typeof v === "string" ? parseFloat(v) : v;
+  if (isNaN(n) || n === 0) return "";
+  return n > 0 ? "bg-[var(--accent-green-10)] border-[var(--accent-green)]/20" : "bg-[var(--accent-red-20)] border-[var(--accent-red)]/20";
+}
 
 export default function Dashboard() {
-  const [data, setData] = useState<LiveSnapshot | null>(null);
+  const [data, setData] = useState<Snap | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [market, setMarket] = useState<Market>("us");
-  const [sectorFilter, setSectorFilter] = useState<string | null>(null);
-  const [actionTaken, setActionTaken] = useState<Record<string, string>>({});
 
   const fetchLive = useCallback(async () => {
     try {
@@ -91,500 +58,205 @@ export default function Dashboard() {
   }, [market]);
 
   useEffect(() => {
-    setData(null); setSelected(null); setSectorFilter(null);
+    setData(null); setSelected(null);
     fetchLive();
     const iv = setInterval(fetchLive, 2000);
     return () => clearInterval(iv);
   }, [fetchLive]);
 
-  const selectStock = (s: string) => setSelected(s);
-  const sectorMap = market === "hk" ? HK_SECTORS : US_SECTORS;
-
-  const selectedSignal = selected
-    ? (market === "hk"
-      ? data?.top_signals?.find(s => s.symbol === selected)
-      : (() => { const c = data?.convergence_scores?.find(c => c.symbol === selected); return c ? { symbol: c.symbol, composite: c.dimension_composite, institutional_alignment: "0", sector_coherence: c.sector_coherence, cross_stock_correlation: c.cross_stock_correlation, mark_price: null } : undefined; })())
-    : undefined;
-  const selectedPressure = selected ? data?.pressures?.find(p => p.symbol === selected) : undefined;
-
-  const bubbles = useMemo(() => {
-    type S = { symbol: string; composite: string };
-    const sigs: S[] = market === "hk"
-      ? (data?.top_signals?.slice(0, 18) ?? [])
-      : (data?.convergence_scores?.slice(0, 18)?.map(c => ({ symbol: c.symbol, composite: c.dimension_composite })) ?? []);
-    if (!sigs.length) return [];
-    const phi = 2.39996323;
-    return sigs.map((sig, i) => {
-      const comp = parseFloat(sig.composite) || 0, absComp = Math.abs(comp);
-      const pr = data?.pressures?.find(p => p.symbol === sig.symbol);
-      // US: use capital_flow magnitude for size. HK: use institution count.
-      const ic = market === "hk"
-        ? (pr ? (pr.buy_inst_count ?? 0) + (pr.sell_inst_count ?? 0) || 2 : 2)
-        : (pr ? Math.round(Math.abs(parseFloat(pr.capital_flow_pressure ?? "0")) * 20) + 2 : 2);
-      const r = Math.max(16, 14 + ic * 3 + absComp * 30);
-      const theta = i * phi, dist = Math.sqrt(i + 0.5) * 54;
-      return {
-        symbol: sig.symbol,
-        cx: Math.max(r + 10, Math.min(790 - r, 400 + dist * Math.cos(theta) + comp * 90)),
-        cy: Math.max(r + 50, Math.min(560 - r, 300 + dist * Math.sin(theta))),
-        r, comp, absComp, accelerating: pr?.accelerating ?? false, instCount: ic,
-      };
+  // Merge tactical cases with backward reasoning
+  const opportunities = useMemo(() => {
+    if (!data?.tactical_cases) return [];
+    return data.tactical_cases.slice(0, 8).map(tc => {
+      const sym = tc.title?.split(" ")[0] || "";
+      const chain = data.backward_chains?.find(c => c.symbol === sym);
+      const pressure = data.pressures?.find(p => p.symbol === sym);
+      return { ...tc, sym, reason: chain?.conclusion || tc.entry_rationale || "", evidence: chain?.evidence || [], pressure };
     });
-  }, [data?.top_signals, data?.convergence_scores, data?.pressures, market]);
+  }, [data]);
 
-  const filtered = sectorFilter
-    ? bubbles.filter(b => (market === "hk" ? HK_SECTORS : US_SECTORS)[b.symbol] === sectorFilter)
-    : bubbles;
+  // Top movers with reasons
+  const movers = useMemo(() => {
+    const cs = data?.convergence_scores || data?.top_signals || [];
+    return cs.slice(0, 6).map(c => {
+      const sym = c.symbol;
+      const comp = parseFloat(c.composite || c.dimension_composite || "0");
+      const chain = data?.backward_chains?.find(ch => ch.symbol === sym);
+      return { sym, comp, reason: chain?.conclusion || "" };
+    });
+  }, [data]);
 
-  const sectors = useMemo(() => {
-    const m = market === "hk" ? HK_SECTORS : US_SECTORS, s = new Set<string>();
-    bubbles.forEach(b => { const sec = m[b.symbol]; if (sec) s.add(sec); });
-    return Array.from(s);
-  }, [bubbles, market]);
+  // Lineage (normalize format)
+  const lineage: any[] = useMemo(() => {
+    if (!data?.lineage) return [];
+    if (Array.isArray(data.lineage)) return data.lineage;
+    return data.lineage.by_template || [];
+  }, [data]);
 
-  const curAction = selected ? actionTaken[selected] : undefined;
+  // Scorecard hit rate
+  const hitRate = useMemo(() => {
+    if (!data?.scorecard) return null;
+    if (Array.isArray(data.scorecard)) return null;
+    if (data.scorecard.hit_rate) return parseFloat(data.scorecard.hit_rate);
+    return null;
+  }, [data]);
+
+  // Stress
+  const stressVal = data?.stress?.composite_stress ? parseFloat(data.stress.composite_stress) : null;
+  const consensusVal = data?.stress?.momentum_consensus ? parseFloat(data.stress.momentum_consensus) : data?.stress?.sector_synchrony ? parseFloat(data.stress.sector_synchrony) : null;
 
   return (
-    <div className="h-full flex">
-      {/* ── 側欄 ── */}
-      <div className="w-12 bg-[var(--bg-sidebar)] flex flex-col items-center py-4 gap-2 shrink-0 border-r border-[var(--border-gray)]">
-        <span className="font-display text-lg font-bold text-[var(--accent-green)]">E</span>
-        <div className="mt-auto flex flex-col items-center gap-2">
-          <div className="w-7 h-px bg-[var(--border-gray)]" />
-          {market === "hk" ? (<>
-            <PinBtn label="981" color="red" onClick={() => selectStock("981.HK")} active={selected === "981.HK"} />
-            <PinBtn label="6060" color="green" onClick={() => selectStock("6060.HK")} active={selected === "6060.HK"} />
-          </>) : (<>
-            <PinBtn label="NVDA" color="green" onClick={() => selectStock("NVDA.US")} active={selected === "NVDA.US"} />
-            <PinBtn label="TSLA" color="red" onClick={() => selectStock("TSLA.US")} active={selected === "TSLA.US"} />
-          </>)}
+    <div className="h-full flex flex-col bg-[var(--bg-page)]">
+      {/* ── 頂欄：一眼看到大盤狀態 ── */}
+      <div className="h-10 bg-[var(--bg-sidebar)] border-b border-[var(--border-gray)] flex items-center px-5 justify-between shrink-0">
+        <div className="flex items-center gap-4">
+          <span className="font-display text-base font-bold text-[var(--accent-green)]">EDEN</span>
+          <div className="flex">
+            <button onClick={() => setMarket("hk")} className={`font-mono-eden text-[10px] px-3 py-1 transition-all ${market === "hk" ? "bg-[var(--accent-green-10)] text-[var(--accent-green)] font-bold border border-[var(--accent-green)]/40" : "text-[var(--text-muted)] border border-[var(--border-gray)]"}`}>港股</button>
+            <button onClick={() => setMarket("us")} className={`font-mono-eden text-[10px] px-3 py-1 transition-all ${market === "us" ? "bg-[var(--accent-green-10)] text-[var(--accent-green)] font-bold border border-[var(--accent-green)]/40" : "text-[var(--text-muted)] border border-[var(--border-gray)]"}`}>美股</button>
+          </div>
+          <span className="font-mono-eden text-[10px] text-[var(--text-muted)]">
+            #{data?.tick ?? "—"} {data?.timestamp ? new Date(data.timestamp).toLocaleTimeString("zh-HK") : ""}
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          {stressVal != null && (
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono-eden text-[9px] text-[var(--text-muted)]">市場壓力</span>
+              <span className={`font-mono-eden text-[10px] font-bold ${stressVal > 0.3 ? "text-[var(--accent-red)]" : stressVal > 0.15 ? "text-[var(--accent-orange)]" : "text-[var(--accent-green)]"}`}>{pct(stressVal)}</span>
+            </div>
+          )}
+          {consensusVal != null && (
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono-eden text-[9px] text-[var(--text-muted)]">方向共識</span>
+              <span className="font-mono-eden text-[10px] font-bold text-[var(--text-primary)]">{pct(consensusVal)}</span>
+            </div>
+          )}
+          {hitRate != null && (
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono-eden text-[9px] text-[var(--text-muted)]">系統命中</span>
+              <span className={`font-mono-eden text-[10px] font-bold ${hitRate > 0.5 ? "text-[var(--accent-green)]" : hitRate > 0.3 ? "text-[var(--accent-orange)]" : "text-[var(--accent-red)]"}`}>{pct(hitRate)}</span>
+            </div>
+          )}
+          <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent-green)] animate-pulse" />
+          <span className="font-mono-eden text-[8px] font-bold text-[var(--accent-green)]">即時</span>
         </div>
       </div>
 
       {/* ── 主區 ── */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* 頂欄 */}
-        <div className="h-9 bg-[var(--bg-sidebar)] border-b border-[var(--border-gray)] flex items-center px-4 justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <span className="font-mono-eden text-[12px] font-semibold text-[var(--accent-green)] tracking-wider">EDEN</span>
-            <div className="w-px h-4 bg-[var(--border-gray)]" />
-            <div className="flex">
-              <button onClick={() => setMarket("hk")} className={`font-mono-eden text-[10px] px-2.5 py-0.5 transition-all ${market === "hk" ? "bg-[var(--accent-green-10)] text-[var(--accent-green)] font-bold border border-[var(--accent-green)]/40" : "text-[var(--text-muted)] border border-[var(--border-gray)] hover:text-[var(--text-secondary)]"}`}>港股</button>
-              <button onClick={() => setMarket("us")} className={`font-mono-eden text-[10px] px-2.5 py-0.5 transition-all ${market === "us" ? "bg-[var(--accent-green-10)] text-[var(--accent-green)] font-bold border border-[var(--accent-green)]/40" : "text-[var(--text-muted)] border border-[var(--border-gray)] hover:text-[var(--text-secondary)]"}`}>美股</button>
+      <div className="flex-1 flex min-h-0">
+
+        {/* ── 左欄：交易機會 + 資金流向 ── */}
+        <div className="w-[380px] bg-[var(--bg-sidebar)] border-r border-[var(--border-gray)] flex flex-col overflow-y-auto shrink-0">
+          <div className="p-3 flex flex-col gap-2">
+
+            {/* 交易機會 — 最重要的東西 */}
+            <div className="flex items-center justify-between">
+              <span className="font-mono-eden text-[11px] font-bold text-[var(--accent-green)] tracking-wider">交易機會</span>
+              <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">{opportunities.filter(o => o.action === "enter").length} 個進場信號</span>
             </div>
-            <div className="w-px h-4 bg-[var(--border-gray)]" />
-            <span className="font-mono-eden text-[10px] text-[var(--text-muted)]">
-              #{data?.tick ?? "—"} {data?.timestamp ? new Date(data.timestamp).toLocaleTimeString("zh-HK") : ""}
-            </span>
-          </div>
-          <div className="flex items-center gap-2.5">
-            {data?.stress && <Badge label={`壓力 ${pct(data.stress.composite_stress)}`} color="orange" />}
-            {data?.stress?.sector_synchrony && <Badge label={`同步 ${pct(data.stress.sector_synchrony)}`} color="green" />}
-            {market === "us" && data?.stress && "momentum_consensus" in data.stress && <Badge label={`共識 ${pct((data.stress as Record<string,string>).momentum_consensus)}`} color="green" />}
-            <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent-green)] animate-pulse" />
-            <span className="font-mono-eden text-[8px] font-bold text-[var(--accent-green)]">即時</span>
+
+            {opportunities.length === 0 && (
+              <span className="font-mono-eden text-[9px] text-[var(--text-muted)] py-4 text-center">等待信號...</span>
+            )}
+
+            {opportunities.map((opp, i) => (
+              <div key={i}
+                className={`border rounded-md p-2.5 cursor-pointer transition-all hover:brightness-110 ${selected === opp.sym ? "ring-1 ring-[var(--accent-green)]/50" : ""} ${pctBg(opp.action === "enter" ? "1" : "-0.5")}`}
+                onClick={() => setSelected(opp.sym)}>
+                {/* 第一行：股票 + 行動 + 信心 */}
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-display text-[13px] font-bold">{opp.sym}</span>
+                    <span className={`font-mono-eden text-[8px] px-1.5 py-0.5 rounded font-bold ${opp.action === "enter" ? "bg-[var(--accent-green)] text-[var(--bg-page)]" : opp.action === "review" ? "bg-[var(--accent-orange-20)] text-[var(--accent-orange)]" : "bg-[var(--bg-elevated)] text-[var(--text-muted)]"}`}>
+                      {opp.action === "enter" ? "進場" : opp.action === "review" ? "觀望" : "觀察"}
+                    </span>
+                  </div>
+                  <span className="font-mono-eden text-[11px] font-bold text-[var(--text-primary)]">{pct(opp.confidence)}</span>
+                </div>
+                {/* 第二行：一句話原因 — 這是最值錢的 */}
+                <div className="font-mono-eden text-[9px] text-[var(--text-secondary)] leading-relaxed">
+                  {opp.reason.length > 80 ? opp.reason.slice(0, 80) + "..." : opp.reason}
+                </div>
+                {/* 第三行：策略命中率 */}
+                {lineage.length > 0 && (() => {
+                  const family = opp.title?.includes("Momentum") ? "momentum_continuation" : opp.title?.includes("Pre-Market") ? "pre_market_positioning" : "";
+                  const lin = lineage.find(l => l.template === family);
+                  return lin ? (
+                    <div className="font-mono-eden text-[8px] text-[var(--text-muted)] mt-1">
+                      此策略命中率 <span className={pctColor(lin.hit_rate)}>{pct(lin.hit_rate)}</span> ({lin.resolved}筆)
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+            ))}
+
+            {/* 分隔 */}
+            <div className="h-px bg-[var(--border-gray)] my-1" />
+
+            {/* 異動股票 — 什麼在動？為什麼？ */}
+            <span className="font-mono-eden text-[11px] font-bold text-[var(--text-muted)] tracking-wider">異動股票</span>
+            {movers.map((m, i) => (
+              <div key={i} className="flex items-center gap-2 px-1 py-0.5 rounded cursor-pointer hover:bg-[var(--bg-elevated)] transition-colors"
+                onClick={() => setSelected(m.sym)}>
+                <span className={`font-mono-eden text-[11px] font-bold w-16 ${selected === m.sym ? "text-[var(--accent-green)]" : ""}`}>{m.sym.replace(".HK", "").replace(".US", "")}</span>
+                <span className={`font-mono-eden text-[11px] font-bold w-14 text-right ${pctColor(m.comp)}`}>{pct(m.comp)}</span>
+                <span className="font-mono-eden text-[8px] text-[var(--text-muted)] flex-1 truncate">{m.reason.replace(m.sym + " ", "").slice(0, 40)}</span>
+              </div>
+            ))}
+
+            {/* 分隔 */}
+            <div className="h-px bg-[var(--border-gray)] my-1" />
+
+            {/* 資金流向 — 大錢往哪走？ */}
+            <span className="font-mono-eden text-[11px] font-bold text-[var(--text-muted)] tracking-wider">資金流向</span>
+            {data?.pressures?.slice(0, 5).map((p, i) => {
+              const flow = parseFloat(p.capital_flow_pressure ?? p.net_pressure ?? "0");
+              const mom = parseFloat(p.momentum ?? "0");
+              return (
+                <div key={i} className="flex items-center gap-2 px-1 py-0.5 cursor-pointer hover:bg-[var(--bg-elevated)] rounded transition-colors"
+                  onClick={() => setSelected(p.symbol)}>
+                  <span className={`font-mono-eden text-[10px] font-semibold w-16 ${selected === p.symbol ? "text-[var(--accent-green)]" : ""}`}>{p.symbol.replace(".HK", "").replace(".US", "")}</span>
+                  <span className={`font-mono-eden text-[10px] font-bold w-14 text-right ${pctColor(flow)}`}>{flow > 0 ? "▲" : "▼"}{pct(flow)}</span>
+                  <span className={`font-mono-eden text-[9px] w-12 text-right ${pctColor(mom)}`}>{pct(mom)}</span>
+                  <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">{p.pressure_duration > 1 ? `${p.pressure_duration}次` : ""}{p.accelerating ? " ↑" : ""}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        {/* 內容 */}
-        <div className="flex-1 flex min-h-0">
-          {/* ── 左面板：信號列表 ── */}
-          <div className="w-72 bg-[var(--bg-sidebar)] border-r border-[var(--border-gray)] flex flex-col overflow-y-auto shrink-0">
-            <div className="p-2.5 flex flex-col gap-1.5">
-              {market === "hk" ? (<>
-                <Lbl text="// 聰明資金" />
-                {data?.pressures?.slice(0, 6).map(p => (
-                  <Row key={p.symbol} active={selected === p.symbol} onClick={() => selectStock(p.symbol)}>
-                    <span className={`font-mono-eden text-[11px] font-semibold ${selected === p.symbol ? "text-[var(--accent-green)]" : ""}`}>{p.symbol}</span>
-                    <span className={`font-mono-eden text-[11px] font-bold ${pctColor(p.net_pressure ?? "0")}`}>
-                      {parseFloat(p.net_pressure ?? "0") > 0 ? "▲" : "▼"}{pct(p.net_pressure ?? "0")}
-                    </span>
-                    <span className="font-mono-eden text-[9px] text-[var(--text-muted)]">{p.pressure_duration}次</span>
-                  </Row>
-                ))}
-                <Div />
-                <Lbl text="// 對手倉" />
-                {data?.pair_trades?.slice(0, 3).map((pt, i) => (
-                  <Row key={i}>
-                    <div className="flex flex-col gap-0.5">
-                      <span className="font-mono-eden text-[10px] font-semibold">{pt.institution}</span>
-                      <span className="font-mono-eden text-[9px] text-[var(--text-secondary)]">買 [{pt.buy_symbols.join(",")}] 賣 [{pt.sell_symbols.join(",")}]</span>
-                    </div>
-                  </Row>
-                ))}
-                <Div />
-                <Lbl text="// 機構撤退" color="red" />
-                {data?.exoduses?.slice(0, 3).map((e, i) => (
-                  <span key={i} className="font-mono-eden text-[9px] text-[var(--accent-red)] opacity-60">
-                    {e.institution} {e.prev_stock_count}→{e.curr_stock_count} (-{e.dropped_count})
-                  </span>
-                ))}
-              </>) : (<>
-                <Lbl text="// 收斂信號" />
-                {data?.convergence_scores?.slice(0, 8).map(c => (
-                  <Row key={c.symbol} active={selected === c.symbol} onClick={() => selectStock(c.symbol)}>
-                    <span className={`font-mono-eden text-[11px] font-semibold ${selected === c.symbol ? "text-[var(--accent-green)]" : ""}`}>{c.symbol}</span>
-                    <span className={`font-mono-eden text-[11px] font-bold ${pctColor(c.dimension_composite)}`}>{pct(c.dimension_composite)}</span>
-                    {parseFloat(c.cross_market_propagation) !== 0 && <span className={`font-mono-eden text-[8px] ${pctColor(c.cross_market_propagation)}`}>港:{pct(c.cross_market_propagation)}</span>}
-                  </Row>
-                ))}
-                <Div />
-                <Lbl text="// 跨市場 HK→US" />
-                {data?.cross_market_signals?.slice(0, 3).map((cm, i) => (
-                  <Row key={i}>
-                    <div className="flex flex-col gap-0.5 w-full">
-                      <div className="flex justify-between">
-                        <span className="font-mono-eden text-[10px] font-semibold text-[var(--accent-orange)]">{cm.us_symbol} ← {cm.hk_symbol}</span>
-                        <span className={`font-mono-eden text-[9px] font-bold ${pctColor(cm.hk_composite)}`}>{pct(cm.propagation_confidence)}</span>
-                      </div>
-                      <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">港股綜合={pct(cm.hk_composite)} | {cm.time_since_hk_close_minutes}分鐘前</span>
-                    </div>
-                  </Row>
-                ))}
-                <Div />
-                <Lbl text="// 事件" />
-                {data?.events?.slice(0, 4).map((ev, i) => (
-                  <div key={i} className="flex items-center gap-1.5">
-                    <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${parseFloat(ev.magnitude) > 0.5 ? "bg-[var(--accent-red)]" : "bg-[var(--accent-orange)]"}`} />
-                    <span className="font-mono-eden text-[9px] text-[var(--text-secondary)]">{ev.summary}</span>
-                  </div>
-                ))}
-              </>)}
-
-              {/* US-only: 壓力 + 板塊輪動 + 持倉 + 跨市場異常 */}
-              {market === "us" && data?.pressures && data.pressures.length > 0 && (<>
-                <Div />
-                <Lbl text="// 資金壓力" />
-                {data.pressures.slice(0, 5).map(p => (
-                  <Row key={p.symbol} active={selected === p.symbol} onClick={() => selectStock(p.symbol)}>
-                    <span className={`font-mono-eden text-[11px] font-semibold ${selected === p.symbol ? "text-[var(--accent-green)]" : ""}`}>{p.symbol}</span>
-                    <span className={`font-mono-eden text-[10px] font-bold ${pctColor(p.capital_flow_pressure ?? "0")}`}>
-                      {parseFloat(p.capital_flow_pressure ?? "0") > 0 ? "▲" : "▼"}{pct(p.capital_flow_pressure ?? "0")}
-                    </span>
-                    <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">{p.pressure_duration}次{p.accelerating ? " ↑" : ""}</span>
-                  </Row>
-                ))}
-              </>)}
-              {market === "us" && data?.rotations && data.rotations.length > 0 && (<>
-                <Div />
-                <Lbl text="// 板塊輪動" />
-                {data.rotations.slice(0, 3).map((r, i) => (
-                  <div key={i} className="flex justify-between font-mono-eden text-[9px]">
-                    <span>{r.sector_a} → {r.sector_b}</span>
-                    <span className={pctColor(r.widening ? "1" : "-1")}>{pct(r.spread)} {r.widening ? "↑擴大" : "↓收窄"}</span>
-                  </div>
-                ))}
-              </>)}
-              {market === "us" && data?.cross_market_anomalies && data.cross_market_anomalies.length > 0 && (<>
-                <Div />
-                <Lbl text="// 跨市場異常" color="red" />
-                {data.cross_market_anomalies.slice(0, 3).map((a, i) => (
-                  <div key={i} className="flex flex-col gap-0.5 bg-[var(--accent-red-20)] px-2 py-1 rounded cursor-pointer" onClick={() => selectStock(a.us_symbol)}>
-                    <span className="font-mono-eden text-[9px] font-semibold text-[var(--accent-red)]">{a.us_symbol} ← {a.hk_symbol}</span>
-                    <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">預期{parseFloat(a.expected_direction) > 0 ? "多" : "空"} 實際{parseFloat(a.actual_direction) > 0 ? "多" : "空"} 偏差={pct(a.divergence)}</span>
-                  </div>
-                ))}
-              </>)}
-              {market === "us" && (data?.active_positions ?? 0) > 0 && (<>
-                <Div />
-                <Lbl text="// 持倉追蹤" />
-                {data?.workflows?.filter(w => w.stage === "monitoring").slice(0, 3).map((w, i) => (
-                  <div key={i} className="flex justify-between items-center bg-[var(--bg-elevated)] px-2 py-1 rounded">
-                    <span className="font-mono-eden text-[10px] font-semibold">{w.symbol}</span>
-                    <div className="flex gap-2 items-center">
-                      {w.pnl && <span className={`font-mono-eden text-[9px] font-bold ${pctColor(w.pnl)}`}>{parseFloat(w.pnl) > 0 ? "+" : ""}{parseFloat(w.pnl).toFixed(2)}</span>}
-                      <Badge label="監控中" color="orange" small />
-                    </div>
-                  </div>
-                ))}
-              </>)}
-
-              {/* 常駐：評分 + 戰術 + 追蹤 */}
-              <Div />
-              <Lbl text="// 信號評分" />
-              {Array.isArray(data?.scorecard) && data.scorecard.length > 0 ? data.scorecard.map(s => (
-                <div key={s.signal_type} className="flex justify-between items-center bg-[var(--bg-elevated)] px-2 py-1 rounded">
-                  <span className="font-mono-eden text-[9px] text-[var(--text-secondary)]">{s.signal_type}</span>
-                  <div className="flex items-center gap-2">
-                    <span className={`font-display text-sm font-bold ${pctColor(s.hit_rate)}`}>{pct(s.hit_rate)}</span>
-                    <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">{s.resolved}/{s.total}</span>
-                  </div>
-                </div>
-              )) : data?.scorecard && typeof data.scorecard === "object" && "hit_rate" in data.scorecard ? (
-                <div className="flex justify-between items-center bg-[var(--bg-elevated)] px-2 py-1 rounded">
-                  <span className="font-mono-eden text-[9px] text-[var(--text-secondary)]">整體</span>
-                  <div className="flex items-center gap-2">
-                    <span className={`font-display text-sm font-bold ${pctColor(String((data.scorecard as Record<string, unknown>).hit_rate))}`}>{pct(String((data.scorecard as Record<string, unknown>).hit_rate))}</span>
-                    <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">{String((data.scorecard as Record<string, unknown>).resolved_signals)}/{String((data.scorecard as Record<string, unknown>).total_signals)}</span>
-                  </div>
-                </div>
-              ) : <span className="font-mono-eden text-[9px] text-[var(--text-muted)]">等待信號評分</span>}
-
-              <Div />
-              <Lbl text="// 戰術案件" />
-              {data?.tactical_cases?.slice(0, 3).map((c, i) => (
-                <div key={i} className="flex items-center gap-1.5 bg-[var(--bg-elevated)] px-2 py-1 rounded cursor-pointer hover:brightness-125 transition-all"
-                  onClick={() => { const m = c.title.match(/(\w[\w.-]+\.(HK|US))/); if (m) selectStock(m[1]); else { const num = c.title.match(/\d+/)?.[0]; if (num) selectStock(market === "hk" ? `${num}.HK` : `${num}.US`); } }}>
-                  <Badge label={c.action === "enter" ? "進場" : c.action === "review" ? "觀望" : c.action === "exit" ? "退出" : c.action} color={c.action === "enter" ? "green" : c.action === "review" ? "orange" : "red"} small />
-                  <span className="font-mono-eden text-[9px]">{c.title}</span>
-                  <span className="font-mono-eden text-[8px] text-[var(--text-muted)] ml-auto">{pct(c.confidence)}</span>
-                </div>
-              )) ?? <span className="font-mono-eden text-[9px] text-[var(--text-muted)]">等待戰術案件</span>}
-
-              {(() => {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const raw = data?.lineage as any;
-                const lin: { template: string; total: number; resolved: number; hits: number; hit_rate: string; mean_return: string }[] | undefined =
-                  Array.isArray(raw) ? raw : raw?.by_template;
-                return lin && lin.length > 0 ? (<>
-                  <Div />
-                  <Lbl text="// 信號追蹤" />
-                  {lin.slice(0, 4).map((l, i) => (
-                    <div key={i} className="flex justify-between">
-                      <span className="font-mono-eden text-[9px] text-[var(--text-secondary)]">{l.template}</span>
-                      <span className={`font-mono-eden text-[9px] font-bold ${pctColor(l.hit_rate)}`}>{pct(l.hit_rate)}</span>
-                    </div>
-                  ))}
-                </>) : null;
-              })()}
-            </div>
-          </div>
-
-          {/* ── 熱力圖 ── */}
-          <div className="flex-1 bg-[#0c0c18] relative overflow-hidden">
-            <div className="absolute top-3 left-4 flex gap-1.5 z-10">
-              <Chip label="全部" active={!sectorFilter} onClick={() => setSectorFilter(null)} />
-              {sectors.map(s => <Chip key={s} label={s} active={sectorFilter === s} onClick={() => setSectorFilter(sectorFilter === s ? null : s)} />)}
-            </div>
-            <svg className="absolute inset-0 w-full h-full" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet">
-              <defs>
-                <filter id="gl" x="-50%" y="-50%" width="200%" height="200%">
-                  <feGaussianBlur stdDeviation="8" result="b" />
-                  <feColorMatrix in="b" type="matrix" values="0 0 0 0 0.13 0 0 0 0 0.77 0 0 0 0 0.37 0 0 0 0.45 0" />
-                  <feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge>
-                </filter>
-                <filter id="gr" x="-50%" y="-50%" width="200%" height="200%">
-                  <feGaussianBlur stdDeviation="8" result="b" />
-                  <feColorMatrix in="b" type="matrix" values="0 0 0 0 0.94 0 0 0 0 0.27 0 0 0 0 0.27 0 0 0 0.45 0" />
-                  <feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge>
-                </filter>
-                <radialGradient id="bg" cx="50%" cy="50%" r="60%">
-                  <stop offset="0%" stopColor="#141428" /><stop offset="100%" stopColor="#0a0a14" />
-                </radialGradient>
-              </defs>
-              <rect width="800" height="600" fill="url(#bg)" />
-              {data?.pair_trades?.flatMap((pt, pi) =>
-                pt.buy_symbols.flatMap(buy =>
-                  pt.sell_symbols.map(sell => {
-                    const b1 = filtered.find(b => b.symbol === buy), b2 = filtered.find(b => b.symbol === sell);
-                    if (!b1 || !b2) return null;
-                    return <path key={`c-${pi}-${buy}-${sell}`} d={`M${b1.cx},${b1.cy} Q${(b1.cx + b2.cx) / 2},${(b1.cy + b2.cy) / 2 - 25} ${b2.cx},${b2.cy}`} fill="none" stroke="rgba(251,146,60,0.12)" strokeWidth={1.5} strokeDasharray="6 4" />;
-                  })
-                )
-              )}
-              {market === "us" && data?.cross_market_signals?.map((cm, i) => {
-                const ub = filtered.find(b => b.symbol === cm.us_symbol);
-                if (!ub) return null;
-                return <g key={`x-${i}`}><line x1={ub.cx} y1={ub.cy + ub.r + 2} x2={ub.cx} y2={ub.cy + ub.r + 16} stroke="rgba(251,146,60,0.35)" strokeWidth={1} /><text x={ub.cx} y={ub.cy + ub.r + 24} textAnchor="middle" fill="rgba(251,146,60,0.5)" fontSize={7} fontFamily="'JetBrains Mono',monospace">{`← ${cm.hk_symbol}`}</text></g>;
-              })}
-              {filtered.map(b => {
-                const sel = selected === b.symbol, bull = b.comp > 0;
-                const fa = 0.06 + b.absComp * 0.22, sa = 0.25 + b.absComp * 0.5;
-                return (
-                  <g key={b.symbol} className="cursor-pointer" onClick={() => selectStock(b.symbol)}>
-                    {b.absComp > 0.2 && <circle cx={b.cx} cy={b.cy} r={b.r + 4} fill="none" stroke={bull ? `rgba(34,197,94,${sa * 0.3})` : `rgba(239,68,68,${sa * 0.3})`} strokeWidth={6} filter={b.absComp > 0.35 ? (bull ? "url(#gl)" : "url(#gr)") : undefined} />}
-                    <circle cx={b.cx} cy={b.cy} r={b.r} fill={bull ? `rgba(34,197,94,${fa})` : `rgba(239,68,68,${fa})`} stroke={sel ? (bull ? "#22c55e" : "#ef4444") : (bull ? `rgba(34,197,94,${sa})` : `rgba(239,68,68,${sa})`)} strokeWidth={sel ? 2.5 : 0.8} />
-                    {b.accelerating && <circle cx={b.cx} cy={b.cy} r={b.r + 6} fill="none" stroke={bull ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"} strokeWidth={0.6} strokeDasharray="3 5"><animateTransform attributeName="transform" type="rotate" from={`0 ${b.cx} ${b.cy}`} to={`360 ${b.cx} ${b.cy}`} dur="10s" repeatCount="indefinite" /></circle>}
-                    <text x={b.cx} y={b.cy - (b.r > 28 ? 4 : 2)} textAnchor="middle" fontSize={b.r > 28 ? 11 : 8} fontWeight="600" fontFamily="'JetBrains Mono',monospace" fill={bull ? "#22c55e" : "#ef4444"}>{b.symbol.replace(".HK", "").replace(".US", "")}</text>
-                    {b.r > 22 && <text x={b.cx} y={b.cy + (b.r > 28 ? 9 : 7)} textAnchor="middle" fontSize={b.r > 28 ? 9 : 7} fontFamily="'JetBrains Mono',monospace" fill={bull ? "rgba(34,197,94,0.55)" : "rgba(239,68,68,0.55)"}>{pct(String(b.comp))}</text>}
-                    {b.instCount > 3 && b.r > 25 && <text x={b.cx} y={b.cy + (b.r > 28 ? 19 : 15)} textAnchor="middle" fontSize={6} fontFamily="'JetBrains Mono',monospace" fill="rgba(148,163,184,0.35)">{b.instCount}機構</text>}
-                  </g>
-                );
-              })}
-            </svg>
-          </div>
-
-          {/* ── 右面板：一頁看完，不分 tab ── */}
-          {selected && (
-            <div className="w-[320px] bg-[var(--bg-sidebar)] border-l border-[var(--border-gray)] flex flex-col shrink-0">
-              <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--bg-card)] border-b border-[var(--border-gray)]">
-                <div className="flex items-center gap-1.5">
-                  <span className="font-mono-eden text-[9px] text-[var(--text-muted)]">{sectorMap[selected] ?? "—"}</span>
-                  <span className="text-[var(--border-gray)]">›</span>
-                  <span className={`font-mono-eden text-[9px] font-semibold ${pctColor(selectedSignal?.composite ?? "0")}`}>{selected}</span>
-                </div>
-                <button onClick={() => setSelected(null)} className="font-mono-eden text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors p-0.5">✕</button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
-                {/* 概覽 */}
-                <div className="flex justify-between items-center">
-                  <div>
-                    <div className="font-display text-base font-bold tracking-tight">{selected}</div>
-                    <div className="font-mono-eden text-[8px] text-[var(--text-muted)]">{selectedSignal ? `綜合=${pct(selectedSignal.composite)}` : ""}</div>
-                  </div>
-                  {selectedSignal?.mark_price && <div className={`font-display text-lg font-bold ${pctColor(selectedSignal.composite)}`}>{parseFloat(selectedSignal.mark_price).toFixed(2)}</div>}
-                </div>
-                {selectedSignal && (
-                  <div className="flex gap-1">
-                    <Stat label="綜合" value={pct(selectedSignal.composite)} color={pctColor(selectedSignal.composite)} />
-                    <Stat label="機構" value={pct(selectedSignal.institutional_alignment)} color={pctColor(selectedSignal.institutional_alignment)} />
-                    <Stat label="板塊" value={selectedSignal.sector_coherence ? pct(selectedSignal.sector_coherence) : "無"} color={selectedSignal.sector_coherence ? pctColor(selectedSignal.sector_coherence) : "text-[var(--text-muted)]"} />
-                    <Stat label="相關性" value={pct(selectedSignal.cross_stock_correlation)} color={pctColor(selectedSignal.cross_stock_correlation)} />
-                  </div>
-                )}
-
-                {/* 戰術 */}
-                {data?.tactical_cases?.filter(c => c.title.includes(selected.replace(".HK", "").replace(".US", ""))).slice(0, 2).map((c, i) => (
-                  <div key={i} className="flex items-center gap-1.5 bg-[var(--accent-red-20)] border border-[var(--accent-red)]/20 px-2 py-1.5 rounded">
-                    <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent-red)]" />
-                    <span className="font-mono-eden text-[10px] font-semibold">{c.title}</span>
-                    <Badge label={c.action === "enter" ? "進場" : c.action === "review" ? "觀望" : "退出"} color={c.action === "enter" ? "green" : "orange"} small />
-                  </div>
-                ))}
-
-                {/* 機構 */}
-                {data?.pair_trades?.filter(pt => pt.buy_symbols.includes(selected) || pt.sell_symbols.includes(selected)).length ? (<>
-                  <Div />
-                  <Lbl text="// 機構活動" />
-                  {data?.pair_trades?.filter(pt => pt.buy_symbols.includes(selected) || pt.sell_symbols.includes(selected)).slice(0, 4).map((pt, i) => (
-                    <div key={i} className="flex flex-col gap-1 bg-[var(--bg-elevated)] px-2 py-1.5 rounded">
-                      <div className="flex items-center gap-1.5">
-                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${pt.sell_symbols.includes(selected) ? "bg-[var(--accent-red)]" : "bg-[var(--accent-green)]"}`} />
-                        <span className={`font-mono-eden text-[10px] font-semibold ${pt.sell_symbols.includes(selected) ? "text-[var(--accent-red)]" : "text-[var(--accent-green)]"}`}>
-                          {pt.institution} → {pt.sell_symbols.includes(selected) ? "賣出" : "買入"}
-                        </span>
-                      </div>
-                      <div className="flex gap-1 flex-wrap">
-                        {pt.buy_symbols.filter(s => s !== selected).map(s => <button key={s} onClick={() => selectStock(s)} className="font-mono-eden text-[8px] text-[var(--accent-green)] hover:underline">▲{s}</button>)}
-                        {pt.sell_symbols.filter(s => s !== selected).map(s => <button key={s} onClick={() => selectStock(s)} className="font-mono-eden text-[8px] text-[var(--accent-red)] hover:underline">▼{s}</button>)}
-                      </div>
-                    </div>
-                  ))}
-                </>) : null}
-
-                {/* 壓力 */}
-                {selectedPressure && (<>
-                  <Div />
-                  <Lbl text="// 壓力指標" />
-                  <div className="bg-[var(--bg-elevated)] px-2 py-1.5 rounded flex flex-col gap-0.5">
-                    <div className="flex justify-between">
-                      <span className="font-mono-eden text-[9px] text-[var(--text-secondary)]">淨壓力</span>
-                      <span className={`font-mono-eden text-[10px] font-bold ${pctColor((selectedPressure.net_pressure ?? selectedPressure.capital_flow_pressure ?? "0"))}`}>{pct((selectedPressure.net_pressure ?? selectedPressure.capital_flow_pressure ?? "0"))}</span>
-                    </div>
-                    <div className="flex gap-3 font-mono-eden text-[8px] text-[var(--text-muted)]">
-                      <span>變化={pct(selectedPressure.pressure_delta)}</span>
-                      <span>持續={selectedPressure.pressure_duration}次</span>
-                      {selectedPressure.buy_inst_count != null && <span>買={selectedPressure.buy_inst_count} 賣={selectedPressure.sell_inst_count}</span>}
-                      {selectedPressure.momentum != null && <span>動量={pct(selectedPressure.momentum)}</span>}
-                      {selectedPressure.volume_intensity != null && <span>量能={pct(selectedPressure.volume_intensity)}</span>}
-                    </div>
-                  </div>
-                </>)}
-
-                {/* 隱藏連結 */}
-                {data?.hidden_links?.filter(hl => hl.symbol_a === selected || hl.symbol_b === selected).length ? (<>
-                  <Div />
-                  <Lbl text="// 隱藏連結" />
-                  {data.hidden_links.filter(hl => hl.symbol_a === selected || hl.symbol_b === selected).slice(0, 3).map((hl, i) => {
-                    const other = hl.symbol_a === selected ? hl.symbol_b : hl.symbol_a;
-                    return (
-                      <div key={i} className="bg-[var(--bg-elevated)] px-2 py-1.5 rounded cursor-pointer hover:brightness-125 transition-all" onClick={() => selectStock(other)}>
-                        <div className="flex justify-between">
-                          <span className="font-mono-eden text-[10px] font-semibold text-[var(--accent-orange)]">↔ {other}</span>
-                          <span className="font-mono-eden text-[9px] text-[var(--text-secondary)]">相似={pct(hl.jaccard)}</span>
-                        </div>
-                        <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">{hl.shared_institutions} 間共同機構</span>
-                      </div>
-                    );
-                  })}
-                </>) : null}
-
-                {/* 假說 */}
-                {data?.hypothesis_tracks?.filter(h => h.title.includes(selected.replace(".HK", "").replace(".US", ""))).length ? (<>
-                  <Div />
-                  <Lbl text="// 假說追蹤" />
-                  {data.hypothesis_tracks.filter(h => h.title.includes(selected.replace(".HK", "").replace(".US", ""))).slice(0, 3).map((h, i) => (
-                    <div key={i} className="bg-[var(--bg-elevated)] px-2 py-1.5 rounded flex flex-col gap-0.5">
-                      <div className="flex justify-between items-center">
-                        <span className="font-mono-eden text-[9px] font-semibold">{h.title}</span>
-                        <Badge label={h.status === "strengthening" ? "增強中" : h.status === "weakening" ? "減弱中" : h.status === "invalidated" ? "已失效" : "穩定"} color={h.status === "strengthening" ? "green" : h.status === "weakening" ? "red" : "orange"} small />
-                      </div>
-                      <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">持續={h.age_ticks}次 | 信心={pct(h.confidence)}</span>
-                    </div>
-                  ))}
-                </>) : null}
-
-                {/* 跨市場 */}
-                {market === "us" && data?.cross_market_signals?.filter(cm => cm.us_symbol === selected).slice(0, 2).map((cm, i) => (
-                  <div key={i}>
-                    <Div /><Lbl text="// 跨市場" />
-                    <div className="bg-[var(--bg-elevated)] px-2 py-1.5 rounded mt-1">
-                      <div className="flex justify-between">
-                        <span className="font-mono-eden text-[10px] font-semibold text-[var(--accent-orange)]">← {cm.hk_symbol}</span>
-                        <span className={`font-mono-eden text-[9px] font-bold ${pctColor(cm.hk_composite)}`}>{pct(cm.propagation_confidence)}</span>
-                      </div>
-                      <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">港股綜合={pct(cm.hk_composite)} | {cm.time_since_hk_close_minutes}分鐘前收盤</span>
-                    </div>
-                  </div>
-                ))}
-                {/* 回溯推理 */}
-                {selected && data?.backward_chains?.filter(c => c.symbol === selected).slice(0, 1).map((chain, i) => (
-                  <div key={i}>
-                    <Div />
-                    <Lbl text="// 回溯推理" />
-                    <div className="bg-[var(--bg-elevated)] px-2 py-1.5 rounded flex flex-col gap-1 mt-1">
-                      <span className="font-mono-eden text-[9px] font-semibold">{chain.conclusion}</span>
-                      {chain.evidence.slice(0, 4).map((e, j) => (
-                        <div key={j} className="flex justify-between">
-                          <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">{e.description}</span>
-                          <span className={`font-mono-eden text-[8px] font-bold ${pctColor(e.direction)}`}>{pct(e.weight)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-
-                {/* 因果 leader */}
-                {selected && data?.causal_leaders?.filter(c => c.symbol === selected).slice(0, 1).map((cl, i) => (
-                  <div key={i}>
-                    <Div />
-                    <Lbl text="// 因果追蹤" />
-                    <div className="bg-[var(--bg-elevated)] px-2 py-1.5 rounded flex gap-3 mt-1">
-                      <span className="font-mono-eden text-[9px] text-[var(--text-secondary)]">主導維度：<span className="font-semibold text-[var(--text-primary)]">{cl.current_leader}</span></span>
-                      <span className="font-mono-eden text-[8px] text-[var(--text-muted)]">持續{cl.leader_streak}次 | {cl.flips}次翻轉</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* 行動欄 */}
-              <div className="border-t border-[var(--border-gray)] bg-[var(--bg-card)] p-3 flex flex-col gap-1.5">
-                {curAction ? (
-                  <div className="flex items-center justify-center gap-2 py-1">
-                    <span className={`font-mono-eden text-[10px] font-bold ${curAction === "confirm" ? "text-[var(--accent-red)]" : curAction === "review" ? "text-[var(--accent-orange)]" : "text-[var(--text-muted)]"}`}>
-                      {curAction === "confirm" ? "✓ 已確認做空" : curAction === "review" ? "⟳ 已降級為觀望" : "— 已忽略"}
-                    </span>
-                    <button onClick={() => setActionTaken(p => { const n = { ...p }; delete n[selected]; return n; })} className="font-mono-eden text-[8px] text-[var(--text-muted)] hover:text-[var(--text-primary)] underline">撤回</button>
-                  </div>
-                ) : (
-                  <div className="flex gap-1.5">
-                    <button onClick={() => { if (selected) setActionTaken(p => ({ ...p, [selected]: "confirm" })); }} className="flex-1 py-1.5 bg-[var(--accent-red)] font-mono-eden text-[9px] font-bold text-[var(--bg-page)] rounded hover:brightness-125 active:scale-95 transition-all">確認做空</button>
-                    <button onClick={() => { if (selected) setActionTaken(p => ({ ...p, [selected]: "review" })); }} className="flex-1 py-1.5 border border-[var(--accent-orange)]/40 font-mono-eden text-[9px] font-semibold text-[var(--accent-orange)] rounded hover:bg-[var(--accent-orange-20)] active:scale-95 transition-all">降級觀望</button>
-                    <button onClick={() => { if (selected) setActionTaken(p => ({ ...p, [selected]: "dismiss" })); }} className="flex-1 py-1.5 border border-[var(--border-gray)] font-mono-eden text-[9px] text-[var(--text-muted)] rounded hover:text-[var(--text-secondary)] active:scale-95 transition-all">忽略</button>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+        {/* ── 中間：異動地圖（小一點） ── */}
+        <div className="flex-1 bg-[#0c0c18] relative overflow-hidden min-w-0">
+          <BubbleMap data={data} market={market} selected={selected} onSelect={setSelected} />
         </div>
+
+        {/* ── 右欄：選中股票的完整故事 ── */}
+        {selected && (
+          <div className="w-[320px] bg-[var(--bg-sidebar)] border-l border-[var(--border-gray)] flex flex-col shrink-0">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border-gray)]">
+              <span className="font-display text-sm font-bold">{selected}</span>
+              <button onClick={() => setSelected(null)} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors text-sm">✕</button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2.5">
+              <DetailPanel data={data} symbol={selected} market={market} />
+            </div>
+            {/* 行動 */}
+            <div className="border-t border-[var(--border-gray)] p-3 flex gap-1.5">
+              <button className="flex-1 py-1.5 bg-[var(--accent-green)] font-mono-eden text-[9px] font-bold text-[var(--bg-page)] rounded hover:brightness-110 active:scale-95 transition-all">確認進場</button>
+              <button className="flex-1 py-1.5 border border-[var(--accent-orange)]/40 font-mono-eden text-[9px] font-semibold text-[var(--accent-orange)] rounded hover:bg-[var(--accent-orange-20)] active:scale-95 transition-all">觀望</button>
+              <button className="flex-1 py-1.5 border border-[var(--border-gray)] font-mono-eden text-[9px] text-[var(--text-muted)] rounded hover:text-[var(--text-secondary)] active:scale-95 transition-all">忽略</button>
+            </div>
+          </div>
+        )}
       </div>
 
+      {/* 離線 overlay */}
       {error && !data && (
         <div className="fixed inset-0 flex items-center justify-center bg-black/80 z-50">
           <div className="bg-[var(--bg-card)] border border-[var(--border-gray)] p-8 max-w-md text-center rounded">
             <div className="font-display text-xl font-bold mb-2">Eden 未連接</div>
-            <div className="font-mono-eden text-sm text-[var(--text-muted)] mb-4">請先啟動 Eden: <code className="text-[var(--accent-green)]">cargo run</code></div>
+            <div className="font-mono-eden text-sm text-[var(--text-muted)]">請先啟動 Eden 後端</div>
           </div>
         </div>
       )}
@@ -592,38 +264,169 @@ export default function Dashboard() {
   );
 }
 
-// ── 組件 ──
+// ── 泡泡地圖 ──
 
-function PinBtn({ label, color, onClick, active }: { label: string; color: "red" | "green"; onClick: () => void; active?: boolean }) {
-  const c = color === "red" ? "bg-[var(--accent-red-20)] border-[var(--accent-red)] text-[var(--accent-red)]" : "bg-[var(--accent-green-10)] border-[var(--accent-green)] text-[var(--accent-green)]";
-  return <button onClick={onClick} className={`w-7 h-5 border rounded flex items-center justify-center font-mono-eden text-[7px] font-semibold transition-all hover:brightness-150 active:scale-90 ${c} ${active ? "ring-1 ring-white/30 scale-110" : ""}`}>{label}</button>;
-}
+function BubbleMap({ data, market, selected, onSelect }: { data: Snap | null; market: Market; selected: string | null; onSelect: (s: string) => void }) {
+  const bubbles = useMemo(() => {
+    type S = { symbol: string; composite: string };
+    const sigs: S[] = market === "hk"
+      ? (data?.top_signals?.slice(0, 20) ?? [])
+      : (data?.convergence_scores?.slice(0, 20)?.map((c: any) => ({ symbol: c.symbol, composite: c.dimension_composite || c.composite })) ?? []);
+    if (!sigs.length) return [];
+    const phi = 2.39996323;
+    return sigs.map((sig, i) => {
+      const comp = parseFloat(sig.composite) || 0, absComp = Math.abs(comp);
+      const pr = data?.pressures?.find((p: any) => p.symbol === sig.symbol);
+      const flowMag = Math.abs(parseFloat(pr?.capital_flow_pressure ?? pr?.net_pressure ?? "0"));
+      const r = Math.max(14, 10 + flowMag * 50 + absComp * 25);
+      const theta = i * phi, dist = Math.sqrt(i + 0.5) * 48;
+      return {
+        symbol: sig.symbol, r,
+        cx: Math.max(r + 5, Math.min(795 - r, 400 + dist * Math.cos(theta) + comp * 80)),
+        cy: Math.max(r + 30, Math.min(570 - r, 300 + dist * Math.sin(theta))),
+        comp, absComp, accelerating: pr?.accelerating ?? false,
+      };
+    });
+  }, [data, market]);
 
-function Badge({ label, color, small }: { label: string; color: "green" | "orange" | "red"; small?: boolean }) {
-  const bg = color === "green" ? "bg-[var(--accent-green-10)]" : color === "orange" ? "bg-[var(--accent-orange-20)]" : "bg-[var(--accent-red-20)]";
-  const fg = color === "green" ? "text-[var(--accent-green)]" : color === "orange" ? "text-[var(--accent-orange)]" : "text-[var(--accent-red)]";
-  return <span className={`font-mono-eden ${small ? "text-[7px] px-1.5 py-0.5" : "text-[9px] px-2 py-0.5"} font-bold rounded ${bg} ${fg}`}>{label}</span>;
-}
-
-function Lbl({ text, color }: { text: string; color?: "red" }) {
-  return <span className={`font-mono-eden text-[10px] font-bold tracking-wider ${color === "red" ? "text-[var(--accent-red)]" : "text-[var(--accent-green)]"}`}>{text}</span>;
-}
-
-function Div() { return <div className="w-full h-px bg-[var(--border-gray)]" />; }
-
-function Row({ children, active, onClick }: { children: React.ReactNode; active?: boolean; onClick?: () => void }) {
-  return <div className={`flex justify-between items-center px-2 py-0.5 -mx-1 rounded transition-colors ${onClick ? "cursor-pointer" : ""} ${active ? "bg-[var(--bg-elevated)]" : "hover:bg-[var(--bg-elevated)]"}`} onClick={onClick}>{children}</div>;
-}
-
-function Chip({ label, active, onClick }: { label: string; active?: boolean; onClick: () => void }) {
-  return <button onClick={onClick} className={`font-mono-eden text-[8px] px-2 py-0.5 border rounded transition-all ${active ? "bg-[var(--accent-green-10)] border-[var(--accent-green)]/40 text-[var(--accent-green)] font-semibold" : "border-[var(--border-gray)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"}`}>{label}</button>;
-}
-
-function Stat({ label, value, color }: { label: string; value: string; color: string }) {
   return (
-    <div className="flex-1 bg-[var(--bg-elevated)] border border-[var(--border-gray)] p-1.5 flex flex-col gap-0.5 rounded">
+    <svg className="absolute inset-0 w-full h-full" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <filter id="gl" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="6" result="b" /><feColorMatrix in="b" type="matrix" values="0 0 0 0 0.13 0 0 0 0 0.77 0 0 0 0 0.37 0 0 0 0.4 0" /><feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+        <filter id="gr" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="6" result="b" /><feColorMatrix in="b" type="matrix" values="0 0 0 0 0.94 0 0 0 0 0.27 0 0 0 0 0.27 0 0 0 0.4 0" /><feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+        <radialGradient id="bg" cx="50%" cy="50%" r="60%"><stop offset="0%" stopColor="#111122" /><stop offset="100%" stopColor="#0a0a14" /></radialGradient>
+      </defs>
+      <rect width="800" height="600" fill="url(#bg)" />
+      {bubbles.map(b => {
+        const sel = selected === b.symbol, bull = b.comp > 0;
+        const fa = 0.05 + b.absComp * 0.2, sa = 0.2 + b.absComp * 0.5;
+        return (
+          <g key={b.symbol} className="cursor-pointer" onClick={() => onSelect(b.symbol)}>
+            {b.absComp > 0.25 && <circle cx={b.cx} cy={b.cy} r={b.r + 3} fill="none" stroke={bull ? `rgba(34,197,94,${sa * 0.3})` : `rgba(239,68,68,${sa * 0.3})`} strokeWidth={5} filter={b.absComp > 0.35 ? (bull ? "url(#gl)" : "url(#gr)") : undefined} />}
+            <circle cx={b.cx} cy={b.cy} r={b.r} fill={bull ? `rgba(34,197,94,${fa})` : `rgba(239,68,68,${fa})`} stroke={sel ? (bull ? "#22c55e" : "#ef4444") : (bull ? `rgba(34,197,94,${sa})` : `rgba(239,68,68,${sa})`)} strokeWidth={sel ? 2.5 : 0.7} />
+            {b.accelerating && <circle cx={b.cx} cy={b.cy} r={b.r + 5} fill="none" stroke={bull ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)"} strokeWidth={0.5} strokeDasharray="3 4"><animateTransform attributeName="transform" type="rotate" from={`0 ${b.cx} ${b.cy}`} to={`360 ${b.cx} ${b.cy}`} dur="10s" repeatCount="indefinite" /></circle>}
+            <text x={b.cx} y={b.cy - (b.r > 24 ? 3 : 1)} textAnchor="middle" fontSize={b.r > 24 ? 10 : 7} fontWeight="600" fontFamily="'JetBrains Mono',monospace" fill={bull ? "#22c55e" : "#ef4444"}>{b.symbol.replace(".HK", "").replace(".US", "")}</text>
+            {b.r > 18 && <text x={b.cx} y={b.cy + (b.r > 24 ? 8 : 6)} textAnchor="middle" fontSize={b.r > 24 ? 8 : 6} fontFamily="'JetBrains Mono',monospace" fill={bull ? "rgba(34,197,94,0.5)" : "rgba(239,68,68,0.5)"}>{pct(String(b.comp))}</text>}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// ── 詳情面板：選中股票的完整故事 ──
+
+function DetailPanel({ data, symbol, market }: { data: Snap | null; symbol: string; market: Market }) {
+  const signal = market === "hk"
+    ? data?.top_signals?.find((s: any) => s.symbol === symbol)
+    : data?.convergence_scores?.find((c: any) => c.symbol === symbol);
+  const pressure = data?.pressures?.find((p: any) => p.symbol === symbol);
+  const chain = data?.backward_chains?.find((c: any) => c.symbol === symbol);
+  const causal = data?.causal_leaders?.find((c: any) => c.symbol === symbol);
+  const tactical = data?.tactical_cases?.find((t: any) => t.title?.startsWith(symbol));
+  const pairTrades = data?.pair_trades?.filter((pt: any) => pt.buy_symbols?.includes(symbol) || pt.sell_symbols?.includes(symbol)) || [];
+  const crossMarket = data?.cross_market_signals?.filter((cm: any) => cm.us_symbol === symbol) || [];
+
+  const comp = parseFloat(signal?.composite || signal?.dimension_composite || "0");
+  const flow = parseFloat(pressure?.capital_flow_pressure ?? pressure?.net_pressure ?? "0");
+
+  return (<>
+    {/* 數值概覽 */}
+    <div className="flex gap-1.5">
+      <MiniCard label="綜合" value={pct(comp)} color={pctColor(comp)} />
+      <MiniCard label="資金" value={flow ? pct(flow) : "—"} color={flow ? pctColor(flow) : "text-[var(--text-muted)]"} />
+      <MiniCard label="動量" value={pressure?.momentum ? pct(pressure.momentum) : "—"} color={pressure?.momentum ? pctColor(pressure.momentum) : "text-[var(--text-muted)]"} />
+    </div>
+
+    {/* 戰術判定 */}
+    {tactical && (
+      <div className={`border rounded-md p-2 ${pctBg(tactical.action === "enter" ? "1" : "-1")}`}>
+        <div className="flex justify-between items-center">
+          <span className={`font-mono-eden text-[9px] font-bold px-1.5 py-0.5 rounded ${tactical.action === "enter" ? "bg-[var(--accent-green)] text-[var(--bg-page)]" : "bg-[var(--accent-orange-20)] text-[var(--accent-orange)]"}`}>
+            {tactical.action === "enter" ? "建議進場" : "建議觀望"}
+          </span>
+          <span className="font-mono-eden text-[10px] font-bold">{pct(tactical.confidence)}</span>
+        </div>
+        <div className="font-mono-eden text-[8px] text-[var(--text-muted)] mt-1">
+          信心差距={pct(tactical.confidence_gap)} 邊際={pct(tactical.heuristic_edge)}
+        </div>
+      </div>
+    )}
+
+    {/* 回溯推理 — 為什麼在動？ */}
+    {chain && (<>
+      <SectionTitle text="為什麼在動？" />
+      <div className="font-mono-eden text-[10px] text-[var(--text-primary)] leading-relaxed">{chain.conclusion}</div>
+      <div className="flex flex-col gap-1">
+        {chain.evidence?.slice(0, 5).map((e: any, i: number) => (
+          <div key={i} className="flex justify-between items-center">
+            <span className="font-mono-eden text-[8px] text-[var(--text-secondary)] flex-1">{e.description}</span>
+            <span className={`font-mono-eden text-[8px] font-bold ml-2 ${pctColor(e.direction)}`}>{pct(e.weight)}</span>
+          </div>
+        ))}
+      </div>
+    </>)}
+
+    {/* 壓力細節 */}
+    {pressure && (<>
+      <SectionTitle text="壓力指標" />
+      <div className="flex gap-3 font-mono-eden text-[8px] text-[var(--text-muted)] flex-wrap">
+        <span>變化={pct(pressure.pressure_delta)}</span>
+        <span>持續={pressure.pressure_duration}次</span>
+        {pressure.accelerating && <span className="text-[var(--accent-orange)]">↑ 加速中</span>}
+        {pressure.buy_inst_count != null && <span>買方={pressure.buy_inst_count} 賣方={pressure.sell_inst_count}</span>}
+      </div>
+    </>)}
+
+    {/* HK: 機構活動 */}
+    {pairTrades.length > 0 && (<>
+      <SectionTitle text="機構活動" />
+      {pairTrades.slice(0, 3).map((pt: any, i: number) => (
+        <div key={i} className="font-mono-eden text-[9px]">
+          <span className={pt.sell_symbols?.includes(symbol) ? "text-[var(--accent-red)]" : "text-[var(--accent-green)]"}>
+            {pt.institution} → {pt.sell_symbols?.includes(symbol) ? "賣出" : "買入"}
+          </span>
+        </div>
+      ))}
+    </>)}
+
+    {/* 跨市場 */}
+    {crossMarket.length > 0 && (<>
+      <SectionTitle text="跨市場信號" />
+      {crossMarket.slice(0, 2).map((cm: any, i: number) => (
+        <div key={i} className="font-mono-eden text-[9px] text-[var(--accent-orange)]">
+          ← {cm.hk_symbol} 港股綜合={pct(cm.hk_composite)} 信心={pct(cm.propagation_confidence)}
+        </div>
+      ))}
+    </>)}
+
+    {/* 因果追蹤 */}
+    {causal && (<>
+      <SectionTitle text="信號主導維度" />
+      <div className="font-mono-eden text-[9px] text-[var(--text-secondary)]">
+        <span className="text-[var(--text-primary)] font-semibold">{causal.current_leader}</span> 持續 {causal.leader_streak} 次 | {causal.flips} 次翻轉
+      </div>
+    </>)}
+  </>);
+}
+
+// ── 小組件 ──
+
+function MiniCard({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div className="flex-1 bg-[var(--bg-elevated)] border border-[var(--border-gray)] p-1.5 rounded flex flex-col gap-0.5">
       <span className="font-mono-eden text-[7px] text-[var(--text-muted)]">{label}</span>
       <span className={`font-display text-sm font-bold ${color}`}>{value}</span>
+    </div>
+  );
+}
+
+function SectionTitle({ text }: { text: string }) {
+  return (
+    <div className="flex items-center gap-2 mt-1">
+      <div className="h-px flex-1 bg-[var(--border-gray)]" />
+      <span className="font-mono-eden text-[8px] font-bold text-[var(--text-muted)] tracking-wider">{text}</span>
+      <div className="h-px flex-1 bg-[var(--border-gray)]" />
     </div>
   );
 }
