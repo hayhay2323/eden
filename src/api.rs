@@ -42,6 +42,7 @@ use sha2::{Digest, Sha256};
 use time::serde::rfc3339;
 use time::OffsetDateTime;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use tower_http::services::ServeDir;
 
 use crate::external::polymarket::{
     fetch_polymarket_snapshot, load_polymarket_configs, PolymarketMarketConfig, PolymarketSnapshot,
@@ -673,6 +674,7 @@ fn build_router(state: ApiState) -> Result<Router, ApiError> {
     Ok(Router::new()
         .route("/health", get(health))
         .nest("/api", api_routes)
+        .fallback_service(ServeDir::new("static"))
         .layer(build_cors_layer()?))
 }
 
