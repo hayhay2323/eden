@@ -6,3 +6,6 @@ pub mod reasoning;
 pub mod signals;
 pub mod state_composition;
 pub mod world;
+
+#[cfg(test)]
+mod mechanism_integration_tests;
