@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "persistence")]
+use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -11,6 +13,8 @@ use longport::{Config, Market};
 use rust_decimal::Decimal;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
+#[cfg(feature = "persistence")]
+use tokio::sync::Semaphore;
 use tokio::time::Duration;
 
 use eden::action::narrative::NarrativeSnapshot;
@@ -76,6 +80,30 @@ use eden::temporal::lineage::{LineageAlignmentFilter, LineageFilters, LineageSor
 
 #[cfg(feature = "persistence")]
 const CASE_OUTCOME_RESOLUTION_LAG: u64 = 15;
+#[cfg(feature = "persistence")]
+const PERSISTENCE_MAX_IN_FLIGHT: usize = 16;
+
+#[cfg(feature = "persistence")]
+async fn spawn_bounded_persistence_task<F>(limit: &Arc<Semaphore>, label: &'static str, task: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    match limit.clone().acquire_owned().await {
+        Ok(permit) => {
+            tokio::spawn(async move {
+                let _permit = permit;
+                task.await;
+            });
+        }
+        Err(_) => {
+            eprintln!(
+                "Warning: persistence limiter closed before scheduling {}.",
+                label
+            );
+        }
+    }
+}
+
 const WATCHLIST: &[&str] = &[
     // ── User Holdings ──
     "981.HK",  // SMIC
@@ -965,6 +993,18 @@ fn build_hk_live_snapshot(
             summary: item.value.summary.clone(),
         })
         .collect::<Vec<_>>();
+    let active_position_nodes = tracker
+        .active_fingerprints()
+        .iter()
+        .map(|fingerprint| {
+            let mut node =
+                eden::ontology::ActionNode::from_hk_fingerprint(&fingerprint.symbol, fingerprint);
+            node.sector = store
+                .sector_name_for_symbol(&fingerprint.symbol)
+                .map(str::to_string);
+            node
+        })
+        .collect::<Vec<_>>();
 
     LiveSnapshot {
         tick,
@@ -974,7 +1014,8 @@ fn build_hk_live_snapshot(
         edge_count: brain.graph.edge_count(),
         hypothesis_count: reasoning_snapshot.hypotheses.len(),
         observation_count: observation_snapshot.observations.len(),
-        active_positions: tracker.active_count(),
+        active_positions: active_position_nodes.len(),
+        active_position_nodes,
         market_regime: LiveMarketRegime {
             bias: decision.market_regime.bias.as_str().to_string(),
             confidence: decision.market_regime.confidence,
@@ -2781,6 +2822,8 @@ async fn main() {
     };
     #[cfg(not(feature = "persistence"))]
     println!("Persistence feature disabled; running without SurrealDB.");
+    #[cfg(feature = "persistence")]
+    let persistence_limit = Arc::new(Semaphore::new(PERSISTENCE_MAX_IN_FLIGHT));
 
     let watchlist_symbols: Vec<Symbol> = WATCHLIST.iter().map(|s| Symbol(s.to_string())).collect();
     let polymarket_configs = match load_polymarket_configs() {
@@ -3136,37 +3179,48 @@ async fn main() {
             if let Some(latest) = history.latest() {
                 let record = latest.clone();
                 let store_ref = store.clone();
-                tokio::spawn(async move {
+                spawn_bounded_persistence_task(&persistence_limit, "write tick", async move {
                     if let Err(e) = store_ref.write_tick(&record).await {
                         eprintln!("Warning: failed to write tick: {}", e);
                     }
-                });
+                })
+                .await;
             }
             if tick % 30 == 0 {
                 let presences = links.cross_stock_presences.clone();
                 let store_ref = store.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = store_ref.write_institution_states(&presences, now).await {
-                        eprintln!("Warning: failed to write institution states: {}", e);
-                    }
-                });
+                spawn_bounded_persistence_task(
+                    &persistence_limit,
+                    "write institution states",
+                    async move {
+                        if let Err(e) = store_ref.write_institution_states(&presences, now).await {
+                            eprintln!("Warning: failed to write institution states: {}", e);
+                        }
+                    },
+                )
+                .await;
             }
             if !workflow_records.is_empty() || !workflow_events.is_empty() {
                 let workflow_records = workflow_records.clone();
                 let workflow_events = workflow_events.clone();
                 let store_ref = store.clone();
-                tokio::spawn(async move {
-                    for record in workflow_records {
-                        if let Err(e) = store_ref.write_action_workflow(&record).await {
-                            eprintln!("Warning: failed to write action workflow: {}", e);
+                spawn_bounded_persistence_task(
+                    &persistence_limit,
+                    "write action workflows",
+                    async move {
+                        for record in workflow_records {
+                            if let Err(e) = store_ref.write_action_workflow(&record).await {
+                                eprintln!("Warning: failed to write action workflow: {}", e);
+                            }
                         }
-                    }
-                    for event in workflow_events {
-                        if let Err(e) = store_ref.write_action_workflow_event(&event).await {
-                            eprintln!("Warning: failed to write action workflow event: {}", e);
+                        for event in workflow_events {
+                            if let Err(e) = store_ref.write_action_workflow_event(&event).await {
+                                eprintln!("Warning: failed to write action workflow event: {}", e);
+                            }
                         }
-                    }
-                });
+                    },
+                )
+                .await;
             }
             if !reasoning_snapshot.tactical_setups.is_empty() {
                 let tactical_setup_records = reasoning_snapshot
@@ -3175,13 +3229,18 @@ async fn main() {
                     .map(|setup| TacticalSetupRecord::from_setup(setup, now))
                     .collect::<Vec<_>>();
                 let store_ref = store.clone();
-                tokio::spawn(async move {
-                    for record in tactical_setup_records {
-                        if let Err(e) = store_ref.write_tactical_setup(&record).await {
-                            eprintln!("Warning: failed to write tactical setup: {}", e);
+                spawn_bounded_persistence_task(
+                    &persistence_limit,
+                    "write tactical setups",
+                    async move {
+                        for record in tactical_setup_records {
+                            if let Err(e) = store_ref.write_tactical_setup(&record).await {
+                                eprintln!("Warning: failed to write tactical setup: {}", e);
+                            }
                         }
-                    }
-                });
+                    },
+                )
+                .await;
             }
             if !reasoning_snapshot.hypothesis_tracks.is_empty() {
                 let hypothesis_track_records = reasoning_snapshot
@@ -3190,13 +3249,18 @@ async fn main() {
                     .map(HypothesisTrackRecord::from_track)
                     .collect::<Vec<_>>();
                 let store_ref = store.clone();
-                tokio::spawn(async move {
-                    for record in hypothesis_track_records {
-                        if let Err(e) = store_ref.write_hypothesis_track(&record).await {
-                            eprintln!("Warning: failed to write hypothesis track: {}", e);
+                spawn_bounded_persistence_task(
+                    &persistence_limit,
+                    "write hypothesis tracks",
+                    async move {
+                        for record in hypothesis_track_records {
+                            if let Err(e) = store_ref.write_hypothesis_track(&record).await {
+                                eprintln!("Warning: failed to write hypothesis track: {}", e);
+                            }
                         }
-                    }
-                });
+                    },
+                )
+                .await;
             }
         }
 
@@ -3245,14 +3309,22 @@ async fn main() {
                 if !reasoning_assessment_records.is_empty() {
                     let assessment_records = reasoning_assessment_records.clone();
                     let store_ref = store.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = store_ref
-                            .write_case_reasoning_assessments(&assessment_records)
-                            .await
-                        {
-                            eprintln!("Warning: failed to write case reasoning assessments: {}", e);
-                        }
-                    });
+                    spawn_bounded_persistence_task(
+                        &persistence_limit,
+                        "write case reasoning assessments",
+                        async move {
+                            if let Err(e) = store_ref
+                                .write_case_reasoning_assessments(&assessment_records)
+                                .await
+                            {
+                                eprintln!(
+                                    "Warning: failed to write case reasoning assessments: {}",
+                                    e
+                                );
+                            }
+                        },
+                    )
+                    .await;
                 }
 
                 let realized_outcomes = compute_case_realized_outcomes(
@@ -3266,14 +3338,19 @@ async fn main() {
                 if !realized_outcomes.is_empty() {
                     let realized_outcomes = realized_outcomes.clone();
                     let store_ref = store.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = store_ref
-                            .write_case_realized_outcomes(&realized_outcomes)
-                            .await
-                        {
-                            eprintln!("Warning: failed to write case realized outcomes: {}", e);
-                        }
-                    });
+                    spawn_bounded_persistence_task(
+                        &persistence_limit,
+                        "write case realized outcomes",
+                        async move {
+                            if let Err(e) = store_ref
+                                .write_case_realized_outcomes(&realized_outcomes)
+                                .await
+                            {
+                                eprintln!("Warning: failed to write case realized outcomes: {}", e);
+                            }
+                        },
+                    )
+                    .await;
                 }
             }
         }
@@ -3290,14 +3367,19 @@ async fn main() {
                 &lineage_stats,
             );
             let store_ref = store.clone();
-            tokio::spawn(async move {
-                if let Err(e) = store_ref.write_lineage_snapshot(&lineage_snapshot).await {
-                    eprintln!("Warning: failed to write lineage snapshot: {}", e);
-                }
-                if let Err(e) = store_ref.write_lineage_metric_rows(&lineage_rows).await {
-                    eprintln!("Warning: failed to write lineage metric rows: {}", e);
-                }
-            });
+            spawn_bounded_persistence_task(
+                &persistence_limit,
+                "write lineage snapshot",
+                async move {
+                    if let Err(e) = store_ref.write_lineage_snapshot(&lineage_snapshot).await {
+                        eprintln!("Warning: failed to write lineage snapshot: {}", e);
+                    }
+                    if let Err(e) = store_ref.write_lineage_metric_rows(&lineage_rows).await {
+                        eprintln!("Warning: failed to write lineage metric rows: {}", e);
+                    }
+                },
+            )
+            .await;
         }
 
         let bootstrap_mode = readiness.bootstrap_mode(tick);

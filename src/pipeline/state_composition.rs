@@ -55,7 +55,8 @@ pub fn compose_states(predicates: &[AtomicPredicate]) -> Vec<CompositeState> {
             &[
                 (AtomicPredicateKind::SignalRecurs, dec!(0.35)),
                 (AtomicPredicateKind::ConfidenceBuilds, dec!(0.35)),
-                (AtomicPredicateKind::PressurePersists, dec!(0.30)),
+                (AtomicPredicateKind::PressurePersists, dec!(0.20)),
+                (AtomicPredicateKind::PositionReinforcement, dec!(0.10)),
             ],
         ),
         composite_state(
@@ -73,7 +74,8 @@ pub fn compose_states(predicates: &[AtomicPredicate]) -> Vec<CompositeState> {
             &[
                 (AtomicPredicateKind::StructuralDegradation, dec!(0.45)),
                 (AtomicPredicateKind::StressAccelerating, dec!(0.30)),
-                (AtomicPredicateKind::PriceReasoningDivergence, dec!(0.25)),
+                (AtomicPredicateKind::PriceReasoningDivergence, dec!(0.15)),
+                (AtomicPredicateKind::ExitConditionForming, dec!(0.10)),
             ],
         ),
         composite_state(
@@ -81,7 +83,8 @@ pub fn compose_states(predicates: &[AtomicPredicate]) -> Vec<CompositeState> {
             &scores,
             &[
                 (AtomicPredicateKind::LeaderFlipDetected, dec!(0.55)),
-                (AtomicPredicateKind::CounterevidencePresent, dec!(0.45)),
+                (AtomicPredicateKind::CounterevidencePresent, dec!(0.25)),
+                (AtomicPredicateKind::PositionConflict, dec!(0.20)),
             ],
         ),
         composite_state(
@@ -107,7 +110,8 @@ pub fn compose_states(predicates: &[AtomicPredicate]) -> Vec<CompositeState> {
             &[
                 (AtomicPredicateKind::LiquidityImbalance, dec!(0.50)),
                 (AtomicPredicateKind::PressurePersists, dec!(0.30)),
-                (AtomicPredicateKind::SourceConcentrated, dec!(0.20)),
+                (AtomicPredicateKind::SourceConcentrated, dec!(0.10)),
+                (AtomicPredicateKind::ConcentrationRisk, dec!(0.10)),
             ],
         ),
         composite_state(

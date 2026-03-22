@@ -551,8 +551,16 @@ fn event_driven_fires_on_strong_event_catalyst() {
             cross_market_propagation: None,
         })
         .pressure(dec!(0.60), 6, true)
-        .event("earnings_beat", dec!(0.90), "9988.HK quarterly earnings significantly exceeded analyst estimates")
-        .event("analyst_upgrade", dec!(0.85), "9988.HK receives major analyst upgrade with raised price target")
+        .event(
+            "earnings_beat",
+            dec!(0.90),
+            "9988.HK quarterly earnings significantly exceeded analyst estimates",
+        )
+        .event(
+            "analyst_upgrade",
+            dec!(0.85),
+            "9988.HK receives major analyst upgrade with raised price target",
+        )
         .regime("neutral")
         .assert_primary(MechanismCandidateKind::EventDrivenDislocation);
 }

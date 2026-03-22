@@ -872,7 +872,8 @@ mod tests {
 
     #[test]
     fn cluster_age_filter_requires_3_ticks() {
-        // Two similar stocks — they should cluster at tick 1 (prev = None, no age filter)
+        // Two similar stocks plus one dissimilar stock ensure the similar pair
+        // remains above the stock-graph median cutoff.
         let snap = make_snapshot(vec![
             (
                 sym("AAPL.US"),
@@ -881,6 +882,10 @@ mod tests {
             (
                 sym("MSFT.US"),
                 make_dims(dec!(0.8), dec!(0.7), dec!(0.5), dec!(0.1), dec!(0.2)),
+            ),
+            (
+                sym("XOM.US"),
+                make_dims(dec!(-0.4), dec!(0.1), dec!(-0.3), dec!(0), dec!(0.1)),
             ),
         ]);
         let graph = make_graph(&snap, &HashMap::new());

@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 
 use crate::ontology::objects::Symbol;
+use crate::ontology::reasoning::{ActionDirection, ActionNode, ActionNodeStage};
 use crate::us::common::dimension_composite;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 use crate::us::pipeline::dimensions::{UsDimensionSnapshot, UsSymbolDimensions};
+
+use super::workflow::UsActionWorkflow;
 
 // ── Structural fingerprint ──
 
@@ -45,6 +48,67 @@ impl UsStructuralFingerprint {
             entry_capital_flow: dims.capital_flow_direction,
             entry_momentum: dims.price_momentum,
             entry_volume: dims.volume_profile,
+        }
+    }
+}
+
+impl ActionNode {
+    pub fn from_us_position(
+        fingerprint: &UsStructuralFingerprint,
+        workflow: Option<&UsActionWorkflow>,
+        current_tick: u64,
+    ) -> Self {
+        let direction = if fingerprint.entry_composite > Decimal::ZERO {
+            ActionDirection::Long
+        } else if fingerprint.entry_composite < Decimal::ZERO {
+            ActionDirection::Short
+        } else {
+            ActionDirection::Neutral
+        };
+
+        Self {
+            workflow_id: workflow
+                .map(|workflow| workflow.workflow_id.clone())
+                .unwrap_or_else(|| format!("us-position:{}", fingerprint.symbol)),
+            symbol: fingerprint.symbol.clone(),
+            market: fingerprint.symbol.market(),
+            sector: None,
+            stage: workflow
+                .map(|workflow| match workflow.stage {
+                    super::workflow::UsActionStage::Suggested => ActionNodeStage::Suggested,
+                    super::workflow::UsActionStage::Confirmed => ActionNodeStage::Confirmed,
+                    super::workflow::UsActionStage::Executed => ActionNodeStage::Executed,
+                    super::workflow::UsActionStage::Monitoring => ActionNodeStage::Monitoring,
+                    super::workflow::UsActionStage::Reviewed => ActionNodeStage::Reviewed,
+                })
+                .unwrap_or(ActionNodeStage::Monitoring),
+            direction,
+            entry_confidence: fingerprint.entry_composite.abs(),
+            current_confidence: workflow
+                .map(|workflow| workflow.current_confidence)
+                .unwrap_or(fingerprint.entry_composite.abs()),
+            entry_price: workflow
+                .and_then(|workflow| workflow.entry_price)
+                .or(fingerprint.entry_price),
+            pnl: workflow.and_then(|workflow| workflow.pnl),
+            age_ticks: current_tick.saturating_sub(fingerprint.entry_tick),
+            degradation_score: workflow.and_then(|workflow| {
+                workflow.degradation.as_ref().map(|degradation| {
+                    degradation
+                        .composite_drift
+                        .abs()
+                        .max(degradation.momentum_decay)
+                        .max(degradation.volume_dry_up)
+                })
+            }),
+            exit_forming: workflow
+                .and_then(|workflow| {
+                    workflow
+                        .degradation
+                        .as_ref()
+                        .map(|degradation| degradation.should_exit)
+                })
+                .unwrap_or(false),
         }
     }
 }

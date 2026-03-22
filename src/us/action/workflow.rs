@@ -1,5 +1,5 @@
 use crate::ontology::objects::Symbol;
-use crate::ontology::reasoning::TacticalSetup;
+use crate::ontology::reasoning::{ActionDirection, ActionNode, ActionNodeStage, TacticalSetup};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -110,6 +110,16 @@ impl std::fmt::Display for UsWorkflowTransitionError {
 }
 
 impl std::error::Error for UsWorkflowTransitionError {}
+
+fn action_node_stage(stage: UsActionStage) -> ActionNodeStage {
+    match stage {
+        UsActionStage::Suggested => ActionNodeStage::Suggested,
+        UsActionStage::Confirmed => ActionNodeStage::Confirmed,
+        UsActionStage::Executed => ActionNodeStage::Executed,
+        UsActionStage::Monitoring => ActionNodeStage::Monitoring,
+        UsActionStage::Reviewed => ActionNodeStage::Reviewed,
+    }
+}
 
 impl UsActionWorkflow {
     /// Create a new workflow from a tactical setup at a given tick and optional entry price.
@@ -249,6 +259,38 @@ impl UsActionWorkflow {
             "ticks_held": self.degradation.as_ref().map(|d| d.ticks_held),
             "notes": self.notes,
         })
+    }
+}
+
+impl ActionNode {
+    pub fn from_us_workflow(workflow: &UsActionWorkflow, current_tick: u64) -> Self {
+        Self {
+            workflow_id: workflow.workflow_id.clone(),
+            symbol: workflow.symbol.clone(),
+            market: workflow.symbol.market(),
+            sector: None,
+            stage: action_node_stage(workflow.stage),
+            // US workflows do not currently store signed trade direction.
+            // Keep this neutral until Phase 3d unifies workflow directionality.
+            direction: ActionDirection::Neutral,
+            entry_confidence: workflow.confidence_at_entry,
+            current_confidence: workflow.current_confidence,
+            entry_price: workflow.entry_price,
+            pnl: workflow.pnl,
+            age_ticks: current_tick.saturating_sub(workflow.entry_tick),
+            degradation_score: workflow.degradation.as_ref().map(|degradation| {
+                degradation
+                    .composite_drift
+                    .abs()
+                    .max(degradation.momentum_decay)
+                    .max(degradation.volume_dry_up)
+            }),
+            exit_forming: workflow
+                .degradation
+                .as_ref()
+                .map(|degradation| degradation.should_exit)
+                .unwrap_or(false),
+        }
     }
 }
 
@@ -472,5 +514,18 @@ mod tests {
         let err = wf.execute(dec!(100), 1).unwrap_err();
         assert_eq!(err.expected, UsActionStage::Confirmed);
         assert_eq!(err.actual, UsActionStage::Suggested);
+    }
+
+    #[test]
+    fn action_node_from_us_workflow_preserves_market_and_age() {
+        let setup = make_setup("NVDA.US", dec!(0.8));
+        let wf = UsActionWorkflow::from_setup(&setup, 10, Some(dec!(120)));
+
+        let node = ActionNode::from_us_workflow(&wf, 25);
+
+        assert_eq!(node.market, crate::ontology::Market::Us);
+        assert_eq!(node.stage, ActionNodeStage::Suggested);
+        assert_eq!(node.direction, ActionDirection::Neutral);
+        assert_eq!(node.age_ticks, 15);
     }
 }

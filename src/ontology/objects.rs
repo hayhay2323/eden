@@ -15,6 +15,13 @@ pub struct InstitutionId(pub i32);
 #[serde(transparent)]
 pub struct Symbol(pub String);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Market {
+    Hk,
+    Us,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SectorId(pub String);
 
@@ -36,9 +43,33 @@ impl fmt::Display for Symbol {
     }
 }
 
+impl fmt::Display for Market {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Hk => "hk",
+            Self::Us => "us",
+        })
+    }
+}
+
 impl fmt::Display for SectorId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl Symbol {
+    /// Convenience suffix-based market inference.
+    ///
+    /// This is not authoritative classification. It assumes every non-`.HK`
+    /// symbol belongs to the US market, so callers should prefer store/watchlist
+    /// metadata when that distinction matters semantically.
+    pub fn market(&self) -> Market {
+        if self.0.ends_with(".HK") {
+            Market::Hk
+        } else {
+            Market::Us
+        }
     }
 }
 
@@ -87,6 +118,7 @@ pub struct Broker {
 #[derive(Debug, Clone)]
 pub struct Stock {
     pub symbol: Symbol,
+    pub market: Market,
     pub name_en: String,
     pub name_cn: String,
     pub name_hk: String,
@@ -126,6 +158,21 @@ mod tests {
     #[test]
     fn symbol_display() {
         assert_eq!(Symbol("700.HK".into()).to_string(), "700.HK");
+    }
+
+    #[test]
+    fn symbol_market_detects_hk() {
+        assert_eq!(Symbol("700.HK".into()).market(), Market::Hk);
+    }
+
+    #[test]
+    fn symbol_market_detects_us() {
+        assert_eq!(Symbol("AAPL.US".into()).market(), Market::Us);
+    }
+
+    #[test]
+    fn symbol_market_defaults_non_hk_suffixes_to_us() {
+        assert_eq!(Symbol("INVALID".into()).market(), Market::Us);
     }
 
     #[test]

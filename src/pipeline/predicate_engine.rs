@@ -437,7 +437,11 @@ fn source_concentrated(inputs: &PredicateInputs<'_>) -> AtomicPredicate {
             let c = evidence_concentration(&chain.evidence);
             // A chain with no evidence items is structurally concentrated
             // (single implied driver), so use a moderate default.
-            if chain.evidence.is_empty() { dec!(0.55) } else { c }
+            if chain.evidence.is_empty() {
+                dec!(0.55)
+            } else {
+                c
+            }
         })
         .unwrap_or(Decimal::ZERO);
     let leader = inputs

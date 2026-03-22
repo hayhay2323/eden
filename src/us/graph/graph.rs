@@ -346,9 +346,14 @@ mod tests {
                 sym("MSFT.US"),
                 make_dims(dec!(0.5), dec!(0.8), dec!(0.3), dec!(0.1), dec!(0.2)),
             ),
+            (
+                sym("XOM.US"),
+                make_dims(dec!(-0.5), dec!(0.1), dec!(-0.2), dec!(0), dec!(0.1)),
+            ),
         ]);
         let g = UsGraph::compute(&snap, &HashMap::new(), &HashMap::new());
-        // Identical dimensions => similarity = 1.0, should create edges
+        // One highly similar pair plus a dissimilar third stock ensures
+        // the top pair stays strictly above the median cutoff.
         assert!(g.graph.edge_count() > 0);
     }
 

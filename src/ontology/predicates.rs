@@ -22,6 +22,10 @@ pub enum AtomicPredicateKind {
     SectorRotationPressure,
     LeaderFlipDetected,
     CounterevidencePresent,
+    PositionConflict,
+    PositionReinforcement,
+    ConcentrationRisk,
+    ExitConditionForming,
     HumanRejected,
 }
 
@@ -44,6 +48,10 @@ impl AtomicPredicateKind {
             Self::SectorRotationPressure => "Sector Rotation Pressure",
             Self::LeaderFlipDetected => "Leader Flip Detected",
             Self::CounterevidencePresent => "Counterevidence Present",
+            Self::PositionConflict => "Position Conflict",
+            Self::PositionReinforcement => "Position Reinforcement",
+            Self::ConcentrationRisk => "Concentration Risk",
+            Self::ExitConditionForming => "Exit Condition Forming",
             Self::HumanRejected => "Human Rejected",
         }
     }
@@ -65,9 +73,12 @@ impl AtomicPredicateKind {
             Self::StructuralDegradation | Self::StressAccelerating => {
                 GoverningLawKind::ThresholdTransition
             }
-            Self::LeaderFlipDetected | Self::CounterevidencePresent => {
-                GoverningLawKind::Competition
-            }
+            Self::LeaderFlipDetected
+            | Self::CounterevidencePresent
+            | Self::PositionConflict
+            | Self::ConcentrationRisk => GoverningLawKind::Competition,
+            Self::PositionReinforcement => GoverningLawKind::Persistence,
+            Self::ExitConditionForming => GoverningLawKind::ThresholdTransition,
             Self::HumanRejected => GoverningLawKind::ReflexiveCalibration,
         }
     }

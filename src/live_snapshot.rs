@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use crate::ontology::reasoning::ActionNode;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::io::AsyncWriteExt;
@@ -22,6 +23,8 @@ pub struct LiveSnapshot {
     pub hypothesis_count: usize,
     pub observation_count: usize,
     pub active_positions: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_position_nodes: Vec<ActionNode>,
     #[serde(deserialize_with = "deserialize_market_regime")]
     pub market_regime: LiveMarketRegime,
     pub stress: LiveStressSnapshot,
@@ -320,6 +323,7 @@ mod tests {
             hypothesis_count: 3,
             observation_count: 4,
             active_positions: 0,
+            active_position_nodes: vec![],
             market_regime: LiveMarketRegime {
                 bias: "neutral".into(),
                 confidence: Decimal::ZERO,

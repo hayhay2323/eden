@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use time::serde::rfc3339;
 use time::OffsetDateTime;
 
-use super::{ProvenanceMetadata, Symbol};
+use super::{Market, ProvenanceMetadata, Symbol};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct DecisionLineage {
@@ -129,6 +129,45 @@ pub struct TacticalSetup {
     pub entry_rationale: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub risk_notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionDirection {
+    Long,
+    Short,
+    Neutral,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionNodeStage {
+    Suggested,
+    Confirmed,
+    Executed,
+    Monitoring,
+    Reviewed,
+}
+
+/// Market-neutral view of an active or historical action for reasoning/predicate inputs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActionNode {
+    pub workflow_id: String,
+    pub symbol: Symbol,
+    pub market: Market,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sector: Option<String>,
+    pub stage: ActionNodeStage,
+    pub direction: ActionDirection,
+    pub entry_confidence: Decimal,
+    pub current_confidence: Decimal,
+    pub entry_price: Option<Decimal>,
+    pub pnl: Option<Decimal>,
+    pub age_ticks: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub degradation_score: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exit_forming: bool,
 }
 
 /// Cross-tick state for a tactical case's leading hypothesis.

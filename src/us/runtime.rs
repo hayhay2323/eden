@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+#[cfg(feature = "persistence")]
+use std::future::Future;
 use std::sync::Arc;
 
 use crate::live_snapshot::{
@@ -14,7 +16,7 @@ use crate::ontology::links::{
 };
 use crate::ontology::objects::{SectorId, Stock, Symbol};
 use crate::ontology::reasoning::TacticalSetup;
-use crate::ontology::store::ObjectStore;
+use crate::ontology::store::{us_sector_names, us_symbol_sector, ObjectStore};
 #[cfg(feature = "persistence")]
 use crate::persistence::store::EdenStore;
 #[cfg(feature = "persistence")]
@@ -42,7 +44,7 @@ use crate::us::temporal::buffer::UsTickHistory;
 use crate::us::temporal::causality::compute_causal_timelines;
 use crate::us::temporal::lineage::{compute_us_lineage_stats, UsLineageStats};
 use crate::us::temporal::record::{UsSymbolSignals, UsTickRecord};
-use crate::us::watchlist::{us_symbol_sector, US_SECTOR_NAMES, US_WATCHLIST};
+use crate::us::watchlist::US_WATCHLIST;
 use chrono::{Datelike, NaiveDate, TimeZone, Utc, Weekday};
 use futures::stream::{self, StreamExt};
 use longport::quote::{
@@ -53,6 +55,8 @@ use longport::Config;
 use rust_decimal::Decimal;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
+#[cfg(feature = "persistence")]
+use tokio::sync::Semaphore;
 use tokio::time::Duration;
 
 const DEBOUNCE_MS: u64 = 2000;
@@ -60,6 +64,8 @@ const US_SIGNAL_RECORD_CAP: usize = 4_000;
 const US_SIGNAL_RECORD_RETENTION_TICKS: u64 = 240;
 const US_WORKFLOW_CAP: usize = 512;
 const TRADE_BUFFER_CAP_PER_SYMBOL: usize = 2_000;
+#[cfg(feature = "persistence")]
+const US_PERSISTENCE_MAX_IN_FLIGHT: usize = 16;
 // US candlestick extraction uses the same 8% saturation point as HK: beyond that
 // the range is clearly "expanded" already and more width should not add more weight.
 fn candle_range_normalizer() -> Decimal {
@@ -136,6 +142,7 @@ impl UsLiveState {
 // ── US RestSnapshot ──
 
 struct UsRestSnapshot {
+    quotes: HashMap<Symbol, SecurityQuote>,
     calc_indexes: HashMap<Symbol, SecurityCalcIndex>,
     capital_flows: HashMap<Symbol, Vec<longport::quote::CapitalFlowLine>>,
 }
@@ -143,6 +150,7 @@ struct UsRestSnapshot {
 impl UsRestSnapshot {
     fn empty() -> Self {
         Self {
+            quotes: HashMap::new(),
             calc_indexes: HashMap::new(),
             capital_flows: HashMap::new(),
         }
@@ -160,7 +168,25 @@ impl TickState<PushEvent, UsRestSnapshot> for UsTickState<'_> {
     }
 
     fn apply_update(&mut self, update: UsRestSnapshot) {
-        *self.rest = update;
+        let UsRestSnapshot {
+            quotes,
+            calc_indexes,
+            capital_flows,
+        } = update;
+        for (symbol, quote) in quotes {
+            let missing_reference = self
+                .live
+                .quotes
+                .get(&symbol)
+                .map(|existing| existing.prev_close == Decimal::ZERO)
+                .unwrap_or(true);
+            if missing_reference {
+                self.live.quotes.insert(symbol, quote);
+            }
+        }
+        self.rest.quotes = HashMap::new();
+        self.rest.calc_indexes = calc_indexes;
+        self.rest.capital_flows = capital_flows;
         self.live.dirty = true;
     }
 
@@ -188,17 +214,22 @@ fn market_status_from_trade_status(status: TradeStatus) -> MarketStatus {
 
 fn build_quotes(raw: &HashMap<Symbol, SecurityQuote>) -> Vec<QuoteObservation> {
     raw.iter()
-        .map(|(symbol, q)| QuoteObservation {
-            symbol: symbol.clone(),
-            last_done: q.last_done,
-            prev_close: q.prev_close,
-            open: q.open,
-            high: q.high,
-            low: q.low,
-            volume: q.volume,
-            turnover: q.turnover,
-            timestamp: q.timestamp,
-            market_status: market_status_from_trade_status(q.trade_status),
+        .filter_map(|(symbol, q)| {
+            if q.prev_close == Decimal::ZERO {
+                return None;
+            }
+            Some(QuoteObservation {
+                symbol: symbol.clone(),
+                last_done: q.last_done,
+                prev_close: q.prev_close,
+                open: q.open,
+                high: q.high,
+                low: q.low,
+                volume: q.volume,
+                turnover: q.turnover,
+                timestamp: q.timestamp,
+                market_status: market_status_from_trade_status(q.trade_status),
+            })
         })
         .collect()
 }
@@ -308,11 +339,7 @@ fn build_candlesticks(
 }
 
 fn us_sector_name(store: &Arc<ObjectStore>, symbol: &Symbol) -> Option<String> {
-    let sector_id = store.stocks.get(symbol)?.sector_id.as_ref()?;
-    store
-        .sectors
-        .get(sector_id)
-        .map(|sector| sector.name.clone())
+    store.sector_name_for_symbol(symbol).map(str::to_string)
 }
 
 // ── Runtime entry ──
@@ -395,6 +422,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     };
+    #[cfg(feature = "persistence")]
+    let persistence_limit = Arc::new(Semaphore::new(US_PERSISTENCE_MAX_IN_FLIGHT));
 
     println!(
         "\nReal-time US monitoring active (debounce: {}ms)\n",
@@ -601,11 +630,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ref store) = eden_store {
             let store_ref = store.clone();
             let record = tick_record.clone();
-            tokio::spawn(async move {
+            spawn_bounded_persistence_task(&persistence_limit, "write US tick", async move {
                 if let Err(error) = store_ref.write_us_tick(&record).await {
                     eprintln!("Warning: failed to write US tick: {}", error);
                 }
-            });
+            })
+            .await;
         }
         tick_history.push(tick_record);
 
@@ -664,14 +694,19 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     &lineage_stats,
                 );
                 let store_ref = store.clone();
-                tokio::spawn(async move {
-                    if let Err(error) = store_ref.write_us_lineage_snapshot(&snapshot).await {
-                        eprintln!("Warning: failed to write US lineage snapshot: {}", error);
-                    }
-                    if let Err(error) = store_ref.write_us_lineage_metric_rows(&rows).await {
-                        eprintln!("Warning: failed to write US lineage metric rows: {}", error);
-                    }
-                });
+                spawn_bounded_persistence_task(
+                    &persistence_limit,
+                    "write US lineage snapshot",
+                    async move {
+                        if let Err(error) = store_ref.write_us_lineage_snapshot(&snapshot).await {
+                            eprintln!("Warning: failed to write US lineage snapshot: {}", error);
+                        }
+                        if let Err(error) = store_ref.write_us_lineage_metric_rows(&rows).await {
+                            eprintln!("Warning: failed to write US lineage metric rows: {}", error);
+                        }
+                    },
+                )
+                .await;
             }
         }
 
@@ -814,6 +849,19 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         sorted_events.sort_by(|a, b| b.value.magnitude.cmp(&a.value.magnitude));
         let mut sorted_convergence: Vec<_> = decision.convergence_scores.iter().collect();
         sorted_convergence.sort_by(|a, b| b.1.composite.abs().cmp(&a.1.composite.abs()));
+        let active_position_nodes = position_tracker
+            .active_fingerprints()
+            .into_iter()
+            .map(|fingerprint| {
+                let workflow = workflows
+                    .iter()
+                    .find(|workflow| workflow.symbol == fingerprint.symbol);
+                let mut node =
+                    crate::ontology::ActionNode::from_us_position(fingerprint, workflow, tick);
+                node.sector = us_sector_name(&store, &fingerprint.symbol);
+                node
+            })
+            .collect::<Vec<_>>();
 
         let live_snapshot = LiveSnapshot {
             tick,
@@ -823,7 +871,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             edge_count: graph.graph.edge_count(),
             hypothesis_count: reasoning.hypotheses.len(),
             observation_count: obs_snapshot.observations.len(),
-            active_positions: position_tracker.active_fingerprints().len(),
+            active_positions: active_position_nodes.len(),
+            active_position_nodes,
             market_regime: LiveMarketRegime {
                 bias: decision.market_regime.bias.as_str().to_string(),
                 confidence: decision.market_regime.confidence,
@@ -1209,6 +1258,108 @@ mod tests {
         prune_us_workflows(&mut workflows);
         assert!(workflows.len() <= US_WORKFLOW_CAP);
     }
+
+    #[test]
+    fn build_quotes_skips_missing_prev_close() {
+        let raw = HashMap::from([
+            (
+                Symbol("AAPL.US".into()),
+                SecurityQuote {
+                    symbol: "AAPL.US".into(),
+                    last_done: dec!(180),
+                    prev_close: Decimal::ZERO,
+                    open: dec!(179),
+                    high: dec!(181),
+                    low: dec!(178),
+                    timestamp: time::OffsetDateTime::UNIX_EPOCH,
+                    volume: 100,
+                    turnover: dec!(18_000),
+                    trade_status: TradeStatus::Normal,
+                    pre_market_quote: None,
+                    post_market_quote: None,
+                    overnight_quote: None,
+                },
+            ),
+            (
+                Symbol("MSFT.US".into()),
+                SecurityQuote {
+                    symbol: "MSFT.US".into(),
+                    last_done: dec!(410),
+                    prev_close: dec!(400),
+                    open: dec!(402),
+                    high: dec!(412),
+                    low: dec!(399),
+                    timestamp: time::OffsetDateTime::UNIX_EPOCH,
+                    volume: 100,
+                    turnover: dec!(41_000),
+                    trade_status: TradeStatus::Normal,
+                    pre_market_quote: None,
+                    post_market_quote: None,
+                    overnight_quote: None,
+                },
+            ),
+        ]);
+
+        let quotes = build_quotes(&raw);
+        assert_eq!(quotes.len(), 1);
+        assert_eq!(quotes[0].symbol, Symbol("MSFT.US".into()));
+    }
+
+    #[test]
+    fn rest_update_backfills_missing_prev_close() {
+        let mut live = UsLiveState::new();
+        live.quotes.insert(
+            Symbol("AAPL.US".into()),
+            SecurityQuote {
+                symbol: "AAPL.US".into(),
+                last_done: dec!(180),
+                prev_close: Decimal::ZERO,
+                open: dec!(179),
+                high: dec!(181),
+                low: dec!(178),
+                timestamp: time::OffsetDateTime::UNIX_EPOCH,
+                volume: 100,
+                turnover: dec!(18_000),
+                trade_status: TradeStatus::Normal,
+                pre_market_quote: None,
+                post_market_quote: None,
+                overnight_quote: None,
+            },
+        );
+        let mut rest = UsRestSnapshot::empty();
+        let mut tick_state = UsTickState {
+            live: &mut live,
+            rest: &mut rest,
+        };
+
+        tick_state.apply_update(UsRestSnapshot {
+            quotes: HashMap::from([(
+                Symbol("AAPL.US".into()),
+                SecurityQuote {
+                    symbol: "AAPL.US".into(),
+                    last_done: dec!(181),
+                    prev_close: dec!(175),
+                    open: dec!(176),
+                    high: dec!(182),
+                    low: dec!(174),
+                    timestamp: time::OffsetDateTime::UNIX_EPOCH,
+                    volume: 120,
+                    turnover: dec!(21_000),
+                    trade_status: TradeStatus::Normal,
+                    pre_market_quote: None,
+                    post_market_quote: None,
+                    overnight_quote: None,
+                },
+            )]),
+            calc_indexes: HashMap::new(),
+            capital_flows: HashMap::new(),
+        });
+
+        assert_eq!(
+            tick_state.live.quotes[&Symbol("AAPL.US".into())].prev_close,
+            dec!(175)
+        );
+    }
 }
 
 fn prune_us_signal_records(records: &mut Vec<UsSignalRecord>, current_tick: u64) {
@@ -1319,19 +1470,23 @@ async fn initialize_us_store(ctx: &QuoteContext, watchlist: &[Symbol]) -> Arc<Ob
 
     let stocks: Vec<Stock> = static_infos
         .into_iter()
-        .map(|info| Stock {
-            symbol: Symbol(info.symbol.clone()),
-            name_en: info.name_en.clone(),
-            name_cn: info.name_cn.clone(),
-            name_hk: info.name_hk.clone(),
-            exchange: info.exchange.clone(),
-            lot_size: info.lot_size,
-            sector_id: us_symbol_sector(&info.symbol).map(|s| SectorId(s.into())),
-            total_shares: info.total_shares,
-            circulating_shares: info.circulating_shares,
-            eps_ttm: info.eps_ttm,
-            bps: info.bps,
-            dividend_yield: info.dividend_yield,
+        .map(|info| {
+            let symbol = Symbol(info.symbol.clone());
+            Stock {
+                market: symbol.market(),
+                symbol,
+                name_en: info.name_en.clone(),
+                name_cn: info.name_cn.clone(),
+                name_hk: info.name_hk.clone(),
+                exchange: info.exchange.clone(),
+                lot_size: info.lot_size,
+                sector_id: us_symbol_sector(&info.symbol).map(|s| SectorId(s.into())),
+                total_shares: info.total_shares,
+                circulating_shares: info.circulating_shares,
+                eps_ttm: info.eps_ttm,
+                bps: info.bps,
+                dividend_yield: info.dividend_yield,
+            }
         })
         .collect();
 
@@ -1339,7 +1494,7 @@ async fn initialize_us_store(ctx: &QuoteContext, watchlist: &[Symbol]) -> Arc<Ob
         stocks.into_iter().map(|s| (s.symbol.clone(), s)).collect();
 
     // Build sector store from our static mapping
-    let sectors: HashMap<SectorId, crate::ontology::objects::Sector> = US_SECTOR_NAMES
+    let sectors: HashMap<SectorId, crate::ontology::objects::Sector> = us_sector_names()
         .iter()
         .map(|(id, name)| {
             (
@@ -1409,9 +1564,26 @@ async fn fetch_us_rest_data(ctx: &QuoteContext, watchlist: &[Symbol]) -> UsRestS
         }
     };
 
-    let (flow_results, calc_indexes) = tokio::join!(flow_future, calc_future);
+    let quote_future = async {
+        match ctx
+            .quote(watchlist.iter().map(|s| s.0.clone()).collect::<Vec<_>>())
+            .await
+        {
+            Ok(quotes) => quotes
+                .into_iter()
+                .map(|quote| (Symbol(quote.symbol.clone()), quote))
+                .collect(),
+            Err(e) => {
+                eprintln!("Warning: US quote batch failed: {}", e);
+                HashMap::new()
+            }
+        }
+    };
+
+    let (flow_results, calc_indexes, quotes) = tokio::join!(flow_future, calc_future, quote_future);
 
     UsRestSnapshot {
+        quotes,
         calc_indexes,
         capital_flows: flow_results.into_iter().flatten().collect(),
     }
@@ -1429,5 +1601,26 @@ async fn read_cross_market_signals(now: time::OffsetDateTime) -> Vec<CrossMarket
             compute_cross_market_signals(&hk_snapshot, minutes)
         }
         Err(_) => Vec::new(), // HK not running — no cross-market signals
+    }
+}
+
+#[cfg(feature = "persistence")]
+async fn spawn_bounded_persistence_task<F>(limit: &Arc<Semaphore>, label: &'static str, task: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    match limit.clone().acquire_owned().await {
+        Ok(permit) => {
+            tokio::spawn(async move {
+                let _permit = permit;
+                task.await;
+            });
+        }
+        Err(_) => {
+            eprintln!(
+                "Warning: US persistence limiter closed before scheduling {}.",
+                label
+            );
+        }
     }
 }

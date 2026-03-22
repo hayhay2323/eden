@@ -1091,6 +1091,7 @@ fn build_summary_reasoning_profile(
     let cross_market_anomalies = relevant_cross_market_anomalies(snapshot, &tactical_case.symbol);
     let predicates = derive_atomic_predicates(&PredicateInputs {
         tactical_case,
+        active_positions: &snapshot.active_position_nodes,
         chain,
         pressure,
         signal,
@@ -2402,6 +2403,7 @@ mod tests {
             hypothesis_count: 1,
             observation_count: 1,
             active_positions: 0,
+            active_position_nodes: vec![],
             market_regime: LiveMarketRegime {
                 bias: "risk_on".into(),
                 confidence: dec!(0.6),

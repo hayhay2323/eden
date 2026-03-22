@@ -10,6 +10,7 @@ use crate::external::polymarket::{PolymarketBias, PolymarketPrior, PolymarketSna
 use crate::math::{clamp_unit_interval, cosine_similarity, median};
 use crate::ontology::links::LinkSnapshot;
 use crate::ontology::objects::{InstitutionId, SectorId, Symbol};
+use crate::ontology::reasoning::{ActionDirection, ActionNode, ActionNodeStage};
 use crate::ontology::store::ObjectStore;
 use crate::pipeline::dimensions::SymbolDimensions;
 
@@ -190,6 +191,38 @@ impl StructuralFingerprint {
             correlated_stocks,
             entry_dimensions: stock_node.dimensions.clone(),
         })
+    }
+}
+
+impl ActionNode {
+    pub fn from_hk_fingerprint(symbol: &Symbol, fingerprint: &StructuralFingerprint) -> Self {
+        let direction = if fingerprint.entry_composite > Decimal::ZERO {
+            ActionDirection::Long
+        } else if fingerprint.entry_composite < Decimal::ZERO {
+            ActionDirection::Short
+        } else {
+            ActionDirection::Neutral
+        };
+
+        Self {
+            workflow_id: format!("hk-position:{}", symbol),
+            symbol: symbol.clone(),
+            market: symbol.market(),
+            sector: None,
+            stage: ActionNodeStage::Monitoring,
+            direction,
+            // TODO: Phase 3d — thread current composite from BrainGraph so
+            // current_confidence reflects live state, not frozen entry.
+            entry_confidence: fingerprint.entry_composite.abs(),
+            current_confidence: fingerprint.entry_composite.abs(),
+            // TODO: Phase 3d — StructuralFingerprint does not carry entry_price,
+            // pnl, or tick age. Requires PositionTracker to supply these.
+            entry_price: None,
+            pnl: None,
+            age_ticks: 0,
+            degradation_score: None,
+            exit_forming: false,
+        }
     }
 }
 
@@ -1020,8 +1053,10 @@ mod tests {
     }
 
     fn make_stock(symbol: &str, lot_size: i32) -> Stock {
+        let symbol_id = sym(symbol);
         Stock {
-            symbol: sym(symbol),
+            market: symbol_id.market(),
+            symbol: symbol_id,
             name_en: symbol.into(),
             name_cn: String::new(),
             name_hk: String::new(),
@@ -1102,6 +1137,7 @@ mod tests {
         let mut narratives = HashMap::new();
         narratives.insert(sym("700.HK"), make_narrative(dec!(0.8), dec!(0.6)));
         narratives.insert(sym("9988.HK"), make_narrative(dec!(0.7), dec!(0.5)));
+        narratives.insert(sym("5.HK"), make_narrative(dec!(0.3), dec!(-0.2)));
 
         let mut dimensions = HashMap::new();
         dimensions.insert(
@@ -1111,6 +1147,10 @@ mod tests {
         dimensions.insert(
             sym("9988.HK"),
             make_dims(dec!(0.4), dec!(0.4), dec!(0.4), dec!(0.4)),
+        );
+        dimensions.insert(
+            sym("5.HK"),
+            make_dims(dec!(0.5), dec!(-0.5), dec!(0.5), dec!(-0.5)),
         );
 
         let mut links = empty_links();
@@ -1484,6 +1524,27 @@ mod tests {
     }
 
     #[test]
+    fn action_node_from_hk_fingerprint_maps_direction_and_market() {
+        let symbol = sym("700.HK");
+        let fingerprint = StructuralFingerprint {
+            symbol: symbol.clone(),
+            entry_timestamp: OffsetDateTime::UNIX_EPOCH,
+            entry_composite: dec!(0.6),
+            entry_regime: crate::action::narrative::Regime::CoherentBullish,
+            institutional_directions: vec![],
+            sector_mean_coherence: Some(dec!(0.2)),
+            correlated_stocks: vec![],
+            entry_dimensions: SymbolDimensions::default(),
+        };
+
+        let node = ActionNode::from_hk_fingerprint(&symbol, &fingerprint);
+
+        assert_eq!(node.market, crate::ontology::Market::Hk);
+        assert_eq!(node.direction, ActionDirection::Long);
+        assert_eq!(node.stage, ActionNodeStage::Monitoring);
+    }
+
+    #[test]
     fn market_regime_flags_broad_selloff_as_risk_off() {
         let mut links = empty_links();
         links.quotes = vec![
@@ -1690,6 +1751,7 @@ mod tests {
     #[test]
     fn explicit_target_scopes_drive_polymarket_symbol_relevance() {
         let store = make_store_with_stocks(vec![Stock {
+            market: crate::ontology::Market::Hk,
             symbol: sym("981.HK"),
             name_en: "SMIC".into(),
             name_cn: String::new(),

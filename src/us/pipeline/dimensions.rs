@@ -334,8 +334,10 @@ mod tests {
     }
 
     fn make_stock(symbol: &str, eps_ttm: Decimal, bps: Decimal, dividend_yield: Decimal) -> Stock {
+        let symbol_id = sym(symbol);
         Stock {
-            symbol: sym(symbol),
+            market: symbol_id.market(),
+            symbol: symbol_id,
             name_en: symbol.into(),
             name_cn: String::new(),
             name_hk: String::new(),

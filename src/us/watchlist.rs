@@ -550,103 +550,12 @@ pub fn us_counterpart(hk_symbol: &str) -> Option<&'static str> {
 
 /// Map a US symbol to its sector ID. Derived from the watchlist section headers.
 pub fn us_symbol_sector(symbol: &str) -> Option<&'static str> {
-    match symbol {
-        "AAPL.US" | "MSFT.US" | "GOOGL.US" | "AMZN.US" | "META.US" | "NFLX.US" | "CRM.US"
-        | "ORCL.US" | "ADBE.US" | "NOW.US" | "INTU.US" | "SHOP.US" | "SNOW.US" | "PLTR.US"
-        | "UBER.US" | "ABNB.US" | "DASH.US" | "SQ.US" | "PYPL.US" | "COIN.US" | "DDOG.US"
-        | "CRWD.US" | "ZS.US" | "NET.US" | "MDB.US" | "PANW.US" | "WDAY.US" | "TEAM.US"
-        | "HUBS.US" | "VEEV.US" | "DKNG.US" | "ROKU.US" | "TTD.US" | "SNAP.US" | "PINS.US"
-        | "SPOT.US" | "RBLX.US" | "U.US" | "ZM.US" | "DOCU.US" | "TWLO.US" | "OKTA.US"
-        | "MNDY.US" | "PATH.US" | "APP.US" | "BILL.US" | "GTLB.US" | "IOT.US" | "ADP.US"
-        | "ADSK.US" | "ANET.US" | "ANSS.US" | "CDW.US" | "CSGP.US" | "CTSH.US" | "FICO.US"
-        | "FTNT.US" | "GPN.US" | "HPQ.US" | "IT.US" | "KEYS.US" | "PAYC.US" | "VRSK.US"
-        | "ZBRA.US" | "BR.US" => Some("tech"),
-        "NVDA.US" | "AMD.US" | "AVGO.US" | "QCOM.US" | "INTC.US" | "MU.US" | "AMAT.US"
-        | "LRCX.US" | "KLAC.US" | "TSM.US" | "TXN.US" | "ADI.US" | "MRVL.US" | "ON.US"
-        | "NXPI.US" | "MCHP.US" | "SWKS.US" | "MPWR.US" | "ARM.US" | "ASML.US" | "SNPS.US"
-        | "CDNS.US" | "GFS.US" | "GRMN.US" => Some("semiconductor"),
-        "BABA.US" | "BIDU.US" | "NIO.US" | "XPEV.US" | "LI.US" | "PDD.US" | "JD.US" | "TCOM.US"
-        | "ZTO.US" | "BILI.US" | "NTES.US" | "TME.US" | "WB.US" | "IQ.US" | "VNET.US"
-        | "FUTU.US" | "TIGR.US" | "MNSO.US" | "TAL.US" | "EDU.US" | "HTHT.US" | "YMM.US"
-        | "QFIN.US" | "LX.US" | "FINV.US" | "GDS.US" | "KC.US" | "ZLAB.US" | "BGNE.US"
-        | "LEGN.US" => Some("china_adr"),
-        "TSLA.US" | "RIVN.US" | "LCID.US" | "GM.US" | "F.US" | "TM.US" | "STLA.US" => {
-            Some("ev_auto")
-        }
-        "JPM.US" | "GS.US" | "MS.US" | "BAC.US" | "WFC.US" | "C.US" | "USB.US" | "PNC.US"
-        | "SCHW.US" | "BK.US" | "TFC.US" | "COF.US" | "AXP.US" | "BLK.US" | "ICE.US" | "CME.US"
-        | "SPGI.US" | "MCO.US" | "MSCI.US" | "FIS.US" | "MA.US" | "V.US" | "HOOD.US"
-        | "SOFI.US" | "PGR.US" | "TRV.US" | "ALL.US" | "MET.US" | "AIG.US" | "AFL.US"
-        | "ACGL.US" | "AJG.US" | "AON.US" | "CBOE.US" | "DFS.US" | "MKTX.US" | "NDAQ.US"
-        | "LPLA.US" => Some("finance"),
-        "UNH.US" | "JNJ.US" | "LLY.US" | "ABBV.US" | "PFE.US" | "MRK.US" | "TMO.US" | "ABT.US"
-        | "DHR.US" | "BMY.US" | "AMGN.US" | "GILD.US" | "VRTX.US" | "REGN.US" | "ISRG.US"
-        | "SYK.US" | "BSX.US" | "MDT.US" | "ZTS.US" | "EW.US" | "A.US" | "DXCM.US" | "IDXX.US"
-        | "MRNA.US" | "BIIB.US" | "ALNY.US" | "ILMN.US" | "CVS.US" | "CI.US" | "ELV.US"
-        | "HCA.US" | "HUM.US" | "MCK.US" | "BDX.US" | "RMD.US" | "WST.US" | "ZBH.US" => {
-            Some("healthcare")
-        }
-        "WMT.US" | "COST.US" | "TGT.US" | "HD.US" | "LOW.US" | "TJX.US" | "ROST.US" | "DG.US"
-        | "DLTR.US" | "NKE.US" | "LULU.US" | "SBUX.US" | "MCD.US" | "CMG.US" | "YUM.US"
-        | "DPZ.US" | "BKNG.US" | "MAR.US" | "HLT.US" | "RCL.US" | "LVS.US" | "WYNN.US" => {
-            Some("consumer")
-        }
-        "PG.US" | "KO.US" | "PEP.US" | "PM.US" | "MO.US" | "MDLZ.US" | "CL.US" | "KMB.US"
-        | "GIS.US" | "K.US" | "HSY.US" | "STZ.US" | "KHC.US" | "SYY.US" | "KDP.US" | "AZO.US"
-        | "DECK.US" | "EBAY.US" | "ORLY.US" | "POOL.US" | "TSCO.US" | "KR.US" => Some("consumer"),
-        "XOM.US" | "CVX.US" | "COP.US" | "SLB.US" | "EOG.US" | "MPC.US" | "PSX.US" | "VLO.US"
-        | "OXY.US" | "HAL.US" | "DVN.US" | "FANG.US" | "KMI.US" | "WMB.US" | "OKE.US"
-        | "LNG.US" | "ENPH.US" | "FSLR.US" | "TRGP.US" => Some("energy"),
-        "CAT.US" | "DE.US" | "BA.US" | "RTX.US" | "LMT.US" | "GE.US" | "HON.US" | "UNP.US"
-        | "UPS.US" | "FDX.US" | "MMM.US" | "GD.US" | "NOC.US" | "LHX.US" | "EMR.US" | "ETN.US"
-        | "ITW.US" | "ROK.US" | "CARR.US" | "WM.US" | "RSG.US" | "CSX.US" | "NSC.US" | "DAL.US"
-        | "UAL.US" | "AAL.US" | "LUV.US" | "FAST.US" | "GEV.US" | "GWW.US" | "HUBB.US"
-        | "LDOS.US" | "ODFL.US" | "OTIS.US" | "PCAR.US" | "TT.US" => Some("industrial"),
-        "NEE.US" | "DUK.US" | "SO.US" | "D.US" | "AEP.US" | "SRE.US" | "EXC.US" | "XEL.US"
-        | "PCG.US" | "ED.US" | "CEG.US" | "VST.US" | "CPRT.US" => Some("utility"),
-        "PLD.US" | "AMT.US" | "CCI.US" | "EQIX.US" | "SPG.US" | "PSA.US" | "O.US" | "DLR.US"
-        | "WELL.US" | "AVB.US" | "CBRE.US" | "EQR.US" | "IRM.US" | "SBAC.US" => Some("real_estate"),
-        "LIN.US" | "SHW.US" | "APD.US" | "ECL.US" | "FCX.US" | "NEM.US" | "NUE.US" | "DOW.US"
-        | "DD.US" | "VMC.US" | "MLM.US" | "PHM.US" | "PKG.US" => Some("materials"),
-        "T.US" | "VZ.US" | "TMUS.US" | "CMCSA.US" | "DIS.US" | "WBD.US" | "CHTR.US" | "EA.US"
-        | "TTWO.US" => Some("telecom_media"),
-        "MSTR.US" | "MARA.US" | "RIOT.US" | "BITF.US" | "CLSK.US" => Some("crypto"),
-        "GME.US" | "AMC.US" | "BB.US" | "CLOV.US" | "IONQ.US" | "SMCI.US" | "AI.US" | "SOUN.US" => {
-            Some("momentum")
-        }
-        "SPY.US" | "QQQ.US" | "IWM.US" | "DIA.US" | "TLT.US" | "GLD.US" | "SLV.US" | "USO.US"
-        | "UNG.US" | "VXX.US" | "HYG.US" | "LQD.US" | "EEM.US" | "FXI.US" | "EWJ.US" | "EFA.US" => {
-            Some("etf")
-        }
-        "XLF.US" | "XLK.US" | "XLE.US" | "XLV.US" | "XLI.US" | "XLP.US" | "XLU.US" | "XLY.US"
-        | "XLB.US" | "XLRE.US" | "XLC.US" | "ARKK.US" | "SOXX.US" | "SMH.US" | "KWEB.US"
-        | "XBI.US" | "HACK.US" | "BOTZ.US" | "TAN.US" | "ICLN.US" | "IBIT.US" | "BITO.US" => {
-            Some("etf")
-        }
-        _ => Some("other"), // S&P 500 other + anything unmapped
-    }
+    crate::ontology::store::us_symbol_sector(symbol)
 }
 
-/// All US sector display names.
-pub const US_SECTOR_NAMES: &[(&str, &str)] = &[
-    ("tech", "科技"),
-    ("semiconductor", "半導體"),
-    ("china_adr", "中概股"),
-    ("ev_auto", "電動車"),
-    ("finance", "金融"),
-    ("healthcare", "醫療"),
-    ("consumer", "消費"),
-    ("energy", "能源"),
-    ("industrial", "工業"),
-    ("utility", "公用"),
-    ("real_estate", "地產"),
-    ("materials", "材料"),
-    ("telecom_media", "電訊傳媒"),
-    ("crypto", "加密"),
-    ("momentum", "動量"),
-    ("etf", "ETF"),
-    ("other", "其他"),
-];
+pub fn us_sector_names() -> &'static [(&'static str, &'static str)] {
+    crate::ontology::store::us_sector_names()
+}
 
 /// Returns true if this symbol is part of a cross-market pair.
 pub fn is_dual_listed(symbol: &str) -> bool {

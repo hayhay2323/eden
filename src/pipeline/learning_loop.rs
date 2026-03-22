@@ -597,14 +597,14 @@ pub fn derive_outcome_learning_context_from_hk_rows(
     let reward_strength = mean(&[
         promoted.follow_through_rate,
         promoted.structure_retention_rate,
-        normalize_return(promoted.mean_net_return),
+        normalize_positive_return(promoted.mean_net_return),
     ]);
     let penalty_strength = mean(&[
         falsified.invalidation_rate.max(blocked.invalidation_rate),
         falsified
             .follow_through_rate
             .max(blocked.follow_through_rate),
-        normalize_return(falsified.mean_net_return.max(blocked.mean_net_return)),
+        normalize_negative_return(falsified.mean_net_return.min(blocked.mean_net_return)),
     ]);
 
     OutcomeLearningContext {
@@ -643,7 +643,7 @@ pub fn derive_outcome_learning_context_from_case_outcomes(
                 .count(),
             outcomes.len(),
         ),
-        normalize_return(mean(
+        normalize_positive_return(mean(
             &outcomes
                 .iter()
                 .map(|item| parse_decimal(Some(item.net_return.as_str())).unwrap_or(Decimal::ZERO))
@@ -665,7 +665,7 @@ pub fn derive_outcome_learning_context_from_case_outcomes(
                 .count(),
             outcomes.len(),
         ),
-        normalize_return(-mean(
+        normalize_negative_return(mean(
             &outcomes
                 .iter()
                 .map(|item| parse_decimal(Some(item.net_return.as_str())).unwrap_or(Decimal::ZERO))
@@ -730,10 +730,13 @@ pub fn derive_outcome_learning_context_from_us_rows(
     OutcomeLearningContext {
         source: "us_lineage".into(),
         reward_multiplier: clamp_multiplier(
-            mean(&[hit_rate, normalize_return(mean_return)]) * dec!(0.5),
+            mean(&[hit_rate, normalize_positive_return(mean_return)]) * dec!(0.5),
         ),
         penalty_multiplier: clamp_multiplier(
-            mean(&[Decimal::ONE - hit_rate, normalize_return(-mean_return)]) * dec!(0.5),
+            mean(&[
+                Decimal::ONE - hit_rate,
+                normalize_negative_return(mean_return),
+            ]) * dec!(0.5),
         ),
         promoted_follow_through: Decimal::ZERO,
         promoted_retention: Decimal::ZERO,
@@ -814,11 +817,21 @@ fn rate(count: usize, total: usize) -> Decimal {
     }
 }
 
-fn normalize_return(value: Decimal) -> Decimal {
+fn normalize_positive_return(value: Decimal) -> Decimal {
     if value <= Decimal::ZERO {
         Decimal::ZERO
     } else {
         clamp_unit_interval(value * dec!(4))
+    }
+}
+
+fn normalize_negative_return(value: Decimal) -> Decimal {
+    if value >= Decimal::ZERO {
+        Decimal::ZERO
+    } else {
+        // Penalize losses more aggressively than we reward gains so repeated
+        // small negative expectancy demotes mechanisms before they become entrenched.
+        clamp_unit_interval((-value) * dec!(8))
     }
 }
 
@@ -1141,5 +1154,45 @@ mod tests {
         assert!(context.penalty_multiplier > Decimal::ZERO);
         assert_eq!(context.promoted_follow_through, dec!(0.70));
         assert_eq!(context.falsified_invalidation, dec!(0.75));
+    }
+
+    #[test]
+    fn negative_return_normalization_is_nonzero_for_small_losses() {
+        assert_eq!(normalize_negative_return(dec!(-0.01)), dec!(0.08));
+        assert_eq!(normalize_negative_return(dec!(0.01)), Decimal::ZERO);
+    }
+
+    #[test]
+    fn hk_penalty_strength_counts_negative_mean_returns() {
+        let rows = vec![LineageMetricRowRecord {
+            row_id: "loss".into(),
+            snapshot_id: "s1".into(),
+            tick_number: 1,
+            recorded_at: OffsetDateTime::UNIX_EPOCH,
+            window_size: 10,
+            bucket: "falsified_outcomes".into(),
+            rank: 0,
+            label: "x".into(),
+            family: None,
+            session: None,
+            market_regime: None,
+            total: 10,
+            resolved: 10,
+            hits: 0,
+            hit_rate: "0".into(),
+            mean_return: "-0.01".into(),
+            mean_net_return: "-0.01".into(),
+            mean_mfe: "0".into(),
+            mean_mae: "-0.02".into(),
+            follow_through_rate: "0".into(),
+            invalidation_rate: "0".into(),
+            structure_retention_rate: "0".into(),
+            mean_convergence_score: "0".into(),
+            mean_external_delta: "0".into(),
+            external_follow_through_rate: "0".into(),
+        }];
+
+        let context = derive_outcome_learning_context_from_hk_rows(&rows);
+        assert!(context.penalty_multiplier > Decimal::ZERO);
     }
 }
