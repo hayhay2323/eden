@@ -1,0 +1,327 @@
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+use time::serde::rfc3339;
+use time::OffsetDateTime;
+
+use super::{reasoning::ReasoningScope, ProvenanceMetadata};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorldLayer {
+    Leaf,
+    Branch,
+    Trunk,
+    Forest,
+}
+
+impl WorldLayer {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Leaf => "leaf",
+            Self::Branch => "branch",
+            Self::Trunk => "trunk",
+            Self::Forest => "forest",
+        }
+    }
+}
+
+impl std::fmt::Display for WorldLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CausalContestState {
+    #[default]
+    New,
+    Stable,
+    Eroding,
+    Flipped,
+    Contested,
+}
+
+impl CausalContestState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Stable => "stable",
+            Self::Eroding => "eroding",
+            Self::Flipped => "flipped",
+            Self::Contested => "contested",
+        }
+    }
+}
+
+impl std::fmt::Display for CausalContestState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityState {
+    pub entity_id: String,
+    pub scope: ReasoningScope,
+    pub layer: WorldLayer,
+    pub provenance: ProvenanceMetadata,
+    pub label: String,
+    pub regime: String,
+    pub confidence: Decimal,
+    pub local_support: Decimal,
+    pub propagated_support: Decimal,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drivers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorldStateSnapshot {
+    #[serde(with = "rfc3339")]
+    pub timestamp: OffsetDateTime,
+    pub entities: Vec<EntityState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackwardEvidenceItem {
+    pub statement: String,
+    pub weight: Decimal,
+    pub channel: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackwardCause {
+    pub cause_id: String,
+    pub scope: ReasoningScope,
+    pub layer: WorldLayer,
+    pub depth: u8,
+    #[serde(default)]
+    pub provenance: ProvenanceMetadata,
+    pub explanation: String,
+    pub chain_summary: Option<String>,
+    pub confidence: Decimal,
+    #[serde(default)]
+    pub support_weight: Decimal,
+    #[serde(default)]
+    pub contradict_weight: Decimal,
+    #[serde(default)]
+    pub net_conviction: Decimal,
+    #[serde(default)]
+    pub competitive_score: Decimal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub falsifier: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supporting_evidence: Vec<BackwardEvidenceItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contradicting_evidence: Vec<BackwardEvidenceItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackwardInvestigation {
+    pub investigation_id: String,
+    pub leaf_scope: ReasoningScope,
+    pub leaf_label: String,
+    pub leaf_regime: String,
+    #[serde(default)]
+    pub contest_state: CausalContestState,
+    #[serde(default)]
+    pub leading_cause_streak: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_leading_cause_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leading_cause: Option<BackwardCause>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_up_cause: Option<BackwardCause>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause_gap: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leading_support_delta: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leading_contradict_delta: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_transition_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leading_falsifier: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_causes: Vec<BackwardCause>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackwardReasoningSnapshot {
+    #[serde(with = "rfc3339")]
+    pub timestamp: OffsetDateTime,
+    pub investigations: Vec<BackwardInvestigation>,
+}
+
+#[cfg(test)]
+mod tests {
+    use rust_decimal_macros::dec;
+    use serde_json::json;
+    use time::OffsetDateTime;
+
+    use super::*;
+    use crate::ontology::Symbol;
+
+    #[test]
+    fn world_layer_string_is_stable() {
+        assert_eq!(WorldLayer::Forest.as_str(), "forest");
+        assert_eq!(WorldLayer::Leaf.to_string(), "leaf");
+    }
+
+    #[test]
+    fn backward_investigation_holds_leaf_and_causes() {
+        let investigation = BackwardInvestigation {
+            investigation_id: "backward:700.HK".into(),
+            leaf_scope: ReasoningScope::Symbol(Symbol("700.HK".into())),
+            leaf_label: "Long 700.HK".into(),
+            leaf_regime: "flow-led".into(),
+            contest_state: CausalContestState::Stable,
+            leading_cause_streak: 3,
+            previous_leading_cause_id: Some("cause:market:700.HK".into()),
+            leading_cause: Some(BackwardCause {
+                cause_id: "cause:market:700.HK".into(),
+                scope: ReasoningScope::Market,
+                layer: WorldLayer::Forest,
+                depth: 2,
+                provenance: ProvenanceMetadata::new(
+                    crate::ontology::ProvenanceSource::Computed,
+                    OffsetDateTime::UNIX_EPOCH,
+                )
+                .with_trace_id("cause:market:700.HK")
+                .with_inputs(["path:market_stress:tech"]),
+                explanation: "market stress regime is dominating risk repricing".into(),
+                chain_summary: Some("leaf -> sector -> market".into()),
+                confidence: dec!(0.61),
+                support_weight: dec!(0.52),
+                contradict_weight: dec!(0.11),
+                net_conviction: dec!(0.41),
+                competitive_score: dec!(0.66),
+                falsifier: Some("market stress stops dominating the tape".into()),
+                supporting_evidence: vec![BackwardEvidenceItem {
+                    statement: "market stress remains elevated".into(),
+                    weight: dec!(0.52),
+                    channel: "market-driver".into(),
+                }],
+                contradicting_evidence: vec![BackwardEvidenceItem {
+                    statement: "idiosyncratic local bid still resists".into(),
+                    weight: dec!(0.11),
+                    channel: "local-counter".into(),
+                }],
+                references: vec!["path:market_stress:tech".into()],
+            }),
+            runner_up_cause: None,
+            cause_gap: None,
+            leading_support_delta: Some(dec!(0.05)),
+            leading_contradict_delta: Some(dec!(-0.02)),
+            leader_transition_summary: Some("leader remains market with widening edge".into()),
+            leading_falsifier: Some("market stress stops dominating the tape".into()),
+            candidate_causes: vec![BackwardCause {
+                cause_id: "cause:market:700.HK".into(),
+                scope: ReasoningScope::Market,
+                layer: WorldLayer::Forest,
+                depth: 2,
+                provenance: ProvenanceMetadata::new(
+                    crate::ontology::ProvenanceSource::Computed,
+                    OffsetDateTime::UNIX_EPOCH,
+                )
+                .with_trace_id("cause:market:700.HK")
+                .with_inputs(["path:market_stress:tech"]),
+                explanation: "market stress regime is dominating risk repricing".into(),
+                chain_summary: Some("leaf -> sector -> market".into()),
+                confidence: dec!(0.61),
+                support_weight: dec!(0.52),
+                contradict_weight: dec!(0.11),
+                net_conviction: dec!(0.41),
+                competitive_score: dec!(0.66),
+                falsifier: Some("market stress stops dominating the tape".into()),
+                supporting_evidence: vec![BackwardEvidenceItem {
+                    statement: "market stress remains elevated".into(),
+                    weight: dec!(0.52),
+                    channel: "market-driver".into(),
+                }],
+                contradicting_evidence: vec![BackwardEvidenceItem {
+                    statement: "idiosyncratic local bid still resists".into(),
+                    weight: dec!(0.11),
+                    channel: "local-counter".into(),
+                }],
+                references: vec!["path:market_stress:tech".into()],
+            }],
+        };
+
+        let snapshot = WorldStateSnapshot {
+            timestamp: OffsetDateTime::UNIX_EPOCH,
+            entities: vec![EntityState {
+                entity_id: "state:700.HK".into(),
+                scope: ReasoningScope::Symbol(Symbol("700.HK".into())),
+                layer: WorldLayer::Leaf,
+                provenance: ProvenanceMetadata::new(
+                    crate::ontology::ProvenanceSource::Computed,
+                    OffsetDateTime::UNIX_EPOCH,
+                )
+                .with_trace_id("state:700.HK")
+                .with_inputs(["setup:700.HK:review"]),
+                label: "Long 700.HK".into(),
+                regime: "flow-led".into(),
+                confidence: dec!(0.64),
+                local_support: dec!(0.40),
+                propagated_support: dec!(0.18),
+                drivers: vec!["local flow stayed positive".into()],
+            }],
+        };
+
+        assert_eq!(investigation.candidate_causes.len(), 1);
+        assert!(investigation.leading_cause.is_some());
+        assert_eq!(investigation.contest_state, CausalContestState::Stable);
+        assert_eq!(investigation.leading_cause_streak, 3);
+        assert_eq!(
+            investigation.leading_falsifier.as_deref(),
+            Some("market stress stops dominating the tape")
+        );
+        assert_eq!(
+            investigation
+                .leading_cause
+                .as_ref()
+                .map(|cause| cause.net_conviction),
+            Some(dec!(0.41))
+        );
+        assert_eq!(snapshot.entities[0].layer, WorldLayer::Leaf);
+    }
+
+    #[test]
+    fn backward_cause_deserializes_old_payload_without_competition_fields() {
+        let cause: BackwardCause = serde_json::from_value(json!({
+            "cause_id": "cause:market:700.HK",
+            "scope": "Market",
+            "layer": "Forest",
+            "depth": 2,
+            "explanation": "market stress regime is dominating risk repricing",
+            "chain_summary": "leaf -> sector -> market",
+            "confidence": "0.61",
+            "support_weight": "0.52",
+            "references": ["path:market_stress:tech"]
+        }))
+        .expect("deserialize old backward cause payload");
+
+        assert_eq!(cause.competitive_score, Decimal::ZERO);
+        assert_eq!(cause.contradict_weight, Decimal::ZERO);
+        assert!(cause.supporting_evidence.is_empty());
+        assert!(cause.falsifier.is_none());
+    }
+
+    #[test]
+    fn backward_investigation_deserializes_old_payload_without_contest_memory() {
+        let investigation: BackwardInvestigation = serde_json::from_value(json!({
+            "investigation_id": "backward:700.HK",
+            "leaf_scope": { "Symbol": "700.HK" },
+            "leaf_label": "Long 700.HK",
+            "leaf_regime": "review",
+            "candidate_causes": []
+        }))
+        .expect("deserialize old backward investigation payload");
+
+        assert_eq!(investigation.contest_state, CausalContestState::New);
+        assert_eq!(investigation.leading_cause_streak, 0);
+        assert!(investigation.previous_leading_cause_id.is_none());
+        assert!(investigation.leader_transition_summary.is_none());
+    }
+}
