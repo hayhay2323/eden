@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::ontology::objects::Symbol;
+use crate::us::common::{dimension_composite, SIGNAL_RESOLUTION_LAG};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction as GraphDirection;
 use rust_decimal::Decimal;
@@ -45,7 +46,7 @@ impl UsConvergenceScore {
             _ => return None,
         };
 
-        let dimension_composite = average_dims(dims);
+        let dimension_composite = dimension_composite(dims);
 
         // Cross-stock correlation: mean of (similarity * neighbor.mean_direction)
         let mut corr_sum = Decimal::ZERO;
@@ -342,8 +343,6 @@ pub struct UsSignalScorecard {
     pub mean_return: Decimal,
 }
 
-const RESOLUTION_LAG: u64 = 15;
-
 impl UsSignalScorecard {
     /// Compute scorecard from a list of signal records.
     pub fn compute(records: &[UsSignalRecord]) -> Self {
@@ -386,7 +385,7 @@ impl UsSignalScorecard {
         if record.resolved {
             return;
         }
-        if current_tick < record.tick_emitted + RESOLUTION_LAG {
+        if current_tick < record.tick_emitted + SIGNAL_RESOLUTION_LAG {
             return;
         }
 
@@ -502,27 +501,11 @@ impl UsDecisionSnapshot {
 
 // ── Helpers ──
 
-fn average_dims(dims: &UsSymbolDimensions) -> Decimal {
-    let arr = [
-        dims.capital_flow_direction,
-        dims.price_momentum,
-        dims.volume_profile,
-        dims.pre_post_market_anomaly,
-        dims.valuation,
-    ];
-    let sum: Decimal = arr.iter().copied().sum();
-    sum / Decimal::from(arr.len() as i64)
-}
-
-fn clamp_unit(value: Decimal) -> Decimal {
-    value.clamp(Decimal::ZERO, Decimal::ONE)
-}
-
 fn scale_to_unit(value: Decimal, floor: Decimal, ceiling: Decimal) -> Decimal {
     if ceiling <= floor {
         return Decimal::ZERO;
     }
-    clamp_unit((value - floor) / (ceiling - floor))
+    crate::math::clamp_unit_interval((value - floor) / (ceiling - floor))
 }
 
 #[cfg(test)]

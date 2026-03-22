@@ -7,7 +7,7 @@ use rust_decimal::Decimal;
 use time::OffsetDateTime;
 
 use crate::external::polymarket::{PolymarketBias, PolymarketPrior, PolymarketSnapshot};
-use crate::math::cosine_similarity;
+use crate::math::{clamp_unit_interval, cosine_similarity, median};
 use crate::ontology::links::LinkSnapshot;
 use crate::ontology::objects::{InstitutionId, SectorId, Symbol};
 use crate::ontology::store::ObjectStore;
@@ -333,12 +333,66 @@ fn same_sign(a: Decimal, b: Decimal) -> bool {
         || (a == Decimal::ZERO && b == Decimal::ZERO)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ConfirmationPolicy {
+    low_confidence_cutoff: Decimal,
+    wide_spread_cutoff: Decimal,
+}
+
+impl ConfirmationPolicy {
+    fn from_market(
+        convergence_scores: &HashMap<Symbol, ConvergenceScore>,
+        best_bid: &HashMap<Symbol, Decimal>,
+        best_ask: &HashMap<Symbol, Decimal>,
+    ) -> Self {
+        let low_confidence_cutoff = median(
+            convergence_scores
+                .values()
+                .map(|score| score.composite.abs())
+                .filter(|value| *value > Decimal::ZERO)
+                .collect(),
+        )
+        .unwrap_or(Decimal::ZERO);
+        let wide_spread_cutoff = median(
+            convergence_scores
+                .keys()
+                .filter_map(|symbol| {
+                    quoted_spread_ratio(
+                        best_bid.get(symbol).copied(),
+                        best_ask.get(symbol).copied(),
+                    )
+                })
+                .collect(),
+        )
+        .unwrap_or(Decimal::ZERO);
+        Self {
+            low_confidence_cutoff,
+            wide_spread_cutoff,
+        }
+    }
+}
+
+fn quoted_spread_ratio(price_low: Option<Decimal>, price_high: Option<Decimal>) -> Option<Decimal> {
+    match (price_low, price_high) {
+        (Some(low), Some(high)) if high > low => {
+            let mid = (low + high) / Decimal::TWO;
+            if mid > Decimal::ZERO {
+                Some((high - low) / mid)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 fn requires_manual_confirmation(
     score: &ConvergenceScore,
     price_low: Option<Decimal>,
     price_high: Option<Decimal>,
+    policy: ConfirmationPolicy,
 ) -> bool {
-    let low_confidence = score.composite.abs() < Decimal::new(35, 2);
+    let low_confidence = score.composite.abs() < policy.low_confidence_cutoff;
     let structural_disagreement = (score.institutional_alignment != Decimal::ZERO
         && score.cross_stock_correlation != Decimal::ZERO
         && !same_sign(score.institutional_alignment, score.cross_stock_correlation))
@@ -347,40 +401,22 @@ fn requires_manual_confirmation(
             .map(|value| value < Decimal::ZERO)
             .unwrap_or(false);
     let missing_price = price_low.is_none() || price_high.is_none();
-    let wide_spread = match (price_low, price_high) {
-        (Some(low), Some(high)) if high > low => {
-            let mid = (low + high) / Decimal::TWO;
-            mid <= Decimal::ZERO || (high - low) / mid > Decimal::new(5, 3)
-        }
-        _ => false,
-    };
+    let wide_spread = quoted_spread_ratio(price_low, price_high)
+        .map(|spread| spread > policy.wide_spread_cutoff)
+        .unwrap_or(false);
 
     low_confidence || structural_disagreement || missing_price || wide_spread
 }
 
 fn estimate_transaction_cost(price_low: Option<Decimal>, price_high: Option<Decimal>) -> Decimal {
-    match (price_low, price_high) {
-        (Some(low), Some(high)) if high > low => {
-            let mid = (low + high) / Decimal::TWO;
-            if mid > Decimal::ZERO {
-                (high - low) / mid
-            } else {
-                Decimal::ZERO
-            }
-        }
-        _ => Decimal::new(5, 3), // fallback 0.5% when the book is too sparse to estimate
-    }
-}
-
-fn clamp_unit(value: Decimal) -> Decimal {
-    value.clamp(Decimal::ZERO, Decimal::ONE)
+    quoted_spread_ratio(price_low, price_high).unwrap_or(Decimal::new(5, 3)) // fallback 0.5% when the book is too sparse to estimate
 }
 
 fn scale_to_unit(value: Decimal, floor: Decimal, ceiling: Decimal) -> Decimal {
     if ceiling <= floor {
         return Decimal::ZERO;
     }
-    clamp_unit((value - floor) / (ceiling - floor))
+    clamp_unit_interval((value - floor) / (ceiling - floor))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -501,7 +537,7 @@ impl MarketRegimeFilter {
                 .values()
                 .map(|score| {
                     score.composite.signum()
-                        * clamp_unit(score.composite.abs() / Decimal::new(4, 1))
+                        * clamp_unit_interval(score.composite.abs() / Decimal::new(4, 1))
                 })
                 .sum::<Decimal>()
                 / Decimal::from(convergence_scores.len() as i64)
@@ -744,6 +780,8 @@ impl DecisionSnapshot {
                 }
             }
         }
+        let confirmation_policy =
+            ConfirmationPolicy::from_market(&convergence_scores, &best_bid, &best_ask);
 
         // Generate OrderSuggestion for stocks with |composite| > 0
         let mut order_suggestions = Vec::new();
@@ -772,10 +810,14 @@ impl DecisionSnapshot {
                 price_high,
                 estimated_cost,
                 heuristic_edge,
-                requires_confirmation: requires_manual_confirmation(score, price_low, price_high)
-                    || macro_requires_review,
-                convergence_score: clamp_unit(score.composite.abs()),
-                effective_confidence: clamp_unit(score.composite.abs()),
+                requires_confirmation: requires_manual_confirmation(
+                    score,
+                    price_low,
+                    price_high,
+                    confirmation_policy,
+                ) || macro_requires_review,
+                convergence_score: clamp_unit_interval(score.composite.abs()),
+                effective_confidence: clamp_unit_interval(score.composite.abs()),
                 external_confirmation: None,
                 external_conflict: None,
                 external_support_slug: None,
@@ -839,7 +881,7 @@ fn apply_external_convergence_to_suggestion(
         suggestion.direction,
         false,
     );
-    let base_confidence = clamp_unit(suggestion.convergence.composite.abs());
+    let base_confidence = clamp_unit_interval(suggestion.convergence.composite.abs());
 
     suggestion.effective_confidence = base_confidence;
     suggestion.convergence_score = base_confidence;
@@ -1366,10 +1408,15 @@ mod tests {
             cross_stock_correlation: dec!(0.5),
             composite: dec!(0.6),
         };
+        let policy = ConfirmationPolicy {
+            low_confidence_cutoff: dec!(0.4),
+            wide_spread_cutoff: dec!(0.01),
+        };
         assert!(!requires_manual_confirmation(
             &confident,
             Some(dec!(350)),
             Some(dec!(351)),
+            policy,
         ));
 
         let conflicted = ConvergenceScore {
@@ -1380,7 +1427,60 @@ mod tests {
             &conflicted,
             Some(dec!(350)),
             Some(dec!(351)),
+            policy,
         ));
+    }
+
+    #[test]
+    fn confirmation_policy_derives_cutoffs_from_market_samples() {
+        let scores = HashMap::from([
+            (
+                sym("700.HK"),
+                ConvergenceScore {
+                    symbol: sym("700.HK"),
+                    institutional_alignment: dec!(0.7),
+                    sector_coherence: Some(dec!(0.6)),
+                    cross_stock_correlation: dec!(0.5),
+                    composite: dec!(0.2),
+                },
+            ),
+            (
+                sym("388.HK"),
+                ConvergenceScore {
+                    symbol: sym("388.HK"),
+                    institutional_alignment: dec!(0.5),
+                    sector_coherence: Some(dec!(0.4)),
+                    cross_stock_correlation: dec!(0.3),
+                    composite: dec!(0.6),
+                },
+            ),
+            (
+                sym("9988.HK"),
+                ConvergenceScore {
+                    symbol: sym("9988.HK"),
+                    institutional_alignment: dec!(0.6),
+                    sector_coherence: Some(dec!(0.5)),
+                    cross_stock_correlation: dec!(0.2),
+                    composite: dec!(0.9),
+                },
+            ),
+        ]);
+        let best_bid = HashMap::from([
+            (sym("700.HK"), dec!(350)),
+            (sym("388.HK"), dec!(100)),
+            (sym("9988.HK"), dec!(80)),
+        ]);
+        let best_ask = HashMap::from([
+            (sym("700.HK"), dec!(351)),
+            (sym("388.HK"), dec!(100.4)),
+            (sym("9988.HK"), dec!(80.8)),
+        ]);
+
+        let policy = ConfirmationPolicy::from_market(&scores, &best_bid, &best_ask);
+
+        assert_eq!(policy.low_confidence_cutoff, dec!(0.6));
+        assert!(policy.wide_spread_cutoff > dec!(0.003));
+        assert!(policy.wide_spread_cutoff < dec!(0.01));
     }
 
     #[test]

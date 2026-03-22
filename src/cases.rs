@@ -11,6 +11,8 @@ use crate::live_snapshot::{
     LiveHypothesisTrack, LiveLineageMetric, LiveMarket, LiveMarketRegime, LivePressure,
     LiveScorecard, LiveSignal, LiveSnapshot, LiveStressSnapshot, LiveTacticalCase,
 };
+#[cfg(feature = "persistence")]
+use crate::math::clamp_unit_interval;
 use crate::ontology::CaseReasoningProfile;
 #[cfg(feature = "persistence")]
 use crate::persistence::case_realized_outcome::CaseRealizedOutcomeRecord;
@@ -36,6 +38,14 @@ use crate::pipeline::predicate_engine::{
     augment_predicates_with_workflow, derive_atomic_predicates, derive_human_review_context,
     PredicateInputs,
 };
+
+struct SnapshotCaseLookups<'a> {
+    chains: HashMap<&'a str, &'a LiveBackwardChain>,
+    pressures: HashMap<&'a str, &'a LivePressure>,
+    signals: HashMap<&'a str, &'a LiveSignal>,
+    causals: HashMap<&'a str, &'a LiveCausalLeader>,
+    tracks: HashMap<&'a str, &'a LiveHypothesisTrack>,
+}
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -587,108 +597,12 @@ pub fn build_case_review(list: &CaseListResponse) -> CaseReviewResponse {
 }
 
 pub fn build_case_summaries(snapshot: &LiveSnapshot) -> Vec<CaseSummary> {
-    let chains = snapshot
-        .backward_chains
-        .iter()
-        .map(|item| (item.symbol.as_str(), item))
-        .collect::<HashMap<_, _>>();
-    let pressures = snapshot
-        .pressures
-        .iter()
-        .map(|item| (item.symbol.as_str(), item))
-        .collect::<HashMap<_, _>>();
-    let signals = snapshot
-        .top_signals
-        .iter()
-        .map(|item| (item.symbol.as_str(), item))
-        .collect::<HashMap<_, _>>();
-    let causals = snapshot
-        .causal_leaders
-        .iter()
-        .map(|item| (item.symbol.as_str(), item))
-        .collect::<HashMap<_, _>>();
-    let tracks = snapshot
-        .hypothesis_tracks
-        .iter()
-        .map(|item| (item.symbol.as_str(), item))
-        .collect::<HashMap<_, _>>();
+    let lookups = snapshot_case_lookups(snapshot);
 
     let mut cases = snapshot
         .tactical_cases
         .iter()
-        .map(|tactical_case| {
-            let symbol = tactical_case.symbol.as_str();
-            let chain = chains.get(symbol).copied();
-            let pressure = pressures.get(symbol).copied();
-            let causal = causals.get(symbol).copied();
-            let track = tracks.get(symbol).copied();
-            let signal = signals.get(symbol).copied();
-            let invalidation_rules =
-                default_invalidation_rules(tactical_case, track, causal, pressure);
-            let reasoning_profile = build_summary_reasoning_profile(
-                snapshot,
-                tactical_case,
-                chain,
-                pressure,
-                signal,
-                causal,
-                track,
-                default_workflow_state(&tactical_case.action),
-                None,
-                &invalidation_rules,
-            );
-
-            CaseSummary {
-                case_id: tactical_case.setup_id.clone(),
-                setup_id: tactical_case.setup_id.clone(),
-                workflow_id: None,
-                owner: None,
-                reviewer: None,
-                workflow_actor: None,
-                workflow_note: None,
-                symbol: tactical_case.symbol.clone(),
-                title: tactical_case.title.clone(),
-                sector: signal
-                    .and_then(|item| item.sector.clone())
-                    .or_else(|| pressure.and_then(|item| item.sector.clone())),
-                market: snapshot.market,
-                recommended_action: tactical_case.action.clone(),
-                workflow_state: default_workflow_state(&tactical_case.action).to_string(),
-                market_regime_bias: snapshot.market_regime.bias.clone(),
-                market_regime_confidence: snapshot.market_regime.confidence,
-                market_breadth_delta: snapshot.market_regime.breadth_up
-                    - snapshot.market_regime.breadth_down,
-                market_average_return: snapshot.market_regime.average_return,
-                market_directional_consensus: snapshot.market_regime.directional_consensus,
-                confidence: tactical_case.confidence,
-                confidence_gap: tactical_case.confidence_gap,
-                heuristic_edge: tactical_case.heuristic_edge,
-                why_now: derive_why_now(tactical_case, chain, pressure, causal, track, signal),
-                primary_driver: chain.map(|item| item.primary_driver.clone()),
-                family_label: tactical_case.family_label.clone(),
-                counter_label: tactical_case.counter_label.clone(),
-                hypothesis_status: track.map(|item| item.status.clone()),
-                current_leader: causal.map(|item| item.current_leader.clone()),
-                flip_count: causal.map(|item| item.flips).unwrap_or_default(),
-                leader_streak: causal.map(|item| item.leader_streak),
-                key_evidence: chain
-                    .map(|item| {
-                        item.evidence
-                            .iter()
-                            .take(3)
-                            .map(|evidence| CaseEvidence {
-                                description: evidence.description.clone(),
-                                weight: evidence.weight,
-                                direction: evidence.direction,
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default(),
-                invalidation_rules,
-                reasoning_profile,
-                updated_at: snapshot.timestamp.clone(),
-            }
-        })
+        .map(|tactical_case| build_case_summary(snapshot, &lookups, tactical_case))
         .collect::<Vec<_>>();
 
     cases.sort_by(|left, right| {
@@ -703,40 +617,20 @@ pub fn build_case_summaries(snapshot: &LiveSnapshot) -> Vec<CaseSummary> {
 }
 
 pub fn build_case_detail(snapshot: &LiveSnapshot, setup_id: &str) -> Option<CaseDetail> {
+    let lookups = snapshot_case_lookups(snapshot);
     let tactical_case = snapshot
         .tactical_cases
         .iter()
         .find(|item| item.setup_id == setup_id)?
         .clone();
-    let summary = build_case_summaries(snapshot)
-        .into_iter()
-        .find(|item| item.setup_id == setup_id)?;
+    let summary = build_case_summary(snapshot, &lookups, &tactical_case);
+    let symbol = tactical_case.symbol.as_str();
 
-    let backward_chain = snapshot
-        .backward_chains
-        .iter()
-        .find(|item| item.symbol == tactical_case.symbol)
-        .cloned();
-    let pressure = snapshot
-        .pressures
-        .iter()
-        .find(|item| item.symbol == tactical_case.symbol)
-        .cloned();
-    let signal = snapshot
-        .top_signals
-        .iter()
-        .find(|item| item.symbol == tactical_case.symbol)
-        .cloned();
-    let causal_leader = snapshot
-        .causal_leaders
-        .iter()
-        .find(|item| item.symbol == tactical_case.symbol)
-        .cloned();
-    let hypothesis_track = snapshot
-        .hypothesis_tracks
-        .iter()
-        .find(|item| item.symbol == tactical_case.symbol)
-        .cloned();
+    let backward_chain = lookups.chains.get(symbol).map(|item| (*item).clone());
+    let pressure = lookups.pressures.get(symbol).map(|item| (*item).clone());
+    let signal = lookups.signals.get(symbol).map(|item| (*item).clone());
+    let causal_leader = lookups.causals.get(symbol).map(|item| (*item).clone());
+    let hypothesis_track = lookups.tracks.get(symbol).map(|item| (*item).clone());
 
     let cross_market_signals = snapshot
         .cross_market_signals
@@ -780,13 +674,141 @@ pub fn build_case_detail(snapshot: &LiveSnapshot, setup_id: &str) -> Option<Case
     })
 }
 
+fn snapshot_case_lookups(snapshot: &LiveSnapshot) -> SnapshotCaseLookups<'_> {
+    SnapshotCaseLookups {
+        chains: snapshot
+            .backward_chains
+            .iter()
+            .map(|item| (item.symbol.as_str(), item))
+            .collect(),
+        pressures: snapshot
+            .pressures
+            .iter()
+            .map(|item| (item.symbol.as_str(), item))
+            .collect(),
+        signals: snapshot
+            .top_signals
+            .iter()
+            .map(|item| (item.symbol.as_str(), item))
+            .collect(),
+        causals: snapshot
+            .causal_leaders
+            .iter()
+            .map(|item| (item.symbol.as_str(), item))
+            .collect(),
+        tracks: snapshot
+            .hypothesis_tracks
+            .iter()
+            .map(|item| (item.symbol.as_str(), item))
+            .collect(),
+    }
+}
+
+fn build_case_summary(
+    snapshot: &LiveSnapshot,
+    lookups: &SnapshotCaseLookups<'_>,
+    tactical_case: &LiveTacticalCase,
+) -> CaseSummary {
+    let symbol = tactical_case.symbol.as_str();
+    let chain = lookups.chains.get(symbol).copied();
+    let pressure = lookups.pressures.get(symbol).copied();
+    let causal = lookups.causals.get(symbol).copied();
+    let track = lookups.tracks.get(symbol).copied();
+    let signal = lookups.signals.get(symbol).copied();
+    let invalidation_rules = default_invalidation_rules(tactical_case, track, causal, pressure);
+    let reasoning_profile = build_summary_reasoning_profile(
+        snapshot,
+        tactical_case,
+        chain,
+        pressure,
+        signal,
+        causal,
+        track,
+        default_workflow_state(&tactical_case.action),
+        None,
+        &invalidation_rules,
+    );
+
+    CaseSummary {
+        case_id: tactical_case.setup_id.clone(),
+        setup_id: tactical_case.setup_id.clone(),
+        workflow_id: None,
+        owner: None,
+        reviewer: None,
+        workflow_actor: None,
+        workflow_note: None,
+        symbol: tactical_case.symbol.clone(),
+        title: tactical_case.title.clone(),
+        sector: signal
+            .and_then(|item| item.sector.clone())
+            .or_else(|| pressure.and_then(|item| item.sector.clone())),
+        market: snapshot.market,
+        recommended_action: tactical_case.action.clone(),
+        workflow_state: default_workflow_state(&tactical_case.action).to_string(),
+        market_regime_bias: snapshot.market_regime.bias.clone(),
+        market_regime_confidence: snapshot.market_regime.confidence,
+        market_breadth_delta: snapshot.market_regime.breadth_up
+            - snapshot.market_regime.breadth_down,
+        market_average_return: snapshot.market_regime.average_return,
+        market_directional_consensus: snapshot.market_regime.directional_consensus,
+        confidence: tactical_case.confidence,
+        confidence_gap: tactical_case.confidence_gap,
+        heuristic_edge: tactical_case.heuristic_edge,
+        why_now: derive_why_now(tactical_case, chain, pressure, causal, track, signal),
+        primary_driver: chain.map(|item| item.primary_driver.clone()),
+        family_label: tactical_case.family_label.clone(),
+        counter_label: tactical_case.counter_label.clone(),
+        hypothesis_status: track.map(|item| item.status.clone()),
+        current_leader: causal.map(|item| item.current_leader.clone()),
+        flip_count: causal.map(|item| item.flips).unwrap_or_default(),
+        leader_streak: causal.map(|item| item.leader_streak),
+        key_evidence: chain
+            .map(|item| {
+                item.evidence
+                    .iter()
+                    .take(3)
+                    .map(|evidence| CaseEvidence {
+                        description: evidence.description.clone(),
+                        weight: evidence.weight,
+                        direction: evidence.direction,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        invalidation_rules,
+        reasoning_profile,
+        updated_at: snapshot.timestamp.clone(),
+    }
+}
+
 #[cfg(feature = "persistence")]
 pub async fn enrich_case_summaries(
     store: &EdenStore,
     cases: &mut [CaseSummary],
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let setup_ids = cases
+        .iter()
+        .map(|case| case.setup_id.clone())
+        .collect::<Vec<_>>();
+    let setup_by_id = store
+        .tactical_setups_by_ids(&setup_ids)
+        .await?
+        .into_iter()
+        .map(|setup| (setup.setup_id.clone(), setup))
+        .collect::<HashMap<_, _>>();
+    let workflow_ids = setup_by_id
+        .values()
+        .filter_map(|setup| setup.workflow_id.clone())
+        .collect::<Vec<_>>();
+    let workflow_by_id = store
+        .action_workflows_by_ids(&workflow_ids)
+        .await?
+        .into_iter()
+        .map(|workflow| (workflow.workflow_id.clone(), workflow))
+        .collect::<HashMap<_, _>>();
+
     for case in cases.iter_mut() {
-        let Some(setup) = store.tactical_setup_by_id(&case.setup_id).await? else {
+        let Some(setup) = setup_by_id.get(&case.setup_id) else {
             continue;
         };
 
@@ -797,7 +819,7 @@ pub async fn enrich_case_summaries(
         }
 
         if let Some(workflow_id) = &setup.workflow_id {
-            if let Some(workflow) = store.action_workflow_by_id(workflow_id).await? {
+            if let Some(workflow) = workflow_by_id.get(workflow_id) {
                 case.workflow_state = workflow.current_stage.as_str().to_string();
                 case.owner = workflow.owner.clone();
                 case.reviewer = workflow.reviewer.clone();
@@ -1997,7 +2019,7 @@ fn describe_mechanism_transition(
     } else {
         Decimal::new(18, 2)
     };
-    let combined_regime_score = clamp_decimal(regime_score + regime_metric_score);
+    let combined_regime_score = clamp_unit_interval(regime_score + regime_metric_score);
     let classification = classify_transition(
         from.primary_mechanism_kind.as_deref(),
         to.primary_mechanism_kind.as_deref(),
@@ -2005,7 +2027,7 @@ fn describe_mechanism_transition(
         decay_score,
         review_score,
     );
-    let confidence = clamp_decimal(
+    let confidence = clamp_unit_interval(
         combined_regime_score
             .max(decay_score)
             .max(review_score)
@@ -2187,7 +2209,7 @@ fn regime_shift_score(
     if market_regime_changed {
         total += Decimal::new(18, 2);
     }
-    clamp_decimal(total)
+    clamp_unit_interval(total)
 }
 
 #[cfg(feature = "persistence")]
@@ -2214,7 +2236,7 @@ fn regime_metric_shift_score(
     ) {
         total += delta.abs() * Decimal::from(4);
     }
-    clamp_decimal(total)
+    clamp_unit_interval(total)
 }
 
 #[cfg(feature = "persistence")]
@@ -2222,7 +2244,7 @@ fn factor_decay_score(
     from_factors: &HashMap<String, (String, Decimal)>,
     to_factors: &HashMap<String, (String, Decimal)>,
 ) -> Decimal {
-    clamp_decimal(
+    clamp_unit_interval(
         from_factors
             .iter()
             .fold(Decimal::ZERO, |acc, (key, (_, value))| {
@@ -2247,6 +2269,7 @@ fn classify_transition(
     decay_score: Decimal,
     review_score: Decimal,
 ) -> String {
+    // These thresholds partition transitions into dominant single-cause moves vs. mixed cases.
     let regime_shift = Decimal::new(22, 2);
     let decay_shift = Decimal::new(20, 2);
     let mild = Decimal::new(12, 2);
@@ -2303,17 +2326,6 @@ fn transition_summary(
                 .unwrap_or_default()
         ),
         _ => format!("{to} 仍為主機制，近期沒有足夠證據顯示結構性切換。"),
-    }
-}
-
-#[cfg(feature = "persistence")]
-fn clamp_decimal(value: Decimal) -> Decimal {
-    if value < Decimal::ZERO {
-        Decimal::ZERO
-    } else if value > Decimal::ONE {
-        Decimal::ONE
-    } else {
-        value
     }
 }
 

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::math::normalized_ratio;
+use crate::math::{clamp_signed_unit_interval, median, normalized_ratio};
 use crate::ontology::links::{
     CalcIndexObservation, CandlestickObservation, CapitalFlow, QuoteObservation,
 };
@@ -8,6 +8,18 @@ use crate::ontology::objects::Symbol;
 use crate::ontology::store::ObjectStore;
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
+
+// For liquid US large caps, a 5% session move is already a strong trend day.
+// We saturate there so normal momentum does not get overshadowed by rare gap/meme moves.
+fn price_momentum_normalizer() -> Decimal {
+    Decimal::new(5, 2)
+}
+
+// Pre/post-market gaps are usually smaller than regular-session trends.
+// A 3% overnight move is large enough to count as a full anomaly signal.
+fn pre_post_market_anomaly_normalizer() -> Decimal {
+    Decimal::new(3, 2)
+}
 
 /// Per-symbol US dimension vector. Each value in [-1, +1].
 ///
@@ -88,10 +100,6 @@ impl UsDimensionSnapshot {
 
 // ── Helpers ──
 
-fn clamp_unit(value: Decimal) -> Decimal {
-    value.clamp(-Decimal::ONE, Decimal::ONE)
-}
-
 fn positive_part(value: Decimal) -> Decimal {
     if value > Decimal::ZERO {
         value
@@ -106,19 +114,6 @@ fn average(values: impl IntoIterator<Item = Decimal>) -> Decimal {
         Decimal::ZERO
     } else {
         values.iter().copied().sum::<Decimal>() / Decimal::from(values.len() as i64)
-    }
-}
-
-fn median(mut values: Vec<Decimal>) -> Option<Decimal> {
-    if values.is_empty() {
-        return None;
-    }
-    values.sort();
-    let mid = values.len() / 2;
-    if values.len() % 2 == 0 {
-        Some((values[mid - 1] + values[mid]) / Decimal::TWO)
-    } else {
-        Some(values[mid])
     }
 }
 
@@ -140,8 +135,8 @@ fn compute_capital_flow_direction(
             if t == Decimal::ZERO {
                 (cf.symbol.clone(), Decimal::ZERO)
             } else {
-                let ratio = cf.net_inflow / t;
-                (cf.symbol.clone(), clamp_unit(ratio))
+                let ratio = cf.net_inflow.as_yuan() / t;
+                (cf.symbol.clone(), clamp_signed_unit_interval(ratio))
             }
         })
         .collect()
@@ -161,7 +156,7 @@ fn compute_price_momentum(quotes: &[QuoteObservation]) -> HashMap<Symbol, Decima
             }
             let change_rate = (q.last_done - q.prev_close) / q.prev_close;
             // Normalize: 5% move = full signal
-            let normalized = clamp_unit(change_rate / Decimal::new(5, 2));
+            let normalized = clamp_signed_unit_interval(change_rate / price_momentum_normalizer());
             Some((q.symbol.clone(), normalized))
         })
         .collect()
@@ -175,12 +170,12 @@ fn compute_volume_profile(candlesticks: &[CandlestickObservation]) -> HashMap<Sy
         .iter()
         .map(|candle| {
             let directional = average([candle.window_return, candle.body_bias]);
-            let volume_confirmation = positive_part(clamp_unit(
+            let volume_confirmation = positive_part(clamp_signed_unit_interval(
                 (candle.volume_ratio - Decimal::ONE) / Decimal::TWO,
             ));
             let confirmation = average([volume_confirmation, candle.range_ratio]);
             let value = directional * ((Decimal::ONE + confirmation) / Decimal::TWO);
-            (candle.symbol.clone(), clamp_unit(value))
+            (candle.symbol.clone(), clamp_signed_unit_interval(value))
         })
         .collect()
 }
@@ -199,7 +194,7 @@ fn compute_pre_post_market_anomaly(quotes: &[QuoteObservation]) -> HashMap<Symbo
             }
             let gap = (q.open - q.prev_close) / q.prev_close;
             // 3% gap = full signal (institutional moves happen in pre-market)
-            let normalized = clamp_unit(gap / Decimal::new(3, 2));
+            let normalized = clamp_signed_unit_interval(gap / pre_post_market_anomaly_normalizer());
             Some((q.symbol.clone(), normalized))
         })
         .collect()
@@ -373,7 +368,7 @@ mod tests {
         let quotes = vec![make_quote("AAPL.US", dec!(180), dec!(178), dec!(179))];
         let flows = vec![CapitalFlow {
             symbol: sym("AAPL.US"),
-            net_inflow: dec!(1000),
+            net_inflow: crate::ontology::links::YuanAmount::from_yuan(dec!(1000)),
         }];
         let result = compute_capital_flow_direction(&quotes, &flows);
         // 1000 / 10000 = 0.1
@@ -385,7 +380,7 @@ mod tests {
         let quotes = vec![make_quote("AAPL.US", dec!(180), dec!(178), dec!(179))];
         let flows = vec![CapitalFlow {
             symbol: sym("AAPL.US"),
-            net_inflow: dec!(-5000),
+            net_inflow: crate::ontology::links::YuanAmount::from_yuan(dec!(-5000)),
         }];
         let result = compute_capital_flow_direction(&quotes, &flows);
         assert_eq!(result[&sym("AAPL.US")], dec!(-0.5));
@@ -396,7 +391,7 @@ mod tests {
         let quotes = vec![make_quote("AAPL.US", dec!(180), dec!(178), dec!(179))];
         let flows = vec![CapitalFlow {
             symbol: sym("AAPL.US"),
-            net_inflow: dec!(99999),
+            net_inflow: crate::ontology::links::YuanAmount::from_yuan(dec!(99999)),
         }];
         let result = compute_capital_flow_direction(&quotes, &flows);
         assert_eq!(result[&sym("AAPL.US")], dec!(1));
@@ -408,7 +403,7 @@ mod tests {
         quotes[0].turnover = dec!(0);
         let flows = vec![CapitalFlow {
             symbol: sym("AAPL.US"),
-            net_inflow: dec!(100),
+            net_inflow: crate::ontology::links::YuanAmount::from_yuan(dec!(100)),
         }];
         let result = compute_capital_flow_direction(&quotes, &flows);
         assert_eq!(result[&sym("AAPL.US")], dec!(0));
@@ -583,7 +578,7 @@ mod tests {
         let quotes = vec![make_quote("NVDA.US", dec!(120), dec!(100), dec!(105))];
         let flows = vec![CapitalFlow {
             symbol: sym("NVDA.US"),
-            net_inflow: dec!(500),
+            net_inflow: crate::ontology::links::YuanAmount::from_yuan(dec!(500)),
         }];
         let calc_indexes = vec![CalcIndexObservation {
             symbol: sym("NVDA.US"),

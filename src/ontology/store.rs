@@ -193,7 +193,6 @@ fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "2356.HK", // Dah Sing Banking
         "440.HK",  // Dah Sing Financial
         "23.HK",   // Bank of East Asia
-        "2356.HK", // Dah Sing Banking
         "1111.HK", // Chong Hing Bank
         "6178.HK", // Everbright Securities
         "1336.HK", // New China Life
@@ -220,7 +219,6 @@ fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "3983.HK", // China BlueChemical
         "1600.HK", // China Lumena ... actually might be delisted
         "467.HK",  // United Energy Group
-        "1818.HK", // Zhaojin Mining ... actually that's materials
         "2883.HK", // China Oilfield Services
         "3899.HK", // CIMC Enric
         "1083.HK", // Towngas China
@@ -269,16 +267,13 @@ fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "87001.HK", // Hui Xian REIT
         "405.HK",   // Yuexiu REIT
         "1908.HK",  // C&D International
-        "2669.HK",  // China Overseas Property
         "6158.HK",  // COLI Property
         "9979.HK",  // Greentown Management
         "3377.HK",  // Sino-Ocean Group
         "1638.HK",  // Kaisa Group
-        "6158.HK",  // COLI Property Services
         "272.HK",   // Shui On Land
         "2868.HK",  // Beijing Capital Land
         "1238.HK",  // Powerlong Real Estate
-        "87001.HK", // Hui Xian REIT
         "2778.HK",  // Champion REIT
         "435.HK",   // Sunlight REIT
         "808.HK",   // Prosperus Real Estate
@@ -319,10 +314,8 @@ fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "3319.HK", // A-Living Smart City Services
         "1579.HK", // Yihai International
         "9869.HK", // Soulgate
-        "9995.HK", // RLX Technology
         "336.HK",  // Huabao International
         "345.HK",  // Vitasoy
-        "6186.HK", // China Feihe
         "1361.HK", // 361 Degrees
         "6049.HK", // Poly Culture
         "1212.HK", // Lifestyle International
@@ -363,10 +356,8 @@ fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "9926.HK", // Akeso
         "1877.HK", // Shanghai Junshi Bio
         "1548.HK", // Genscript Biotech
-        "1302.HK", // Kindstar Globalgene
         "2126.HK", // Grand Pharma
         "6616.HK", // Gene Harbour Biosciences
-        "3613.HK", // Beijing Health
         "6978.HK", // Yadea Group (miscat - actually auto/EV)
         "1539.HK", // Yestar Healthcare
     ];
@@ -385,12 +376,10 @@ fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "1868.HK", // Neo Solar Power ... not sure
         "579.HK",  // Beijing Jingneng Clean Energy
         "956.HK",  // China Suntien Green Energy
-        "1133.HK", // Harbin Electric
         "371.HK",  // Beijing Enterprises Water
         "270.HK",  // Guangdong Investment
         "855.HK",  // China Water Affairs
         "2380.HK", // China Power International
-        "3983.HK", // China BlueChemical ... actually energy/chemicals
         "1798.HK", // Datang New Energy
         "1799.HK", // Xinyi Solar
         "968.HK",  // Xinyi Glass
@@ -424,7 +413,6 @@ fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "1268.HK", // Meihua International ... actually materials
         "489.HK",  // Dongfeng Motor
         "2488.HK", // Leapmotor
-        "2039.HK", // CIMC Vehicles
     ];
 
     // ── Materials: Mining, metals, cement, chemicals, gold ──
@@ -435,7 +423,6 @@ fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "2600.HK", // Aluminum Corp of China (Chalco)
         "358.HK",  // Jiangxi Copper
         "3323.HK", // China National Building Material
-        "1088.HK", // China Shenhua ... also energy
         "1818.HK", // Zhaojin Mining
         "3993.HK", // China Molybdenum
         "1138.HK", // China Resources Cement
@@ -449,8 +436,6 @@ fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "3606.HK", // Fuyao Glass
         "546.HK",  // Fufeng Group (bio-fermentation/chemicals)
         "1164.HK", // CGN Mining
-        "691.HK",  // Shanshui Cement
-        "2009.HK", // BBMG
         "189.HK",  // Dongyue Group (chemical)
     ];
 
@@ -469,9 +454,7 @@ fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "696.HK",  // TravelSky Technology
         "1880.HK", // China Railway Signal
         "586.HK",  // China Conch Venture
-        "2009.HK", // BBMG ... also materials
         "1888.HK", // China Kingstone Mining ... materials
-        "390.HK",  // China Railway Group
         "1052.HK", // Yuexiu Transport
         "107.HK",  // Sichuan Expressway
         "548.HK",  // Shenzhen Expressway
@@ -495,7 +478,6 @@ fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "66.HK",   // MTR Corporation
         "293.HK",  // Cathay Pacific ... actually logistics
         "683.HK",  // Kerry Properties
-        "316.HK",  // Orient Overseas (International)
         "659.HK",  // NWS Holdings
         "20.HK",   // SJM Holdings (gaming)
         "880.HK",  // SJM Holdings
@@ -505,18 +487,14 @@ fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "1928.HK", // Sands China
         "142.HK",  // First Pacific
         "242.HK",  // Shun Tak Holdings
-        "293.HK",  // Cathay Pacific
         "493.HK",  // GOME Retail
     ];
 
     // ── Media & Entertainment ──
     const MEDIA: &[&str] = &[
-        "1801.HK", // Innovent Bio ... actually healthcare, miscategorized
-        "9626.HK", // Bilibili ... already in tech
         "1060.HK", // Alibaba Pictures
         "2400.HK", // XD Inc (gaming)
         "799.HK",  // IGG Inc
-        "3993.HK", // China Molybdenum ... already in materials
         "777.HK",  // NetDragon Websoft
         "484.HK",  // HKT Trust ... already in telecom
     ];
@@ -538,12 +516,9 @@ fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "3378.HK", // Xiamen C&D
         "152.HK",  // Shenzhen International
         "694.HK",  // Beijing Capital International Airport
-        "1138.HK", // China Resources Cement ... already in materials
         "753.HK",  // Air China
         "670.HK",  // China Eastern Airlines
         "1055.HK", // China Southern Airlines
-        "636.HK",  // Kerry Logistics Network
-        "3378.HK", // Xiamen C&D
     ];
 
     // ── Education ──
@@ -990,6 +965,12 @@ mod tests {
     #[test]
     fn symbol_sector_energy() {
         assert_eq!(symbol_sector("883.HK"), Some(SectorId("energy".into())));
+    }
+
+    #[test]
+    fn symbol_sector_cross_sector_cleanup() {
+        assert_eq!(symbol_sector("1818.HK"), Some(SectorId("materials".into())));
+        assert_eq!(symbol_sector("316.HK"), Some(SectorId("logistics".into())));
     }
 
     #[test]

@@ -1,5 +1,8 @@
+use std::path::Path;
+
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize};
+use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub enum LiveMarket {
@@ -266,9 +269,125 @@ pub async fn ensure_snapshot_parent(path: &str) {
     }
 }
 
+async fn write_snapshot_atomic(path: &str, payload: &str) -> std::io::Result<()> {
+    let path = Path::new(path);
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("snapshot.json");
+    let temp_path = path.with_file_name(format!(
+        ".{}.{}.{}.tmp",
+        file_name,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+
+    let mut file = tokio::fs::File::create(&temp_path).await?;
+    file.write_all(payload.as_bytes()).await?;
+    file.flush().await?;
+    file.sync_all().await?;
+    drop(file);
+
+    tokio::fs::rename(&temp_path, path).await
+}
+
 pub fn spawn_write_snapshot(path: String, snapshot: LiveSnapshot) {
     tokio::spawn(async move {
         let payload = serde_json::to_string(&snapshot).unwrap_or_default();
-        let _ = tokio::fs::write(path, payload).await;
+        if let Err(error) = write_snapshot_atomic(&path, &payload).await {
+            eprintln!(
+                "Warning: failed to write snapshot {} atomically: {}",
+                path, error
+            );
+        }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_snapshot() -> LiveSnapshot {
+        LiveSnapshot {
+            tick: 1,
+            timestamp: "2026-03-22T00:00:00Z".into(),
+            market: LiveMarket::Us,
+            stock_count: 1,
+            edge_count: 2,
+            hypothesis_count: 3,
+            observation_count: 4,
+            active_positions: 0,
+            market_regime: LiveMarketRegime {
+                bias: "neutral".into(),
+                confidence: Decimal::ZERO,
+                breadth_up: Decimal::ZERO,
+                breadth_down: Decimal::ZERO,
+                average_return: Decimal::ZERO,
+                directional_consensus: None,
+                pre_market_sentiment: None,
+            },
+            stress: LiveStressSnapshot {
+                composite_stress: Decimal::ZERO,
+                sector_synchrony: None,
+                pressure_consensus: None,
+                momentum_consensus: None,
+                pressure_dispersion: None,
+                volume_anomaly: None,
+            },
+            scorecard: LiveScorecard {
+                total_signals: 0,
+                resolved_signals: 0,
+                hits: 0,
+                misses: 0,
+                hit_rate: Decimal::ZERO,
+                mean_return: Decimal::ZERO,
+            },
+            tactical_cases: vec![],
+            hypothesis_tracks: vec![],
+            top_signals: vec![],
+            convergence_scores: vec![],
+            pressures: vec![],
+            backward_chains: vec![],
+            causal_leaders: vec![],
+            events: vec![],
+            lineage: vec![],
+            cross_market_signals: vec![],
+            cross_market_anomalies: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn writes_snapshot_atomically() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "eden-live-snapshot-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let path = dir.join("snapshot.json");
+        let payload = serde_json::to_string(&test_snapshot()).unwrap();
+        write_snapshot_atomic(path.to_str().unwrap(), &payload)
+            .await
+            .unwrap();
+
+        let written = tokio::fs::read_to_string(&path).await.unwrap();
+        assert_eq!(written, payload);
+
+        let temp_files = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp"))
+            .count();
+        assert_eq!(temp_files, 0);
+
+        let _ = tokio::fs::remove_file(&path).await;
+        let _ = tokio::fs::remove_dir(&dir).await;
+    }
 }

@@ -629,11 +629,27 @@ fn build_router(state: ApiState) -> Result<Router, ApiError> {
         .route("/cases/:market", get(get_cases))
         .route("/briefing/:market", get(get_case_briefing))
         .route("/review/:market", get(get_case_review))
+        .route(
+            "/review/:market/transitions",
+            get(get_case_transition_analytics),
+        )
         .route("/stream/:market/cases", get(stream_cases))
         .route("/stream/:market/briefing", get(stream_case_briefing))
         .route("/stream/:market/review", get(stream_case_review))
+        .route(
+            "/stream/:market/review/transitions",
+            get(stream_case_transition_analytics),
+        )
         .route("/stream/:market/cases/:setup_id", get(stream_case_detail))
+        .route(
+            "/stream/:market/cases/:setup_id/mechanism",
+            get(stream_case_mechanism_story),
+        )
         .route("/cases/:market/:setup_id", get(get_case_detail))
+        .route(
+            "/cases/:market/:setup_id/mechanism",
+            get(get_case_mechanism_story),
+        )
         .route("/cases/:market/:setup_id/assign", post(post_case_assign))
         .route(
             "/cases/:market/:setup_id/transition",
@@ -769,87 +785,152 @@ async fn get_us_live_snapshot() -> Result<Json<serde_json::Value>, ApiError> {
 }
 
 async fn get_cases(
+    State(state): State<ApiState>,
     Path(market): Path<String>,
     Query(query): Query<CaseQuery>,
 ) -> Result<Json<CaseListResponse>, ApiError> {
     let market = parse_case_market(&market)?;
-    Ok(Json(load_case_list_response(market, &query).await?))
+    Ok(Json(load_case_list_response(&state, market, &query).await?))
 }
 
 async fn get_case_briefing(
+    State(state): State<ApiState>,
     Path(market): Path<String>,
     Query(query): Query<CaseQuery>,
 ) -> Result<Json<CaseBriefingResponse>, ApiError> {
     let market = parse_case_market(&market)?;
-    let response = load_case_list_response(market, &query).await?;
+    let response = load_case_list_response(&state, market, &query).await?;
     Ok(Json(build_case_briefing(&response)))
 }
 
 async fn get_case_review(
+    State(state): State<ApiState>,
     Path(market): Path<String>,
     Query(query): Query<CaseQuery>,
 ) -> Result<Json<CaseReviewResponse>, ApiError> {
     let market = parse_case_market(&market)?;
-    Ok(Json(load_case_review_response(market, &query).await?))
+    Ok(Json(
+        load_case_review_response(&state, market, &query).await?,
+    ))
+}
+
+async fn get_case_transition_analytics(
+    State(state): State<ApiState>,
+    Path(market): Path<String>,
+    Query(query): Query<CaseTransitionAnalyticsQuery>,
+) -> Result<Json<CaseTransitionAnalyticsResponse>, ApiError> {
+    let market = parse_case_market(&market)?;
+    Ok(Json(
+        load_case_transition_analytics_response(&state, market, &query).await?,
+    ))
 }
 
 async fn stream_cases(
+    State(state): State<ApiState>,
     Path(market): Path<String>,
     Query(query): Query<CaseQuery>,
 ) -> Result<Sse<JsonEventStream>, ApiError> {
     let market = parse_case_market(&market)?;
-    Ok(json_sse(move || {
+    Ok(case_json_sse(state.clone(), market, move || {
+        let state = state.clone();
         let query = query.clone();
-        async move { load_case_list_response(market, &query).await }
+        async move { load_case_list_response(&state, market, &query).await }
     }))
 }
 
 async fn stream_case_briefing(
+    State(state): State<ApiState>,
     Path(market): Path<String>,
     Query(query): Query<CaseQuery>,
 ) -> Result<Sse<JsonEventStream>, ApiError> {
     let market = parse_case_market(&market)?;
-    Ok(json_sse(move || {
+    Ok(case_json_sse(state.clone(), market, move || {
+        let state = state.clone();
         let query = query.clone();
         async move {
-            let response = load_case_list_response(market, &query).await?;
+            let response = load_case_list_response(&state, market, &query).await?;
             Ok(build_case_briefing(&response))
         }
     }))
 }
 
 async fn stream_case_review(
+    State(state): State<ApiState>,
     Path(market): Path<String>,
     Query(query): Query<CaseQuery>,
 ) -> Result<Sse<JsonEventStream>, ApiError> {
     let market = parse_case_market(&market)?;
-    Ok(json_sse(move || {
+    Ok(case_json_sse(state.clone(), market, move || {
+        let state = state.clone();
         let query = query.clone();
-        async move { load_case_review_response(market, &query).await }
+        async move { load_case_review_response(&state, market, &query).await }
+    }))
+}
+
+async fn stream_case_transition_analytics(
+    State(state): State<ApiState>,
+    Path(market): Path<String>,
+    Query(query): Query<CaseTransitionAnalyticsQuery>,
+) -> Result<Sse<JsonEventStream>, ApiError> {
+    let market = parse_case_market(&market)?;
+    Ok(case_json_sse(state.clone(), market, move || {
+        let state = state.clone();
+        let query = query.clone();
+        async move { load_case_transition_analytics_response(&state, market, &query).await }
     }))
 }
 
 async fn get_case_detail(
+    State(state): State<ApiState>,
     Path((market, setup_id)): Path<(String, String)>,
 ) -> Result<Json<CaseDetail>, ApiError> {
     let market = parse_case_market(&market)?;
-    Ok(Json(load_case_detail_response(market, &setup_id).await?))
+    Ok(Json(
+        load_case_detail_response(&state, market, &setup_id).await?,
+    ))
+}
+
+async fn get_case_mechanism_story(
+    State(state): State<ApiState>,
+    Path((market, setup_id)): Path<(String, String)>,
+) -> Result<Json<CaseMechanismStoryResponse>, ApiError> {
+    let market = parse_case_market(&market)?;
+    Ok(Json(
+        load_case_mechanism_story_response(&state, market, &setup_id).await?,
+    ))
 }
 
 async fn stream_case_detail(
+    State(state): State<ApiState>,
     Path((market, setup_id)): Path<(String, String)>,
 ) -> Result<Sse<JsonEventStream>, ApiError> {
     let market = parse_case_market(&market)?;
-    Ok(json_sse(move || {
+    Ok(case_json_sse(state.clone(), market, move || {
+        let state = state.clone();
         let setup_id = setup_id.clone();
-        async move { load_case_detail_response(market, &setup_id).await }
+        async move { load_case_detail_response(&state, market, &setup_id).await }
+    }))
+}
+
+async fn stream_case_mechanism_story(
+    State(state): State<ApiState>,
+    Path((market, setup_id)): Path<(String, String)>,
+) -> Result<Sse<JsonEventStream>, ApiError> {
+    let market = parse_case_market(&market)?;
+    Ok(case_json_sse(state.clone(), market, move || {
+        let state = state.clone();
+        let setup_id = setup_id.clone();
+        async move { load_case_mechanism_story_response(&state, market, &setup_id).await }
     }))
 }
 
 async fn load_case_list_response(
+    state: &ApiState,
     market: CaseMarket,
     query: &CaseQuery,
 ) -> Result<CaseListResponse, ApiError> {
+    #[cfg(not(feature = "persistence"))]
+    let _ = state;
     let snapshot = load_snapshot(market)
         .await
         .map_err(|error| ApiError::internal(format!("failed to load cases snapshot: {error}")))?;
@@ -860,8 +941,7 @@ async fn load_case_list_response(
 
     #[cfg(feature = "persistence")]
     {
-        let store = open_store().await?;
-        enrich_case_summaries(&store, &mut response.cases)
+        enrich_case_summaries(&state.store, &mut response.cases)
             .await
             .map_err(|error| ApiError::internal(format!("failed to enrich cases: {error}")))?;
     }
@@ -874,9 +954,12 @@ async fn load_case_list_response(
 }
 
 async fn load_case_detail_response(
+    state: &ApiState,
     market: CaseMarket,
     setup_id: &str,
 ) -> Result<CaseDetail, ApiError> {
+    #[cfg(not(feature = "persistence"))]
+    let _ = state;
     let snapshot = load_snapshot(market).await.map_err(|error| {
         ApiError::internal(format!("failed to load case detail snapshot: {error}"))
     })?;
@@ -889,8 +972,7 @@ async fn load_case_detail_response(
 
     #[cfg(feature = "persistence")]
     {
-        let store = open_store().await?;
-        enrich_case_detail(&store, &mut detail)
+        enrich_case_detail(&state.store, &mut detail)
             .await
             .map_err(|error| {
                 ApiError::internal(format!("failed to enrich case detail: {error}"))
@@ -901,10 +983,11 @@ async fn load_case_detail_response(
 }
 
 async fn load_case_review_response(
+    state: &ApiState,
     market: CaseMarket,
     query: &CaseQuery,
 ) -> Result<CaseReviewResponse, ApiError> {
-    let response = load_case_list_response(market, query).await?;
+    let response = load_case_list_response(state, market, query).await?;
     #[cfg(feature = "persistence")]
     let mut review = build_case_review(&response);
     #[cfg(not(feature = "persistence"))]
@@ -912,8 +995,7 @@ async fn load_case_review_response(
 
     #[cfg(feature = "persistence")]
     {
-        let store = open_store().await?;
-        enrich_case_review(&store, market, &mut review)
+        enrich_case_review(&state.store, market, &mut review)
             .await
             .map_err(|error| {
                 ApiError::internal(format!("failed to enrich case review: {error}"))
@@ -923,31 +1005,214 @@ async fn load_case_review_response(
     Ok(review)
 }
 
-fn json_sse<T, F, Fut>(loader: F) -> Sse<JsonEventStream>
+async fn load_case_transition_analytics_response(
+    state: &ApiState,
+    market: CaseMarket,
+    query: &CaseTransitionAnalyticsQuery,
+) -> Result<CaseTransitionAnalyticsResponse, ApiError> {
+    let review =
+        load_case_review_response(state, market, &case_query_from_transition_query(query)).await?;
+    Ok(build_case_transition_analytics_response(&review, query))
+}
+
+async fn load_case_mechanism_story_response(
+    state: &ApiState,
+    market: CaseMarket,
+    setup_id: &str,
+) -> Result<CaseMechanismStoryResponse, ApiError> {
+    let detail = load_case_detail_response(state, market, setup_id).await?;
+    Ok(CaseMechanismStoryResponse {
+        market: match detail.summary.market {
+            crate::live_snapshot::LiveMarket::Hk => "hk".into(),
+            crate::live_snapshot::LiveMarket::Us => "us".into(),
+        },
+        setup_id: detail.summary.setup_id.clone(),
+        symbol: detail.summary.symbol.clone(),
+        title: detail.summary.title.clone(),
+        workflow_state: detail.summary.workflow_state.clone(),
+        market_regime_bias: detail.summary.market_regime_bias.clone(),
+        current_mechanism: detail.mechanism_story.current_mechanism.clone(),
+        mechanism_story: detail.mechanism_story,
+    })
+}
+
+fn case_query_from_transition_query(query: &CaseTransitionAnalyticsQuery) -> CaseQuery {
+    CaseQuery {
+        actor: query.actor.clone(),
+        owner: query.owner.clone(),
+        reviewer: query.reviewer.clone(),
+    }
+}
+
+fn build_case_transition_analytics_response(
+    review: &CaseReviewResponse,
+    query: &CaseTransitionAnalyticsQuery,
+) -> CaseTransitionAnalyticsResponse {
+    let classification = query
+        .classification
+        .as_ref()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let limit = query.limit.unwrap_or(8).clamp(1, 64);
+
+    CaseTransitionAnalyticsResponse {
+        market: match review.context.market {
+            crate::live_snapshot::LiveMarket::Hk => "hk".into(),
+            crate::live_snapshot::LiveMarket::Us => "us".into(),
+        },
+        tick: review.context.tick,
+        timestamp: review.context.timestamp.clone(),
+        filters: CaseTransitionAnalyticsFilters {
+            classification: classification.clone(),
+            limit,
+        },
+        mechanism_transition_breakdown: filter_transition_stats(
+            &review.analytics.mechanism_transition_breakdown,
+            classification.as_deref(),
+            limit,
+        ),
+        transition_by_sector: filter_transition_slice_stats(
+            &review.analytics.transition_by_sector,
+            classification.as_deref(),
+            limit,
+        ),
+        transition_by_regime: filter_transition_slice_stats(
+            &review.analytics.transition_by_regime,
+            classification.as_deref(),
+            limit,
+        ),
+        transition_by_reviewer: filter_transition_slice_stats(
+            &review.analytics.transition_by_reviewer,
+            classification.as_deref(),
+            limit,
+        ),
+        recent_mechanism_transitions: review
+            .analytics
+            .recent_mechanism_transitions
+            .iter()
+            .filter(|item| {
+                matches_optional_text(
+                    classification.as_deref(),
+                    Some(item.classification.as_str()),
+                )
+            })
+            .take(limit)
+            .cloned()
+            .collect(),
+    }
+}
+
+fn filter_transition_stats(
+    items: &[CaseMechanismTransitionStat],
+    classification: Option<&str>,
+    limit: usize,
+) -> Vec<CaseMechanismTransitionStat> {
+    items
+        .iter()
+        .filter(|item| matches_optional_text(classification, Some(item.classification.as_str())))
+        .take(limit)
+        .cloned()
+        .collect()
+}
+
+fn filter_transition_slice_stats(
+    items: &[CaseMechanismTransitionSliceStat],
+    classification: Option<&str>,
+    limit: usize,
+) -> Vec<CaseMechanismTransitionSliceStat> {
+    items
+        .iter()
+        .filter(|item| matches_optional_text(classification, Some(item.classification.as_str())))
+        .take(limit)
+        .cloned()
+        .collect()
+}
+
+fn matches_optional_text(filter: Option<&str>, value: Option<&str>) -> bool {
+    match filter {
+        None => true,
+        Some(filter) => value
+            .map(str::trim)
+            .map(|value| value.eq_ignore_ascii_case(filter))
+            .unwrap_or(false),
+    }
+}
+
+fn case_json_sse<T, F, Fut>(state: ApiState, market: CaseMarket, loader: F) -> Sse<JsonEventStream>
 where
     T: Serialize + Send + 'static,
     F: Fn() -> Fut + Clone + Send + 'static,
     Fut: std::future::Future<Output = Result<T, ApiError>> + Send + 'static,
 {
-    let stream = stream::unfold(true, move |first| {
-        let loader = loader.clone();
-        async move {
-            if !first {
-                tokio::time::sleep(tokio::time::Duration::from_secs(CASE_STREAM_INTERVAL_SECS))
-                    .await;
+    let stream = stream::unfold(
+        (None::<String>, None::<String>, true),
+        move |(mut last_revision, mut last_payload, first)| {
+            let state = state.clone();
+            let loader = loader.clone();
+            async move {
+                let mut first = first;
+                loop {
+                    if !first {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(
+                            CASE_STREAM_INTERVAL_SECS,
+                        ))
+                        .await;
+                    }
+                    first = false;
+
+                    let revision = match case_stream_revision(&state, market).await {
+                        Ok(revision) => revision,
+                        Err(error) => {
+                            let message = format!("stream_revision:{}", error);
+                            if last_payload.as_ref() == Some(&message) {
+                                continue;
+                            }
+                            last_payload = Some(message.clone());
+                            return Some((
+                                Ok(sse_event_from_error(&message)),
+                                (last_revision, last_payload, false),
+                            ));
+                        }
+                    };
+
+                    if last_revision.as_ref() == Some(&revision) {
+                        continue;
+                    }
+                    last_revision = Some(revision);
+
+                    let (event, fingerprint) = match loader().await {
+                        Ok(payload) => match serde_json::to_string(&payload) {
+                            Ok(json) => {
+                                if last_payload.as_ref() == Some(&json) {
+                                    continue;
+                                }
+                                (SseEvent::default().data(json.clone()), json)
+                            }
+                            Err(error) => {
+                                let message = format!("encode_error:{error}");
+                                if last_payload.as_ref() == Some(&message) {
+                                    continue;
+                                }
+                                (sse_event_from_error(&message), message)
+                            }
+                        },
+                        Err(error) => {
+                            let message = format!("stream_error:{}", error);
+                            if last_payload.as_ref() == Some(&message) {
+                                continue;
+                            }
+                            (sse_event_from_error(&message), message)
+                        }
+                    };
+
+                    last_payload = Some(fingerprint);
+                    return Some((Ok(event), (last_revision, last_payload, false)));
+                }
             }
-
-            let event = match loader().await {
-                Ok(payload) => sse_event_from_payload(&payload),
-                Err(error) => sse_event_from_error(&error.to_string()),
-            };
-
-            Some((Ok(event), false))
-        }
-    });
+        },
+    );
 
     let stream: JsonEventStream = Box::pin(stream);
-
     Sse::new(stream).keep_alive(
         KeepAlive::default()
             .interval(tokio::time::Duration::from_secs(15))
@@ -955,11 +1220,39 @@ where
     )
 }
 
-fn sse_event_from_payload<T: Serialize>(payload: &T) -> SseEvent {
-    match SseEvent::default().json_data(payload) {
-        Ok(event) => event,
-        Err(error) => sse_event_from_error(&format!("failed to encode SSE payload: {error}")),
-    }
+async fn case_stream_revision(state: &ApiState, market: CaseMarket) -> Result<String, ApiError> {
+    let (env_var, default_path) = market.snapshot_path();
+    let path = std::env::var(env_var).unwrap_or_else(|_| default_path.to_string());
+    let metadata = tokio::fs::metadata(&path).await.map_err(|error| {
+        ApiError::internal(format!("failed to stat snapshot `{path}`: {error}"))
+    })?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos().to_string())
+        .unwrap_or_else(|| "0".into());
+
+    #[cfg(feature = "persistence")]
+    let workflow_revision = state
+        .store
+        .latest_action_workflow_recorded_at()
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to query workflow revision: {error}")))?
+        .map(|timestamp| timestamp.unix_timestamp_nanos().to_string())
+        .unwrap_or_else(|| "none".into());
+    #[cfg(not(feature = "persistence"))]
+    let workflow_revision = {
+        let _ = state;
+        "none".to_string()
+    };
+
+    Ok(format!(
+        "{}:{}:{}",
+        metadata.len(),
+        modified,
+        workflow_revision
+    ))
 }
 
 fn sse_event_from_error(message: &str) -> SseEvent {
@@ -1007,11 +1300,12 @@ fn assignment_note(
 
 #[cfg(feature = "persistence")]
 async fn post_case_assign(
+    State(state): State<ApiState>,
     Path((market, setup_id)): Path<(String, String)>,
     Json(body): Json<CaseAssignBody>,
 ) -> Result<Json<CaseWorkflowState>, ApiError> {
     let market = parse_case_market(&market)?;
-    let store = open_store().await?;
+    let store = &state.store;
     let setup = store
         .tactical_setup_by_id(&setup_id)
         .await
@@ -1115,12 +1409,13 @@ async fn post_case_assign() -> Result<Json<serde_json::Value>, ApiError> {
 
 #[cfg(feature = "persistence")]
 async fn post_case_transition(
+    State(state): State<ApiState>,
     Path((market, setup_id)): Path<(String, String)>,
     Json(body): Json<CaseTransitionBody>,
 ) -> Result<Json<CaseWorkflowState>, ApiError> {
     let target_stage = parse_action_stage(&body.target_stage)?;
     let market = parse_case_market(&market)?;
-    let store = open_store().await?;
+    let store = &state.store;
     let setup = store
         .tactical_setup_by_id(&setup_id)
         .await
@@ -2018,17 +2313,18 @@ fn validate_transition(current: Option<ActionStage>, target: ActionStage) -> Res
     }
 }
 
-#[cfg(feature = "persistence")]
-async fn open_store() -> Result<EdenStore, ApiError> {
-    let path = env::var("EDEN_DB_PATH").unwrap_or_else(|_| "data/eden.db".to_string());
-    EdenStore::open(&path)
-        .await
-        .map_err(|error| ApiError::internal(format!("failed to open EdenStore: {error}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cases::{
+        CaseHumanReviewReasonStat, CaseMechanismDriftPoint, CaseMechanismStat,
+        CaseMechanismTransitionDigest, CaseMechanismTransitionSliceStat,
+        CaseMechanismTransitionStat, CaseReviewAnalytics, CaseReviewBuckets, CaseReviewMetrics,
+        CaseReviewResponse,
+    };
+    use crate::live_snapshot::{LiveMarket, LiveMarketRegime, LiveScorecard, LiveStressSnapshot};
+    use rust_decimal_macros::dec;
+    use time::OffsetDateTime;
 
     #[test]
     fn encrypted_api_key_round_trip_works() {
@@ -2061,5 +2357,177 @@ mod tests {
     fn write_scope_allows_mutations() {
         assert!(scope_allows_method("frontend:write", &Method::POST));
         assert!(scope_allows_method("frontend:write", &Method::GET));
+    }
+
+    #[test]
+    fn transition_analytics_response_filters_and_limits() {
+        let review = CaseReviewResponse {
+            context: crate::cases::CaseMarketContext {
+                market: LiveMarket::Us,
+                tick: 42,
+                timestamp: "2026-03-22T00:00:00Z".into(),
+                stock_count: 0,
+                edge_count: 0,
+                hypothesis_count: 0,
+                observation_count: 0,
+                active_positions: 0,
+                market_regime: LiveMarketRegime {
+                    bias: "risk_off".into(),
+                    confidence: dec!(0.7),
+                    breadth_up: dec!(0.2),
+                    breadth_down: dec!(0.6),
+                    average_return: dec!(-0.03),
+                    directional_consensus: Some(dec!(-0.1)),
+                    pre_market_sentiment: None,
+                },
+                stress: LiveStressSnapshot {
+                    composite_stress: dec!(0.5),
+                    sector_synchrony: None,
+                    pressure_consensus: None,
+                    momentum_consensus: None,
+                    pressure_dispersion: None,
+                    volume_anomaly: None,
+                },
+                scorecard: LiveScorecard {
+                    total_signals: 0,
+                    resolved_signals: 0,
+                    hits: 0,
+                    misses: 0,
+                    hit_rate: dec!(0),
+                    mean_return: dec!(0),
+                },
+                events: vec![],
+                cross_market_signals: vec![],
+                cross_market_anomalies: vec![],
+                lineage: vec![],
+            },
+            metrics: CaseReviewMetrics {
+                in_flight: 0,
+                under_review: 0,
+                at_risk: 0,
+                high_conviction: 0,
+            },
+            buckets: CaseReviewBuckets {
+                in_flight: vec![],
+                under_review: vec![],
+                at_risk: vec![],
+                high_conviction: vec![],
+            },
+            analytics: CaseReviewAnalytics {
+                mechanism_stats: vec![CaseMechanismStat {
+                    mechanism: "Capital Rotation".into(),
+                    cases: 1,
+                    under_review: 0,
+                    at_risk: 0,
+                    high_conviction: 1,
+                    avg_score: dec!(0.6),
+                }],
+                reviewer_corrections: vec![],
+                mechanism_drift: vec![CaseMechanismDriftPoint {
+                    window_label: "03-22 10:00".into(),
+                    top_mechanism: Some("Capital Rotation".into()),
+                    top_cases: 1,
+                    avg_score: dec!(0.6),
+                    dominant_factor: Some("Substitution Flow".into()),
+                }],
+                mechanism_transition_breakdown: vec![
+                    CaseMechanismTransitionStat {
+                        classification: "regime_shift".into(),
+                        count: 2,
+                    },
+                    CaseMechanismTransitionStat {
+                        classification: "mechanism_decay".into(),
+                        count: 1,
+                    },
+                ],
+                transition_by_sector: vec![
+                    CaseMechanismTransitionSliceStat {
+                        key: "Technology".into(),
+                        classification: "regime_shift".into(),
+                        count: 2,
+                    },
+                    CaseMechanismTransitionSliceStat {
+                        key: "Financials".into(),
+                        classification: "mechanism_decay".into(),
+                        count: 1,
+                    },
+                ],
+                transition_by_regime: vec![
+                    CaseMechanismTransitionSliceStat {
+                        key: "risk_off:high".into(),
+                        classification: "regime_shift".into(),
+                        count: 2,
+                    },
+                    CaseMechanismTransitionSliceStat {
+                        key: "neutral:low".into(),
+                        classification: "mechanism_decay".into(),
+                        count: 1,
+                    },
+                ],
+                transition_by_reviewer: vec![CaseMechanismTransitionSliceStat {
+                    key: "reviewer-a".into(),
+                    classification: "regime_shift".into(),
+                    count: 1,
+                }],
+                recent_mechanism_transitions: vec![
+                    CaseMechanismTransitionDigest {
+                        setup_id: "setup:1".into(),
+                        symbol: "A.US".into(),
+                        title: "A".into(),
+                        sector: Some("Technology".into()),
+                        regime: Some("risk_off:high".into()),
+                        reviewer: Some("reviewer-a".into()),
+                        from_mechanism: Some("Mechanical Execution Signature".into()),
+                        to_mechanism: Some("Capital Rotation".into()),
+                        classification: "regime_shift".into(),
+                        confidence: dec!(0.82),
+                        summary: "shift".into(),
+                        recorded_at: OffsetDateTime::UNIX_EPOCH,
+                    },
+                    CaseMechanismTransitionDigest {
+                        setup_id: "setup:2".into(),
+                        symbol: "B.US".into(),
+                        title: "B".into(),
+                        sector: Some("Financials".into()),
+                        regime: Some("neutral:low".into()),
+                        reviewer: Some("reviewer-b".into()),
+                        from_mechanism: Some("Narrative Failure".into()),
+                        to_mechanism: Some("Fragility Build-up".into()),
+                        classification: "mechanism_decay".into(),
+                        confidence: dec!(0.61),
+                        summary: "decay".into(),
+                        recorded_at: OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1),
+                    },
+                ],
+                reviewer_doctrine: vec![],
+                human_review_reasons: vec![CaseHumanReviewReasonStat {
+                    reason: "Mechanism Mismatch".into(),
+                    count: 1,
+                }],
+                invalidation_patterns: vec![],
+                learning_feedback:
+                    crate::pipeline::learning_loop::ReasoningLearningFeedback::default(),
+            },
+        };
+
+        let response = build_case_transition_analytics_response(
+            &review,
+            &CaseTransitionAnalyticsQuery {
+                classification: Some("regime_shift".into()),
+                limit: Some(1),
+                ..CaseTransitionAnalyticsQuery::default()
+            },
+        );
+
+        assert_eq!(response.market, "us");
+        assert_eq!(response.mechanism_transition_breakdown.len(), 1);
+        assert_eq!(response.transition_by_sector.len(), 1);
+        assert_eq!(response.transition_by_regime.len(), 1);
+        assert_eq!(response.transition_by_reviewer.len(), 1);
+        assert_eq!(response.recent_mechanism_transitions.len(), 1);
+        assert_eq!(
+            response.recent_mechanism_transitions[0].classification,
+            "regime_shift"
+        );
     }
 }

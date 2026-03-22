@@ -4,6 +4,7 @@ use petgraph::visit::EdgeRef;
 use petgraph::Direction as GraphDirection;
 use rust_decimal::Decimal;
 
+use crate::math::{clamp_unit_interval, median};
 use crate::ontology::objects::{InstitutionId, SectorId, Symbol};
 use crate::ontology::store::ObjectStore;
 
@@ -200,10 +201,6 @@ impl GraphInsights {
     }
 }
 
-fn clamp_unit(value: Decimal) -> Decimal {
-    value.clamp(Decimal::ZERO, Decimal::ONE)
-}
-
 fn average(values: impl IntoIterator<Item = Decimal>) -> Decimal {
     let values = values.into_iter().collect::<Vec<_>>();
     if values.is_empty() {
@@ -337,13 +334,8 @@ fn compute_rotations(brain: &BrainGraph, prev: Option<&GraphInsights>) -> Vec<Ro
     }
 
     // Median absolute spread as cutoff
-    let mut abs_spreads: Vec<Decimal> = all_spreads.iter().map(|(_, _, s)| s.abs()).collect();
-    abs_spreads.sort();
-    let median = if abs_spreads.is_empty() {
-        Decimal::ZERO
-    } else {
-        abs_spreads[abs_spreads.len() / 2]
-    };
+    let median =
+        median(all_spreads.iter().map(|(_, _, s)| s.abs()).collect()).unwrap_or(Decimal::ZERO);
 
     // Emit pairs above median
     let mut results = Vec::new();
@@ -953,11 +945,13 @@ fn compute_stress_index(
             let temperature_bias = (temp.temperature - Decimal::from(50)).abs() / Decimal::from(50);
             let valuation_bias = (temp.valuation - Decimal::from(50)).abs() / Decimal::from(50);
             let sentiment_bias = (temp.sentiment - Decimal::from(50)).abs() / Decimal::from(50);
-            clamp_unit((temperature_bias + valuation_bias + sentiment_bias) / Decimal::from(3))
+            clamp_unit_interval(
+                (temperature_bias + valuation_bias + sentiment_bias) / Decimal::from(3),
+            )
         })
         .unwrap_or(Decimal::ZERO);
 
-    let conflict_component = clamp_unit(conflict_intensity_mean / Decimal::TWO);
+    let conflict_component = clamp_unit_interval(conflict_intensity_mean / Decimal::TWO);
     let composite_stress = average([
         sector_synchrony,
         pressure_consensus,

@@ -94,10 +94,18 @@ impl DimensionSnapshot {
     }
 }
 
-use crate::math::normalized_ratio;
+use crate::math::{clamp_signed_unit_interval, median, normalized_ratio};
 
-fn clamp_unit(value: Decimal) -> Decimal {
-    value.clamp(-Decimal::ONE, Decimal::ONE)
+// A 3% five-minute move is already an unusually large intraday impulse for HK names,
+// so we treat it as "full" directional activity strength.
+fn activity_return_normalizer() -> Decimal {
+    Decimal::new(3, 2)
+}
+
+// 8% turnover-rate or amplitude readings are already extreme on this watchlist.
+// Past that point we cap the boost instead of letting a few tape outliers dominate.
+fn activity_boost_normalizer() -> Decimal {
+    Decimal::new(8, 2)
 }
 
 fn positive_part(value: Decimal) -> Decimal {
@@ -114,19 +122,6 @@ fn average(values: impl IntoIterator<Item = Decimal>) -> Decimal {
         Decimal::ZERO
     } else {
         values.iter().copied().sum::<Decimal>() / Decimal::from(values.len() as i64)
-    }
-}
-
-fn median(mut values: Vec<Decimal>) -> Option<Decimal> {
-    if values.is_empty() {
-        return None;
-    }
-    values.sort();
-    let mid = values.len() / 2;
-    if values.len() % 2 == 0 {
-        Some((values[mid - 1] + values[mid]) / Decimal::TWO)
-    } else {
-        Some(values[mid])
     }
 }
 
@@ -176,7 +171,7 @@ fn compute_capital_flow_direction(links: &LinkSnapshot) -> HashMap<Symbol, Decim
             if t == Decimal::ZERO {
                 return Some((cf.symbol.clone(), Decimal::ZERO));
             }
-            let ratio = cf.net_inflow / t;
+            let ratio = cf.net_inflow.as_yuan() / t;
             // Clamp to [-1, +1]
             let one = Decimal::ONE;
             let clamped = if ratio > one {
@@ -344,24 +339,36 @@ fn compute_activity_momentum(links: &LinkSnapshot) -> HashMap<Symbol, Decimal> {
         .map(|idx| {
             let direction = idx
                 .five_minutes_change_rate
-                .map(|value| clamp_unit(value / Decimal::new(3, 2)))
+                .map(|value| clamp_signed_unit_interval(value / activity_return_normalizer()))
                 .unwrap_or(Decimal::ZERO);
             let volume_boost = idx
                 .volume_ratio
-                .map(|value| positive_part(clamp_unit((value - Decimal::ONE) / Decimal::TWO)))
+                .map(|value| {
+                    positive_part(clamp_signed_unit_interval(
+                        (value - Decimal::ONE) / Decimal::TWO,
+                    ))
+                })
                 .unwrap_or(Decimal::ZERO);
             let turnover_boost = idx
                 .turnover_rate
-                .map(|value| positive_part(clamp_unit(value / Decimal::new(8, 2))))
+                .map(|value| {
+                    positive_part(clamp_signed_unit_interval(
+                        value / activity_boost_normalizer(),
+                    ))
+                })
                 .unwrap_or(Decimal::ZERO);
             let amplitude_boost = idx
                 .amplitude
-                .map(|value| positive_part(clamp_unit(value / Decimal::new(8, 2))))
+                .map(|value| {
+                    positive_part(clamp_signed_unit_interval(
+                        value / activity_boost_normalizer(),
+                    ))
+                })
                 .unwrap_or(Decimal::ZERO);
 
             let activity_level = average([volume_boost, turnover_boost, amplitude_boost]);
             let value = direction * ((Decimal::ONE + activity_level) / Decimal::TWO);
-            (idx.symbol.clone(), clamp_unit(value))
+            (idx.symbol.clone(), clamp_signed_unit_interval(value))
         })
         .collect()
 }
@@ -372,12 +379,12 @@ fn compute_candlestick_conviction(links: &LinkSnapshot) -> HashMap<Symbol, Decim
         .iter()
         .map(|candle| {
             let directional = average([candle.window_return, candle.body_bias]);
-            let volume_confirmation = positive_part(clamp_unit(
+            let volume_confirmation = positive_part(clamp_signed_unit_interval(
                 (candle.volume_ratio - Decimal::ONE) / Decimal::TWO,
             ));
             let confirmation = average([volume_confirmation, candle.range_ratio]);
             let value = directional * ((Decimal::ONE + confirmation) / Decimal::TWO);
-            (candle.symbol.clone(), clamp_unit(value))
+            (candle.symbol.clone(), clamp_signed_unit_interval(value))
         })
         .collect()
 }
@@ -513,7 +520,7 @@ mod tests {
         let mut links = empty_links();
         links.capital_flows.push(CapitalFlow {
             symbol: sym("700.HK"),
-            net_inflow: dec!(100),
+            net_inflow: crate::ontology::links::YuanAmount::from_yuan(dec!(100)),
         });
         links.quotes.push(QuoteObservation {
             symbol: sym("700.HK"),
@@ -537,7 +544,7 @@ mod tests {
         let mut links = empty_links();
         links.capital_flows.push(CapitalFlow {
             symbol: sym("700.HK"),
-            net_inflow: dec!(-500),
+            net_inflow: crate::ontology::links::YuanAmount::from_yuan(dec!(-500)),
         });
         links.quotes.push(QuoteObservation {
             symbol: sym("700.HK"),
@@ -561,7 +568,7 @@ mod tests {
         let mut links = empty_links();
         links.capital_flows.push(CapitalFlow {
             symbol: sym("700.HK"),
-            net_inflow: dec!(2000),
+            net_inflow: crate::ontology::links::YuanAmount::from_yuan(dec!(2000)),
         });
         links.quotes.push(QuoteObservation {
             symbol: sym("700.HK"),
@@ -585,7 +592,7 @@ mod tests {
         let mut links = empty_links();
         links.capital_flows.push(CapitalFlow {
             symbol: sym("700.HK"),
-            net_inflow: dec!(100),
+            net_inflow: crate::ontology::links::YuanAmount::from_yuan(dec!(100)),
         });
         links.quotes.push(QuoteObservation {
             symbol: sym("700.HK"),
@@ -818,7 +825,7 @@ mod tests {
         // Capital flow for 700.HK
         links.capital_flows.push(CapitalFlow {
             symbol: sym("700.HK"),
-            net_inflow: dec!(500),
+            net_inflow: crate::ontology::links::YuanAmount::from_yuan(dec!(500)),
         });
 
         // Capital breakdown for 700.HK

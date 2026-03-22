@@ -3,9 +3,17 @@ use std::collections::HashMap;
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
 
+use crate::math::clamp_signed_unit_interval;
+
 use super::objects::{BrokerId, InstitutionId, Symbol};
 use super::snapshot::RawSnapshot;
 use super::store::ObjectStore;
+
+// A 5-bar trading range around 8% of the opening price is already an outsized
+// intraday expansion for the HK names we ingest, so we cap range conviction there.
+fn candle_range_normalizer() -> Decimal {
+    Decimal::new(8, 2)
+}
 
 // ── Link types ──
 
@@ -43,7 +51,24 @@ pub struct CrossStockPresence {
 #[derive(Debug, Clone)]
 pub struct CapitalFlow {
     pub symbol: Symbol,
-    pub net_inflow: Decimal,
+    pub net_inflow: YuanAmount,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct YuanAmount(Decimal);
+
+impl YuanAmount {
+    pub fn from_yuan(value: Decimal) -> Self {
+        Self(value)
+    }
+
+    pub fn from_ten_thousands(value: Decimal) -> Self {
+        Self(value * Decimal::from(10_000))
+    }
+
+    pub fn as_yuan(self) -> Decimal {
+        self.0
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -350,15 +375,15 @@ fn compute_cross_stock_presences(activities: &[InstitutionActivity]) -> Vec<Cros
 }
 
 /// Extract the latest capital flow entry for each symbol.
-/// Longport inflow is in 萬元, turnover is in 元 — multiply by 10000 to align.
+/// Longport inflow is in 萬元 while turnover is in 元.
+/// Convert once into a typed YuanAmount so downstream consumers stay unit-safe.
 fn compute_capital_flows(raw: &RawSnapshot) -> Vec<CapitalFlow> {
-    let scale = rust_decimal::Decimal::from(10000);
     raw.capital_flows
         .iter()
         .filter_map(|(symbol, lines)| {
             lines.last().map(|line| CapitalFlow {
                 symbol: symbol.clone(),
-                net_inflow: line.inflow * scale,
+                net_inflow: YuanAmount::from_ten_thousands(line.inflow),
             })
         })
         .collect()
@@ -393,10 +418,6 @@ fn compute_capital_breakdowns(raw: &RawSnapshot) -> Vec<CapitalBreakdown> {
         .collect()
 }
 
-fn clamp_unit(value: Decimal) -> Decimal {
-    value.clamp(-Decimal::ONE, Decimal::ONE)
-}
-
 fn compute_candlesticks(raw: &RawSnapshot) -> Vec<CandlestickObservation> {
     raw.candlesticks
         .iter()
@@ -426,14 +447,16 @@ fn compute_candlesticks(raw: &RawSnapshot) -> Vec<CandlestickObservation> {
                 .unwrap_or(latest.low);
 
             let window_return = if first.open > Decimal::ZERO {
-                clamp_unit((latest.close - first.open) / first.open / Decimal::new(2, 2))
+                clamp_signed_unit_interval(
+                    (latest.close - first.open) / first.open / Decimal::new(2, 2),
+                )
             } else {
                 Decimal::ZERO
             };
 
             let latest_range = latest.high - latest.low;
             let body_bias = if latest_range > Decimal::ZERO {
-                clamp_unit((latest.close - latest.open) / latest_range)
+                clamp_signed_unit_interval((latest.close - latest.open) / latest_range)
             } else {
                 Decimal::ZERO
             };
@@ -452,7 +475,9 @@ fn compute_candlesticks(raw: &RawSnapshot) -> Vec<CandlestickObservation> {
             };
 
             let range_ratio = if first.open > Decimal::ZERO {
-                clamp_unit((window_high - window_low) / first.open / Decimal::new(8, 2))
+                clamp_signed_unit_interval(
+                    (window_high - window_low) / first.open / candle_range_normalizer(),
+                )
             } else {
                 Decimal::ZERO
             };
@@ -969,7 +994,7 @@ mod tests {
 
         let flows = compute_capital_flows(&raw);
         assert_eq!(flows.len(), 1);
-        assert_eq!(flows[0].net_inflow, Decimal::new(300, 0));
+        assert_eq!(flows[0].net_inflow.as_yuan(), Decimal::new(3_000_000, 0));
     }
 
     #[test]

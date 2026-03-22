@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use longport::quote::{
     CalcIndex, MarketTemperature, Period, PushEvent, PushEventDetail, QuoteContext,
@@ -9,6 +10,7 @@ use longport::quote::{
 use longport::{Config, Market};
 use rust_decimal::Decimal;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::time::Duration;
 
 use eden::action::narrative::NarrativeSnapshot;
@@ -1589,6 +1591,8 @@ fn print_lineage_context_group(
 /// before running the pipeline. Batches rapid-fire events without adding latency.
 const DEBOUNCE_MS: u64 = 2000;
 const LINEAGE_WINDOW: usize = 50;
+const TRADE_BUFFER_CAP_PER_SYMBOL: usize = 2_000;
+const POLYMARKET_WARNING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Live market state accumulated from WebSocket push events.
 struct LiveState {
@@ -1660,7 +1664,7 @@ impl LiveState {
             }
             PushEventDetail::Trade(push_trades) => {
                 let entry = self.trades.entry(symbol).or_default();
-                entry.extend(push_trades.trades);
+                append_trades_with_cap(entry, push_trades.trades);
             }
             PushEventDetail::Candlestick(candle) => {
                 let entry = self.candlesticks.entry(symbol).or_default();
@@ -1690,6 +1694,13 @@ impl LiveState {
             capital_flows: rest.capital_flows.clone(),
             capital_distributions: rest.capital_distributions.clone(),
         }
+    }
+}
+
+fn append_trades_with_cap(buffer: &mut Vec<Trade>, mut trades: Vec<Trade>) {
+    buffer.append(&mut trades);
+    if buffer.len() > TRADE_BUFFER_CAP_PER_SYMBOL {
+        buffer.drain(..buffer.len() - TRADE_BUFFER_CAP_PER_SYMBOL);
     }
 }
 
@@ -1769,6 +1780,25 @@ mod tests {
 
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].stage.as_str(), "suggest");
+    }
+
+    #[test]
+    fn live_state_caps_trade_buffer_per_symbol() {
+        let mut buffered = Vec::new();
+        for _ in 0..(TRADE_BUFFER_CAP_PER_SYMBOL + 10) {
+            append_trades_with_cap(
+                &mut buffered,
+                vec![Trade {
+                    price: dec!(10),
+                    volume: 1,
+                    timestamp: time::OffsetDateTime::UNIX_EPOCH,
+                    trade_type: String::new(),
+                    direction: longport::quote::TradeDirection::Neutral,
+                    trade_session: longport::quote::TradeSession::Intraday,
+                }],
+            );
+        }
+        assert_eq!(buffered.len(), TRADE_BUFFER_CAP_PER_SYMBOL);
     }
 
     #[test]
@@ -2199,9 +2229,28 @@ async fn fetch_rest_data(
         capital_distributions: dist_results.into_iter().flatten().collect(),
         market_temperature,
         polymarket: polymarket_snapshot.unwrap_or_else(|error| {
-            eprintln!("Warning: Polymarket refresh failed: {}", error);
+            rate_limited_polymarket_warning(&format!(
+                "Warning: Polymarket refresh failed: {}",
+                error
+            ));
             PolymarketSnapshot::default()
         }),
+    }
+}
+
+fn rate_limited_polymarket_warning(message: &str) {
+    static LAST_WARNING_AT: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+    let mutex = LAST_WARNING_AT.get_or_init(|| Mutex::new(None));
+    let Ok(mut guard) = mutex.lock() else {
+        eprintln!("{}", message);
+        return;
+    };
+    let should_log = guard
+        .map(|instant| instant.elapsed() >= POLYMARKET_WARNING_INTERVAL)
+        .unwrap_or(true);
+    if should_log {
+        eprintln!("{}", message);
+        *guard = Some(Instant::now());
     }
 }
 
@@ -2679,10 +2728,23 @@ async fn main() {
         return;
     }
 
-    let config = Config::from_env().expect("failed to load Longport config from env");
-    let (ctx, mut receiver) = QuoteContext::try_new(Arc::new(config))
-        .await
-        .expect("failed to connect to Longport");
+    let config = match Config::from_env() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!(
+                "Live runtime failed to load Longport config from env: {}",
+                error
+            );
+            std::process::exit(1);
+        }
+    };
+    let (ctx, mut receiver) = match QuoteContext::try_new(Arc::new(config)).await {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("Live runtime failed to connect to Longport: {}", error);
+            std::process::exit(1);
+        }
+    };
 
     println!("Connected to Longport. Initializing ObjectStore...");
 
@@ -2737,12 +2799,19 @@ async fn main() {
 
     // ── Subscribe to ALL real-time push types ──
     println!("\nSubscribing to WebSocket (DEPTH + BROKER + QUOTE + TRADE)...");
-    ctx.subscribe(
-        WATCHLIST,
-        SubFlags::DEPTH | SubFlags::BROKER | SubFlags::QUOTE | SubFlags::TRADE,
-    )
-    .await
-    .expect("failed to subscribe");
+    if let Err(error) = ctx
+        .subscribe(
+            WATCHLIST,
+            SubFlags::DEPTH | SubFlags::BROKER | SubFlags::QUOTE | SubFlags::TRADE,
+        )
+        .await
+    {
+        eprintln!(
+            "Live runtime failed to subscribe to Longport streams: {}",
+            error
+        );
+        std::process::exit(1);
+    }
     println!("Subscribed to {} symbols × 4 channels.", WATCHLIST.len());
 
     // Subscribe to 1-minute candlesticks
@@ -2785,10 +2854,23 @@ async fn main() {
     // ── Spawn push event forwarder ──
     let (push_tx, mut push_rx) = mpsc::channel::<PushEvent>(10000);
     tokio::spawn(async move {
+        let mut dropped_push_events = 0u64;
         while let Some(event) = receiver.recv().await {
-            if push_tx.try_send(event).is_err() {
-                // Channel full or closed — drop event to avoid blocking
-                continue;
+            match push_tx.try_send(event) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    dropped_push_events += 1;
+                    if dropped_push_events == 1 || dropped_push_events % 100 == 0 {
+                        eprintln!(
+                            "Warning: dropped {} HK push events because debounce channel is full.",
+                            dropped_push_events
+                        );
+                    }
+                }
+                Err(TrySendError::Closed(_)) => {
+                    eprintln!("Warning: HK push event channel closed; stopping forwarder.");
+                    break;
+                }
             }
         }
     });
@@ -4073,11 +4155,10 @@ async fn main() {
         let mut candle_syms: Vec<_> = live
             .candlesticks
             .iter()
-            .filter(|(_, candles)| !candles.is_empty())
-            .map(|(sym, candles)| {
-                let latest = candles.last().unwrap();
+            .filter_map(|(sym, candles)| {
+                let latest = candles.last()?;
                 let range = latest.high - latest.low;
-                (sym, candles.len(), latest.close, range, latest.volume)
+                Some((sym, candles.len(), latest.close, range, latest.volume))
             })
             .collect();
         candle_syms.sort_by(|a, b| b.4.cmp(&a.4));

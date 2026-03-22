@@ -816,23 +816,21 @@ fn cross_market_dislocation(inputs: &PredicateInputs<'_>) -> AtomicPredicate {
 }
 
 fn sector_rotation_pressure(inputs: &PredicateInputs<'_>) -> AtomicPredicate {
-    let Some(case_sector) = case_sector(inputs) else {
-        return predicate(
+    let zero_rotation = || {
+        predicate(
             AtomicPredicateKind::SectorRotationPressure,
             Decimal::ZERO,
             "板塊間的替代資金流正在形成，當前 case 更像輪動受益/受害者。",
             vec![],
-        );
+        )
+    };
+    let Some(case_sector) = case_sector(inputs) else {
+        return zero_rotation();
     };
 
     let by_sector = sector_pressure_map(inputs);
     let Some(case_pressure) = by_sector.get(case_sector.as_str()).copied() else {
-        return predicate(
-            AtomicPredicateKind::SectorRotationPressure,
-            Decimal::ZERO,
-            "板塊間的替代資金流正在形成，當前 case 更像輪動受益/受害者。",
-            vec![],
-        );
+        return zero_rotation();
     };
 
     let opposite = by_sector
@@ -850,12 +848,7 @@ fn sector_rotation_pressure(inputs: &PredicateInputs<'_>) -> AtomicPredicate {
         });
 
     let Some((opposite_sector, opposite_pressure)) = opposite else {
-        return predicate(
-            AtomicPredicateKind::SectorRotationPressure,
-            Decimal::ZERO,
-            "板塊間的替代資金流正在形成，當前 case 更像輪動受益/受害者。",
-            vec![],
-        );
+        return zero_rotation();
     };
 
     let spread = clamp_unit_interval(
@@ -1116,11 +1109,13 @@ fn sector_pressure_map(inputs: &PredicateInputs<'_>) -> HashMap<String, SectorPr
 
     sums.into_iter()
         .filter_map(|(sector, (pressure_sum, duration_sum, count))| {
-            (count > 0).then_some((
+            let count_u64 = u64::try_from(count).ok()?;
+            let avg_duration = duration_sum.checked_div(count_u64)?;
+            Some((
                 sector,
                 SectorPressureStats {
                     avg_pressure: pressure_sum / Decimal::from(count as i64),
-                    avg_duration: duration_sum / count as u64,
+                    avg_duration,
                     count,
                 },
             ))

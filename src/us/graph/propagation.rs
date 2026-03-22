@@ -109,10 +109,11 @@ pub fn compute_cross_market_signals(
         .collect()
 }
 
-/// Read and parse an HK snapshot from a JSON file.
-pub fn read_hk_snapshot(path: &str) -> Result<HkSnapshot, String> {
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))?;
+/// Read and parse an HK snapshot from a JSON file without blocking the Tokio runtime.
+pub async fn read_hk_snapshot(path: &str) -> Result<HkSnapshot, String> {
+    let content = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|e| format!("failed to read {path}: {e}"))?;
     serde_json::from_str(&content).map_err(|e| format!("failed to parse {path}: {e}"))
 }
 
@@ -154,6 +155,7 @@ fn time_decay(minutes_since_close: i64) -> Decimal {
 mod tests {
     use super::*;
     use rust_decimal_macros::dec;
+    use std::path::PathBuf;
 
     fn sym(s: &str) -> Symbol {
         Symbol(s.into())
@@ -370,6 +372,30 @@ mod tests {
         let snap: HkSnapshot = serde_json::from_str(json).unwrap();
         assert_eq!(snap.top_signals[0].sector_coherence, None);
         assert_eq!(snap.top_signals[0].mark_price, None);
+    }
+
+    #[tokio::test]
+    async fn reads_hk_snapshot_from_disk_async() {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "eden-hk-snapshot-{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        tokio::fs::write(
+            &path,
+            r#"{"timestamp":"2026-03-20T08:00:00Z","top_signals":[{"symbol":"9988.HK","composite":"0.5","institutional_alignment":"0.3"}]}"#,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = read_hk_snapshot(path.to_str().unwrap()).await.unwrap();
+        assert_eq!(snapshot.top_signals.len(), 1);
+        assert_eq!(snapshot.top_signals[0].symbol, "9988.HK");
+
+        let _ = tokio::fs::remove_file(PathBuf::from(path)).await;
     }
 
     // ── minutes_since_hk_close ──

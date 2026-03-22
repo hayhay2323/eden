@@ -5,7 +5,7 @@ use rust_decimal::Decimal;
 use time::OffsetDateTime;
 
 use crate::action::narrative::{NarrativeSnapshot, Regime};
-use crate::math::{cosine_similarity, jaccard, normalized_ratio};
+use crate::math::{cosine_similarity, jaccard, median, normalized_ratio};
 use crate::ontology::domain::{ProvenanceMetadata, ProvenanceSource};
 use crate::ontology::links::{LinkSnapshot, MarketTemperatureObservation};
 use crate::ontology::objects::{InstitutionId, SectorId, Symbol};
@@ -250,18 +250,14 @@ impl BrainGraph {
             }
         }
 
-        // Compute median absolute similarity as data-derived cutoff
-        let mut abs_sims: Vec<Decimal> = all_pairs.iter().map(|(_, _, s)| s.abs()).collect();
-        abs_sims.sort();
-        let median_cutoff = if abs_sims.is_empty() {
-            Decimal::ZERO
-        } else {
-            abs_sims[abs_sims.len() / 2]
-        };
+        // Compute median absolute similarity as data-derived cutoff.
+        // Keep only pairs strictly above the median to align with the graph insights filters.
+        let median_cutoff =
+            median(all_pairs.iter().map(|(_, _, s)| s.abs()).collect()).unwrap_or(Decimal::ZERO);
 
-        // Second pass: only create edges at or above median
+        // Second pass: only create edges above the median
         for (i, j, similarity) in &all_pairs {
-            if similarity.abs() < median_cutoff {
+            if similarity.abs() <= median_cutoff {
                 continue;
             }
             let &idx_a = stock_nodes.get(&stock_syms[*i]).unwrap();
@@ -673,6 +669,7 @@ mod tests {
         let mut narratives = HashMap::new();
         narratives.insert(sym("700.HK"), make_narrative(dec!(0.5), dec!(0.3)));
         narratives.insert(sym("9988.HK"), make_narrative(dec!(0.3), dec!(0.1)));
+        narratives.insert(sym("388.HK"), make_narrative(dec!(0.2), dec!(-0.1)));
 
         let narrative = NarrativeSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -687,6 +684,10 @@ mod tests {
         dimensions.insert(
             sym("9988.HK"),
             make_dims(dec!(0.4), dec!(0.4), dec!(0.4), dec!(0.4)),
+        );
+        dimensions.insert(
+            sym("388.HK"),
+            make_dims(dec!(0.5), dec!(-0.5), dec!(0.5), dec!(-0.5)),
         );
 
         let dims = DimensionSnapshot {

@@ -7,8 +7,10 @@ use crate::live_snapshot::{
     LiveHypothesisTrack, LiveLineageMetric, LiveMarket, LiveMarketRegime, LivePressure,
     LiveScorecard, LiveSignal, LiveSnapshot, LiveStressSnapshot, LiveTacticalCase,
 };
+use crate::math::clamp_signed_unit_interval;
 use crate::ontology::links::{
     CalcIndexObservation, CandlestickObservation, CapitalFlow, MarketStatus, QuoteObservation,
+    YuanAmount,
 };
 use crate::ontology::objects::{SectorId, Stock, Symbol};
 use crate::ontology::reasoning::TacticalSetup;
@@ -22,6 +24,7 @@ use crate::persistence::us_lineage_snapshot::UsLineageSnapshotRecord;
 use crate::runtime_loop::{next_tick, spawn_periodic_fetch, TickState};
 use crate::us::action::tracker::{UsPositionTracker, UsStructuralFingerprint};
 use crate::us::action::workflow::{UsActionStage, UsActionWorkflow};
+use crate::us::common::SIGNAL_RESOLUTION_LAG;
 use crate::us::graph::decision::{UsDecisionSnapshot, UsSignalRecord, UsSignalScorecard};
 use crate::us::graph::graph::UsGraph;
 use crate::us::graph::insights::UsGraphInsights;
@@ -40,6 +43,7 @@ use crate::us::temporal::causality::compute_causal_timelines;
 use crate::us::temporal::lineage::{compute_us_lineage_stats, UsLineageStats};
 use crate::us::temporal::record::{UsSymbolSignals, UsTickRecord};
 use crate::us::watchlist::{us_symbol_sector, US_SECTOR_NAMES, US_WATCHLIST};
+use chrono::{Datelike, NaiveDate, TimeZone, Utc, Weekday};
 use futures::stream::{self, StreamExt};
 use longport::quote::{
     CalcIndex, Period, PushEvent, PushEventDetail, QuoteContext, SecurityCalcIndex, SecurityQuote,
@@ -48,10 +52,19 @@ use longport::quote::{
 use longport::Config;
 use rust_decimal::Decimal;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::time::Duration;
 
 const DEBOUNCE_MS: u64 = 2000;
-const US_LINEAGE_RESOLUTION_LAG: u64 = 15;
+const US_SIGNAL_RECORD_CAP: usize = 4_000;
+const US_SIGNAL_RECORD_RETENTION_TICKS: u64 = 240;
+const US_WORKFLOW_CAP: usize = 512;
+const TRADE_BUFFER_CAP_PER_SYMBOL: usize = 2_000;
+// US candlestick extraction uses the same 8% saturation point as HK: beyond that
+// the range is clearly "expanded" already and more width should not add more weight.
+fn candle_range_normalizer() -> Decimal {
+    Decimal::new(8, 2)
+}
 
 // ── US LiveState ──
 
@@ -101,10 +114,11 @@ impl UsLiveState {
                 );
             }
             PushEventDetail::Trade(push_trades) => {
-                self.trades
-                    .entry(symbol)
-                    .or_default()
-                    .extend(push_trades.trades);
+                let entry = self.trades.entry(symbol).or_default();
+                entry.extend(push_trades.trades);
+                if entry.len() > TRADE_BUFFER_CAP_PER_SYMBOL {
+                    entry.drain(..entry.len() - TRADE_BUFFER_CAP_PER_SYMBOL);
+                }
             }
             PushEventDetail::Candlestick(candle) => {
                 let entry = self.candlesticks.entry(symbol).or_default();
@@ -192,14 +206,11 @@ fn build_quotes(raw: &HashMap<Symbol, SecurityQuote>) -> Vec<QuoteObservation> {
 fn build_capital_flows(
     raw: &HashMap<Symbol, Vec<longport::quote::CapitalFlowLine>>,
 ) -> Vec<CapitalFlow> {
-    // Longport capital_flow inflow is in 萬元 (10k units),
-    // but quote turnover is in 元. Multiply by 10000 to align units.
-    let scale = Decimal::from(10000);
     raw.iter()
         .filter_map(|(symbol, lines)| {
             lines.last().map(|line| CapitalFlow {
                 symbol: symbol.clone(),
-                net_inflow: line.inflow * scale,
+                net_inflow: YuanAmount::from_ten_thousands(line.inflow),
             })
         })
         .collect()
@@ -220,10 +231,6 @@ fn build_calc_indexes(raw: &HashMap<Symbol, SecurityCalcIndex>) -> Vec<CalcIndex
         .collect()
 }
 
-fn clamp_unit(value: Decimal) -> Decimal {
-    value.clamp(-Decimal::ONE, Decimal::ONE)
-}
-
 fn build_candlesticks(
     raw: &HashMap<Symbol, Vec<longport::quote::Candlestick>>,
 ) -> Vec<CandlestickObservation> {
@@ -239,14 +246,16 @@ fn build_candlesticks(
                 .unwrap_or(*latest);
 
             let window_return = if first.open > Decimal::ZERO {
-                clamp_unit((latest.close - first.open) / first.open / Decimal::new(2, 2))
+                clamp_signed_unit_interval(
+                    (latest.close - first.open) / first.open / Decimal::new(2, 2),
+                )
             } else {
                 Decimal::ZERO
             };
 
             let latest_range = latest.high - latest.low;
             let body_bias = if latest_range > Decimal::ZERO {
-                clamp_unit((latest.close - latest.open) / latest_range)
+                clamp_signed_unit_interval((latest.close - latest.open) / latest_range)
             } else {
                 Decimal::ZERO
             };
@@ -279,7 +288,9 @@ fn build_candlesticks(
                 .min()
                 .unwrap_or(latest.low);
             let range_ratio = if first.open > Decimal::ZERO {
-                clamp_unit((window_high - window_low) / first.open / Decimal::new(8, 2))
+                clamp_signed_unit_interval(
+                    (window_high - window_low) / first.open / candle_range_normalizer(),
+                )
             } else {
                 Decimal::ZERO
             };
@@ -393,9 +404,23 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Spawn push event forwarder
     let (push_tx, mut push_rx) = mpsc::channel::<PushEvent>(10000);
     tokio::spawn(async move {
+        let mut dropped_push_events = 0u64;
         while let Some(event) = receiver.recv().await {
-            if push_tx.try_send(event).is_err() {
-                continue;
+            match push_tx.try_send(event) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    dropped_push_events += 1;
+                    if dropped_push_events == 1 || dropped_push_events % 100 == 0 {
+                        eprintln!(
+                            "Warning: dropped {} US push events because debounce channel is full.",
+                            dropped_push_events
+                        );
+                    }
+                }
+                Err(TrySendError::Closed(_)) => {
+                    eprintln!("Warning: US push event channel closed; stopping forwarder.");
+                    break;
+                }
             }
         }
     });
@@ -442,17 +467,20 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let trades_this_tick = std::mem::take(&mut live.trades);
         let _ = trades_this_tick; // trades available for future use
 
-        // US market hours: 9:30-16:00 ET = 13:30-20:00 UTC (no DST adjustment needed — close enough)
-        let utc_hour = now.hour();
-        let utc_min = now.minute();
-        let utc_total_min = utc_hour as u32 * 60 + utc_min as u32;
-        let market_open = utc_total_min >= 13 * 60 + 30 && utc_total_min < 20 * 60;
+        let market_open = is_us_regular_market_hours(now);
         if !market_open {
             // Still write snapshot but mark as after-hours, skip reasoning
             if tick % 100 == 0 {
+                let (open_hour, open_minute, close_hour, close_minute) = us_market_hours_utc(now);
                 println!(
-                    "[US tick {}] after-hours (UTC {:02}:{:02}), skipping reasoning",
-                    tick, utc_hour, utc_min
+                    "[US tick {}] after-hours (UTC {:02}:{:02}, session {:02}:{:02}-{:02}:{:02}), skipping reasoning",
+                    tick,
+                    now.hour(),
+                    now.minute(),
+                    open_hour,
+                    open_minute,
+                    close_hour,
+                    close_minute,
                 );
             }
             continue;
@@ -488,7 +516,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let graph = UsGraph::compute(&dim_snapshot, &sector_map, &sector_names);
 
         // Cross-market propagation: read HK snapshot if available
-        let cross_market_signals = read_cross_market_signals(now);
+        let cross_market_signals = read_cross_market_signals(now).await;
 
         // ── Reasoning stack ──
 
@@ -605,25 +633,26 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|q| q.last_done);
             UsSignalScorecard::try_resolve(record, tick, current_price);
         }
+        prune_us_signal_records(&mut signal_records, tick);
         let scorecard = UsSignalScorecard::compute(&signal_records);
 
         // Update state for next tick
         previous_setups = reasoning.tactical_setups.clone();
         previous_flows = capital_flows
             .iter()
-            .map(|cf| (cf.symbol.clone(), cf.net_inflow))
+            .map(|cf| (cf.symbol.clone(), cf.net_inflow.as_yuan()))
             .collect();
 
         // 8. Lineage stats every 30 ticks
         if tick % 30 == 0 && tick_history.len() > 1 {
-            lineage_stats = compute_us_lineage_stats(&tick_history, US_LINEAGE_RESOLUTION_LAG);
+            lineage_stats = compute_us_lineage_stats(&tick_history, SIGNAL_RESOLUTION_LAG);
             #[cfg(feature = "persistence")]
             if let Some(ref store) = eden_store {
                 let snapshot = UsLineageSnapshotRecord::new(
                     tick,
                     now,
                     tick_history.len(),
-                    US_LINEAGE_RESOLUTION_LAG,
+                    SIGNAL_RESOLUTION_LAG,
                     &lineage_stats,
                 );
                 let rows = rows_from_us_lineage_stats(
@@ -631,7 +660,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     tick,
                     now,
                     tick_history.len(),
-                    US_LINEAGE_RESOLUTION_LAG,
+                    SIGNAL_RESOLUTION_LAG,
                     &lineage_stats,
                 );
                 let store_ref = store.clone();
@@ -689,9 +718,19 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             position_tracker.enter(fp);
                             let mut wf = UsActionWorkflow::from_setup(setup, tick, price);
                             // Auto-system: immediately confirm + execute → Monitoring
-                            wf.confirm();
+                            if let Err(error) = wf.confirm(tick) {
+                                eprintln!(
+                                    "Warning: failed to confirm workflow {} for {}: {}",
+                                    wf.workflow_id, wf.symbol, error
+                                );
+                            }
                             if let Some(p) = price {
-                                wf.execute(p);
+                                if let Err(error) = wf.execute(p, tick) {
+                                    eprintln!(
+                                        "Warning: failed to execute workflow {} for {}: {}",
+                                        wf.workflow_id, wf.symbol, error
+                                    );
+                                }
                             }
                             workflows.push(wf);
                         }
@@ -706,7 +745,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(wf) = workflows.iter_mut().find(|w| {
                     w.symbol == deg.symbol && matches!(w.stage, UsActionStage::Monitoring)
                 }) {
-                    wf.review("auto-exit: structural degradation");
+                    if let Err(error) = wf.review("auto-exit: structural degradation", tick) {
+                        eprintln!(
+                            "Warning: failed to review workflow {} for {}: {}",
+                            wf.workflow_id, wf.symbol, error
+                        );
+                    }
                 }
             }
         }
@@ -718,12 +762,18 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .find(|q| q.symbol == wf.symbol)
                     .map(|q| q.last_done);
                 if let Some(deg) = exit_candidates.iter().find(|d| d.symbol == wf.symbol) {
-                    wf.update_monitoring(price, deg.clone());
+                    if let Err(error) = wf.update_monitoring(price, deg.clone()) {
+                        eprintln!(
+                            "Warning: failed to update workflow {} for {}: {}",
+                            wf.workflow_id, wf.symbol, error
+                        );
+                    }
                 }
             }
         }
         // Prune stale workflows
         workflows.retain(|w| !w.is_stale(tick));
+        prune_us_workflows(&mut workflows);
 
         prev_insights = Some(insights.clone());
 
@@ -1086,6 +1136,175 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ontology::objects::Symbol;
+    use crate::us::action::workflow::{UsActionStage, UsActionWorkflow};
+    use crate::us::graph::decision::{UsOrderDirection, UsSignalRecord};
+    use rust_decimal_macros::dec;
+
+    #[test]
+    fn us_market_hours_respect_dst_windows() {
+        let july = time::OffsetDateTime::parse(
+            "2024-07-08T13:30:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        let january = time::OffsetDateTime::parse(
+            "2024-01-16T14:30:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        assert!(is_us_regular_market_hours(july));
+        assert!(is_us_regular_market_hours(january));
+
+        let pre_open_winter = time::OffsetDateTime::parse(
+            "2024-01-16T13:30:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        assert!(!is_us_regular_market_hours(pre_open_winter));
+    }
+
+    #[test]
+    fn signal_records_are_pruned_with_cap() {
+        let mut records = (0..(US_SIGNAL_RECORD_CAP + 20))
+            .map(|index| UsSignalRecord {
+                symbol: Symbol(format!("A{index}.US")),
+                tick_emitted: index as u64,
+                direction: UsOrderDirection::Buy,
+                composite_at_emission: dec!(0.5),
+                price_at_emission: Some(dec!(10)),
+                resolved: true,
+                price_at_resolution: Some(dec!(11)),
+                hit: Some(true),
+                realized_return: Some(dec!(0.1)),
+            })
+            .collect::<Vec<_>>();
+
+        prune_us_signal_records(&mut records, 10_000);
+        assert!(records.len() <= US_SIGNAL_RECORD_CAP);
+    }
+
+    #[test]
+    fn workflows_are_pruned_with_hard_cap() {
+        let mut workflows = (0..(US_WORKFLOW_CAP + 8))
+            .map(|index| UsActionWorkflow {
+                workflow_id: format!("wf:{index}"),
+                symbol: Symbol(format!("A{index}.US")),
+                stage: UsActionStage::Reviewed,
+                setup_id: format!("setup:{index}"),
+                entry_tick: index as u64,
+                stage_entered_tick: index as u64,
+                entry_price: None,
+                confidence_at_entry: dec!(0.5),
+                current_confidence: dec!(0.5),
+                pnl: None,
+                degradation: None,
+                notes: vec![],
+            })
+            .collect::<Vec<_>>();
+
+        prune_us_workflows(&mut workflows);
+        assert!(workflows.len() <= US_WORKFLOW_CAP);
+    }
+}
+
+fn prune_us_signal_records(records: &mut Vec<UsSignalRecord>, current_tick: u64) {
+    records.retain(|record| {
+        !record.resolved
+            || current_tick.saturating_sub(record.tick_emitted) <= US_SIGNAL_RECORD_RETENTION_TICKS
+    });
+
+    if records.len() <= US_SIGNAL_RECORD_CAP {
+        return;
+    }
+
+    let mut overflow = records.len() - US_SIGNAL_RECORD_CAP;
+    let mut index = 0usize;
+    while overflow > 0 && index < records.len() {
+        if records[index].resolved {
+            records.remove(index);
+            overflow -= 1;
+        } else {
+            index += 1;
+        }
+    }
+
+    if records.len() > US_SIGNAL_RECORD_CAP {
+        records.drain(..records.len() - US_SIGNAL_RECORD_CAP);
+    }
+}
+
+fn prune_us_workflows(workflows: &mut Vec<UsActionWorkflow>) {
+    if workflows.len() <= US_WORKFLOW_CAP {
+        return;
+    }
+
+    let mut overflow = workflows.len() - US_WORKFLOW_CAP;
+    let mut index = 0usize;
+    while overflow > 0 && index < workflows.len() {
+        if matches!(workflows[index].stage, UsActionStage::Reviewed) {
+            workflows.remove(index);
+            overflow -= 1;
+        } else {
+            index += 1;
+        }
+    }
+
+    if workflows.len() > US_WORKFLOW_CAP {
+        workflows.drain(..workflows.len() - US_WORKFLOW_CAP);
+    }
+}
+
+fn is_us_regular_market_hours(now: time::OffsetDateTime) -> bool {
+    let (open_hour, open_minute, close_hour, close_minute) = us_market_hours_utc(now);
+    let utc_total_min = now.hour() as u32 * 60 + now.minute() as u32;
+    let open_total_min = open_hour * 60 + open_minute;
+    let close_total_min = close_hour * 60 + close_minute;
+    utc_total_min >= open_total_min && utc_total_min < close_total_min
+}
+
+fn us_market_hours_utc(now: time::OffsetDateTime) -> (u32, u32, u32, u32) {
+    if is_us_eastern_dst(now) {
+        (13, 30, 20, 0)
+    } else {
+        (14, 30, 21, 0)
+    }
+}
+
+fn is_us_eastern_dst(now: time::OffsetDateTime) -> bool {
+    let datetime = Utc
+        .timestamp_opt(now.unix_timestamp(), 0)
+        .single()
+        .unwrap_or_else(Utc::now);
+    let year = datetime.year();
+    let dst_start = us_dst_boundary_utc(year, 3, 2, 7);
+    let dst_end = us_dst_boundary_utc(year, 11, 1, 6);
+    datetime >= dst_start && datetime < dst_end
+}
+
+fn us_dst_boundary_utc(
+    year: i32,
+    month: u32,
+    sunday_ordinal: u8,
+    utc_hour: u32,
+) -> chrono::DateTime<Utc> {
+    let day = nth_weekday_of_month(year, month, Weekday::Sun, sunday_ordinal);
+    Utc.with_ymd_and_hms(year, month, day, utc_hour, 0, 0)
+        .single()
+        .expect("valid DST boundary")
+}
+
+fn nth_weekday_of_month(year: i32, month: u32, weekday: Weekday, ordinal: u8) -> u32 {
+    let first = NaiveDate::from_ymd_opt(year, month, 1).expect("valid month");
+    let shift = (7 + weekday.num_days_from_monday() as i64
+        - first.weekday().num_days_from_monday() as i64)
+        % 7;
+    1 + shift as u32 + 7 * u32::from(ordinal.saturating_sub(1))
+}
+
 // ── Initialization ──
 
 async fn initialize_us_store(ctx: &QuoteContext, watchlist: &[Symbol]) -> Arc<ObjectStore> {
@@ -1200,11 +1419,11 @@ async fn fetch_us_rest_data(ctx: &QuoteContext, watchlist: &[Symbol]) -> UsRestS
 
 // ── Cross-market signal reader ──
 
-fn read_cross_market_signals(now: time::OffsetDateTime) -> Vec<CrossMarketSignal> {
+async fn read_cross_market_signals(now: time::OffsetDateTime) -> Vec<CrossMarketSignal> {
     let hk_path = std::env::var("EDEN_LIVE_SNAPSHOT_PATH")
         .unwrap_or_else(|_| "data/live_snapshot.json".into());
 
-    match read_hk_snapshot(&hk_path) {
+    match read_hk_snapshot(&hk_path).await {
         Ok(hk_snapshot) => {
             let minutes = minutes_since_hk_close(now);
             compute_cross_market_signals(&hk_snapshot, minutes)

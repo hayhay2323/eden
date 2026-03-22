@@ -7,6 +7,7 @@ use time::OffsetDateTime;
 
 use crate::graph::decision::DecisionSnapshot;
 use crate::graph::insights::GraphInsights;
+use crate::math::{median, normalized_ratio};
 use crate::ontology::domain::{
     DerivedSignal, Event, Observation, ProvenanceMetadata, ProvenanceSource,
 };
@@ -188,12 +189,12 @@ impl ObservationSnapshot {
             observations.push(Observation::new(
                 ObservationRecord::CapitalFlow {
                     symbol: capital_flow.symbol.clone(),
-                    net_inflow: capital_flow.net_inflow,
+                    net_inflow: capital_flow.net_inflow.as_yuan(),
                 },
                 provenance(
                     ProvenanceSource::Api,
                     links.timestamp,
-                    Some(confidence_from_magnitude(capital_flow.net_inflow)),
+                    Some(confidence_from_magnitude(capital_flow.net_inflow.as_yuan())),
                     [format!("capital_flow:{}", capital_flow.symbol)],
                 ),
             ));
@@ -333,103 +334,134 @@ impl EventSnapshot {
     ) -> Self {
         let mut events = Vec::new();
 
-        for order_book in &links.order_books {
-            let imbalance = (Decimal::from(order_book.total_bid_volume)
-                - Decimal::from(order_book.total_ask_volume))
-            .abs();
-            let total = Decimal::from(order_book.total_bid_volume + order_book.total_ask_volume);
-            if total > Decimal::ZERO {
-                let ratio = imbalance / total;
-                if ratio > Decimal::new(4, 1) {
-                    events.push(Event::new(
-                        MarketEventRecord {
-                            scope: SignalScope::Symbol(order_book.symbol.clone()),
-                            kind: MarketEventKind::OrderBookDislocation,
-                            magnitude: ratio,
-                            summary: format!("{} book imbalance widened", order_book.symbol),
-                        },
-                        provenance(
-                            ProvenanceSource::Computed,
-                            links.timestamp,
-                            Some(ratio),
-                            [format!("order_book:{}", order_book.symbol)],
-                        ),
-                    ));
-                }
+        let order_book_candidates: Vec<_> = links
+            .order_books
+            .iter()
+            .filter_map(|order_book| {
+                let imbalance = (Decimal::from(order_book.total_bid_volume)
+                    - Decimal::from(order_book.total_ask_volume))
+                .abs();
+                let total =
+                    Decimal::from(order_book.total_bid_volume + order_book.total_ask_volume);
+                (total > Decimal::ZERO).then_some((order_book, imbalance / total))
+            })
+            .collect();
+        let order_book_cutoff =
+            strict_positive_median_cutoff(order_book_candidates.iter().map(|(_, ratio)| *ratio));
+        for (order_book, ratio) in order_book_candidates {
+            if !exceeds_cutoff(ratio, order_book_cutoff) {
+                continue;
             }
+            events.push(Event::new(
+                MarketEventRecord {
+                    scope: SignalScope::Symbol(order_book.symbol.clone()),
+                    kind: MarketEventKind::OrderBookDislocation,
+                    magnitude: ratio,
+                    summary: format!("{} book imbalance widened", order_book.symbol),
+                },
+                provenance(
+                    ProvenanceSource::Computed,
+                    links.timestamp,
+                    Some(ratio),
+                    [format!("order_book:{}", order_book.symbol)],
+                ),
+            ));
         }
 
-        for calc in &links.calc_indexes {
-            if let Some(volume_ratio) = calc.volume_ratio {
-                if volume_ratio > Decimal::TWO {
-                    let magnitude =
-                        (volume_ratio - Decimal::ONE).min(Decimal::new(3, 0)) / Decimal::new(3, 0);
-                    events.push(Event::new(
-                        MarketEventRecord {
-                            scope: SignalScope::Symbol(calc.symbol.clone()),
-                            kind: MarketEventKind::VolumeDislocation,
-                            magnitude,
-                            summary: format!(
-                                "{} volume ratio elevated to {}",
-                                calc.symbol, volume_ratio
-                            ),
-                        },
-                        provenance(
-                            ProvenanceSource::Computed,
-                            links.timestamp,
-                            Some(magnitude),
-                            [format!("calc_index:{}", calc.symbol)],
-                        ),
-                    ));
-                }
+        let volume_candidates: Vec<_> = links
+            .calc_indexes
+            .iter()
+            .filter_map(|calc| {
+                let volume_ratio = calc.volume_ratio?;
+                let magnitude = volume_dislocation_magnitude(volume_ratio)?;
+                Some((calc, volume_ratio, magnitude))
+            })
+            .collect();
+        let volume_cutoff =
+            strict_positive_median_cutoff(volume_candidates.iter().map(|(_, _, mag)| *mag));
+        for (calc, volume_ratio, magnitude) in volume_candidates {
+            if !exceeds_cutoff(magnitude, volume_cutoff) {
+                continue;
             }
+            events.push(Event::new(
+                MarketEventRecord {
+                    scope: SignalScope::Symbol(calc.symbol.clone()),
+                    kind: MarketEventKind::VolumeDislocation,
+                    magnitude,
+                    summary: format!("{} volume ratio elevated to {}", calc.symbol, volume_ratio),
+                },
+                provenance(
+                    ProvenanceSource::Computed,
+                    links.timestamp,
+                    Some(magnitude),
+                    [format!("calc_index:{}", calc.symbol)],
+                ),
+            ));
         }
 
-        for (symbol, dims) in &dimensions.dimensions {
-            if dims.candlestick_conviction.abs() >= Decimal::new(45, 2) {
-                events.push(Event::new(
-                    MarketEventRecord {
-                        scope: SignalScope::Symbol(symbol.clone()),
-                        kind: MarketEventKind::CandlestickBreakout,
-                        magnitude: dims.candlestick_conviction.abs(),
-                        summary: format!("{} candle conviction confirms short-term move", symbol),
-                    },
-                    provenance(
-                        ProvenanceSource::Computed,
-                        links.timestamp,
-                        Some(dims.candlestick_conviction.abs()),
-                        [
-                            format!("dimension:candlestick_conviction:{}", symbol),
-                            format!("dimension:activity_momentum:{}", symbol),
-                        ],
-                    ),
-                ));
+        let breakout_candidates: Vec<_> = dimensions
+            .dimensions
+            .iter()
+            .map(|(symbol, dims)| (symbol, dims.candlestick_conviction.abs()))
+            .filter(|(_, magnitude)| *magnitude > Decimal::ZERO)
+            .collect();
+        let breakout_cutoff =
+            strict_positive_median_cutoff(breakout_candidates.iter().map(|(_, mag)| *mag));
+        for (symbol, magnitude) in breakout_candidates {
+            if !exceeds_cutoff(magnitude, breakout_cutoff) {
+                continue;
             }
+            events.push(Event::new(
+                MarketEventRecord {
+                    scope: SignalScope::Symbol(symbol.clone()),
+                    kind: MarketEventKind::CandlestickBreakout,
+                    magnitude,
+                    summary: format!("{} candle conviction confirms short-term move", symbol),
+                },
+                provenance(
+                    ProvenanceSource::Computed,
+                    links.timestamp,
+                    Some(magnitude),
+                    [
+                        format!("dimension:candlestick_conviction:{}", symbol),
+                        format!("dimension:activity_momentum:{}", symbol),
+                    ],
+                ),
+            ));
         }
 
-        for pressure in &insights.pressures {
-            if pressure.net_pressure.abs() >= Decimal::new(45, 2) {
-                events.push(Event::new(
-                    MarketEventRecord {
-                        scope: SignalScope::Symbol(pressure.symbol.clone()),
-                        kind: MarketEventKind::SmartMoneyPressure,
-                        magnitude: pressure.net_pressure.abs(),
-                        summary: format!(
-                            "{} smart-money pressure remains elevated",
-                            pressure.symbol
-                        ),
-                    },
-                    provenance(
-                        ProvenanceSource::Computed,
-                        links.timestamp,
-                        Some(pressure.net_pressure.abs()),
-                        [format!("graph_pressure:{}", pressure.symbol)],
-                    ),
-                ));
+        let pressure_candidates: Vec<_> = insights
+            .pressures
+            .iter()
+            .map(|pressure| (pressure, pressure.net_pressure.abs()))
+            .filter(|(_, magnitude)| *magnitude > Decimal::ZERO)
+            .collect();
+        let pressure_cutoff =
+            strict_positive_median_cutoff(pressure_candidates.iter().map(|(_, mag)| *mag));
+        for (pressure, magnitude) in pressure_candidates {
+            if !exceeds_cutoff(magnitude, pressure_cutoff) {
+                continue;
             }
+            events.push(Event::new(
+                MarketEventRecord {
+                    scope: SignalScope::Symbol(pressure.symbol.clone()),
+                    kind: MarketEventKind::SmartMoneyPressure,
+                    magnitude,
+                    summary: format!("{} smart-money pressure remains elevated", pressure.symbol),
+                },
+                provenance(
+                    ProvenanceSource::Computed,
+                    links.timestamp,
+                    Some(magnitude),
+                    [format!("graph_pressure:{}", pressure.symbol)],
+                ),
+            ));
         }
 
-        if insights.stress.composite_stress >= Decimal::new(55, 2) {
+        if exceeds_cutoff(
+            insights.stress.composite_stress,
+            historical_market_stress_cutoff(history),
+        ) {
             events.push(Event::new(
                 MarketEventRecord {
                     scope: SignalScope::Market,
@@ -579,6 +611,37 @@ impl EventSnapshot {
             events,
         }
     }
+}
+
+fn strict_positive_median_cutoff<I>(values: I) -> Option<Decimal>
+where
+    I: IntoIterator<Item = Decimal>,
+{
+    median(
+        values
+            .into_iter()
+            .filter(|value| *value > Decimal::ZERO)
+            .collect(),
+    )
+}
+
+fn exceeds_cutoff(value: Decimal, cutoff: Option<Decimal>) -> bool {
+    cutoff.map(|cutoff| value > cutoff).unwrap_or(false)
+}
+
+fn volume_dislocation_magnitude(volume_ratio: Decimal) -> Option<Decimal> {
+    (volume_ratio > Decimal::ONE)
+        .then_some(normalized_ratio(volume_ratio, Decimal::ONE))
+        .filter(|magnitude| *magnitude > Decimal::ZERO)
+}
+
+fn historical_market_stress_cutoff(history: &TickHistory) -> Option<Decimal> {
+    strict_positive_median_cutoff(
+        history
+            .latest_n(history.len())
+            .into_iter()
+            .filter_map(previous_market_stress),
+    )
 }
 
 fn previous_market_stress(tick: &crate::temporal::record::TickRecord) -> Option<Decimal> {
@@ -800,7 +863,8 @@ mod tests {
     use crate::graph::insights::MarketStressIndex;
     use crate::graph::insights::StockPressure;
     use crate::ontology::links::{
-        LinkSnapshot, MarketStatus, MarketTemperatureObservation, QuoteObservation,
+        CalcIndexObservation, DepthLevel, DepthProfile, LinkSnapshot, MarketStatus,
+        MarketTemperatureObservation, OrderBookObservation, QuoteObservation,
     };
     use crate::ontology::world::{BackwardReasoningSnapshot, WorldStateSnapshot};
     use crate::temporal::record::{SymbolSignals, TickRecord};
@@ -879,6 +943,37 @@ mod tests {
                 timestamp: OffsetDateTime::UNIX_EPOCH,
                 investigations: vec![],
             },
+        }
+    }
+
+    fn order_book(
+        symbol: &str,
+        total_bid_volume: i64,
+        total_ask_volume: i64,
+    ) -> OrderBookObservation {
+        OrderBookObservation {
+            symbol: sym(symbol),
+            ask_levels: vec![DepthLevel {
+                position: 1,
+                price: Some(dec!(10.1)),
+                volume: total_ask_volume,
+                order_num: 1,
+            }],
+            bid_levels: vec![DepthLevel {
+                position: 1,
+                price: Some(dec!(10.0)),
+                volume: total_bid_volume,
+                order_num: 1,
+            }],
+            total_ask_volume,
+            total_bid_volume,
+            total_ask_orders: 1,
+            total_bid_orders: 1,
+            spread: Some(dec!(0.1)),
+            ask_level_count: 1,
+            bid_level_count: 1,
+            bid_profile: DepthProfile::empty(),
+            ask_profile: DepthProfile::empty(),
         }
     }
 
@@ -1070,5 +1165,210 @@ mod tests {
             .events
             .iter()
             .any(|event| matches!(event.value.kind, MarketEventKind::StressRegimeShift)));
+    }
+
+    #[test]
+    fn event_snapshot_uses_sample_derived_cutoffs() {
+        let mut history = empty_history();
+        history.push(history_tick(
+            "700.HK",
+            Decimal::ZERO,
+            Decimal::ZERO,
+            dec!(0.2),
+        ));
+        history.push(history_tick(
+            "700.HK",
+            Decimal::ZERO,
+            Decimal::ZERO,
+            dec!(0.4),
+        ));
+        history.push(history_tick(
+            "700.HK",
+            Decimal::ZERO,
+            Decimal::ZERO,
+            dec!(0.6),
+        ));
+
+        let links = LinkSnapshot {
+            timestamp: OffsetDateTime::UNIX_EPOCH,
+            broker_queues: vec![],
+            calc_indexes: vec![
+                CalcIndexObservation {
+                    symbol: sym("A.HK"),
+                    turnover_rate: None,
+                    volume_ratio: Some(dec!(1.2)),
+                    pe_ttm_ratio: None,
+                    pb_ratio: None,
+                    dividend_ratio_ttm: None,
+                    amplitude: None,
+                    five_minutes_change_rate: None,
+                },
+                CalcIndexObservation {
+                    symbol: sym("B.HK"),
+                    turnover_rate: None,
+                    volume_ratio: Some(dec!(1.5)),
+                    pe_ttm_ratio: None,
+                    pb_ratio: None,
+                    dividend_ratio_ttm: None,
+                    amplitude: None,
+                    five_minutes_change_rate: None,
+                },
+                CalcIndexObservation {
+                    symbol: sym("C.HK"),
+                    turnover_rate: None,
+                    volume_ratio: Some(dec!(4)),
+                    pe_ttm_ratio: None,
+                    pb_ratio: None,
+                    dividend_ratio_ttm: None,
+                    amplitude: None,
+                    five_minutes_change_rate: None,
+                },
+            ],
+            candlesticks: vec![],
+            institution_activities: vec![],
+            cross_stock_presences: vec![],
+            capital_flows: vec![],
+            capital_breakdowns: vec![],
+            market_temperature: None,
+            order_books: vec![
+                order_book("A.HK", 55, 45),
+                order_book("B.HK", 65, 35),
+                order_book("C.HK", 95, 5),
+            ],
+            quotes: vec![],
+            trade_activities: vec![],
+        };
+        let dimensions = DimensionSnapshot {
+            timestamp: OffsetDateTime::UNIX_EPOCH,
+            dimensions: HashMap::from([
+                (
+                    sym("A.HK"),
+                    SymbolDimensions {
+                        candlestick_conviction: dec!(0.2),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    sym("B.HK"),
+                    SymbolDimensions {
+                        candlestick_conviction: dec!(0.4),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    sym("C.HK"),
+                    SymbolDimensions {
+                        candlestick_conviction: dec!(0.8),
+                        ..Default::default()
+                    },
+                ),
+            ]),
+        };
+        let insights = GraphInsights {
+            pressures: vec![
+                StockPressure {
+                    symbol: sym("A.HK"),
+                    net_pressure: dec!(0.1),
+                    institution_count: 1,
+                    buy_inst_count: 1,
+                    sell_inst_count: 0,
+                    pressure_delta: Decimal::ZERO,
+                    pressure_duration: 1,
+                    accelerating: false,
+                },
+                StockPressure {
+                    symbol: sym("B.HK"),
+                    net_pressure: dec!(0.4),
+                    institution_count: 1,
+                    buy_inst_count: 1,
+                    sell_inst_count: 0,
+                    pressure_delta: Decimal::ZERO,
+                    pressure_duration: 1,
+                    accelerating: false,
+                },
+                StockPressure {
+                    symbol: sym("C.HK"),
+                    net_pressure: dec!(0.7),
+                    institution_count: 1,
+                    buy_inst_count: 1,
+                    sell_inst_count: 0,
+                    pressure_delta: Decimal::ZERO,
+                    pressure_duration: 1,
+                    accelerating: false,
+                },
+            ],
+            rotations: vec![],
+            clusters: vec![],
+            conflicts: vec![],
+            inst_rotations: vec![],
+            inst_exoduses: vec![],
+            shared_holders: vec![],
+            stress: MarketStressIndex {
+                sector_synchrony: dec!(0.3),
+                pressure_consensus: dec!(0.4),
+                conflict_intensity_mean: dec!(0.2),
+                market_temperature_stress: dec!(0.5),
+                composite_stress: dec!(0.7),
+            },
+            institution_stock_counts: HashMap::new(),
+        };
+        let decision = DecisionSnapshot {
+            timestamp: OffsetDateTime::UNIX_EPOCH,
+            convergence_scores: HashMap::new(),
+            market_regime: MarketRegimeFilter::neutral(),
+            order_suggestions: vec![],
+            degradations: HashMap::new(),
+        };
+
+        let snapshot = EventSnapshot::detect(&history, &links, &dimensions, &insights, &decision);
+
+        let order_book_events: Vec<_> = snapshot
+            .events
+            .iter()
+            .filter(|event| matches!(event.value.kind, MarketEventKind::OrderBookDislocation))
+            .collect();
+        assert_eq!(order_book_events.len(), 1);
+        assert!(matches!(
+            &order_book_events[0].value.scope,
+            SignalScope::Symbol(symbol) if symbol == &sym("C.HK")
+        ));
+
+        let volume_events: Vec<_> = snapshot
+            .events
+            .iter()
+            .filter(|event| matches!(event.value.kind, MarketEventKind::VolumeDislocation))
+            .collect();
+        assert_eq!(volume_events.len(), 1);
+        assert!(matches!(
+            &volume_events[0].value.scope,
+            SignalScope::Symbol(symbol) if symbol == &sym("C.HK")
+        ));
+
+        let breakout_events: Vec<_> = snapshot
+            .events
+            .iter()
+            .filter(|event| matches!(event.value.kind, MarketEventKind::CandlestickBreakout))
+            .collect();
+        assert_eq!(breakout_events.len(), 1);
+        assert!(matches!(
+            &breakout_events[0].value.scope,
+            SignalScope::Symbol(symbol) if symbol == &sym("C.HK")
+        ));
+
+        let pressure_events: Vec<_> = snapshot
+            .events
+            .iter()
+            .filter(|event| matches!(event.value.kind, MarketEventKind::SmartMoneyPressure))
+            .collect();
+        assert_eq!(pressure_events.len(), 1);
+        assert!(matches!(
+            &pressure_events[0].value.scope,
+            SignalScope::Symbol(symbol) if symbol == &sym("C.HK")
+        ));
+
+        assert!(snapshot
+            .events
+            .iter()
+            .any(|event| matches!(event.value.kind, MarketEventKind::MarketStressElevated)));
     }
 }

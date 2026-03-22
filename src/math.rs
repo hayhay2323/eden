@@ -14,6 +14,11 @@ pub fn clamp_unit_interval(value: Decimal) -> Decimal {
     }
 }
 
+/// Clamp a decimal to the symmetric unit interval [-1, 1].
+pub fn clamp_signed_unit_interval(value: Decimal) -> Decimal {
+    value.clamp(-Decimal::ONE, Decimal::ONE)
+}
+
 /// (A - B) / (A + B). Returns 0 when denominator is 0. Arithmetic identity, not a threshold.
 pub fn normalized_ratio(a: Decimal, b: Decimal) -> Decimal {
     let sum = a + b;
@@ -21,6 +26,20 @@ pub fn normalized_ratio(a: Decimal, b: Decimal) -> Decimal {
         Decimal::ZERO
     } else {
         (a - b) / sum
+    }
+}
+
+/// Median of a non-empty decimal sample.
+pub fn median(mut values: Vec<Decimal>) -> Option<Decimal> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort();
+    let mid = values.len() / 2;
+    if values.len() % 2 == 0 {
+        Some((values[mid - 1] + values[mid]) / Decimal::TWO)
+    } else {
+        Some(values[mid])
     }
 }
 
@@ -96,6 +115,13 @@ mod tests {
     }
 
     #[test]
+    fn clamp_signed_unit_interval_bounds_values() {
+        assert_eq!(clamp_signed_unit_interval(dec!(-1.2)), -Decimal::ONE);
+        assert_eq!(clamp_signed_unit_interval(dec!(0.4)), dec!(0.4));
+        assert_eq!(clamp_signed_unit_interval(dec!(1.4)), Decimal::ONE);
+    }
+
+    #[test]
     fn normalized_ratio_zero_denominator() {
         assert_eq!(normalized_ratio(dec!(0), dec!(0)), dec!(0));
     }
@@ -108,6 +134,24 @@ mod tests {
     #[test]
     fn normalized_ratio_negative() {
         assert_eq!(normalized_ratio(dec!(1), dec!(3)), dec!(-0.5));
+    }
+
+    #[test]
+    fn median_empty() {
+        assert_eq!(median(vec![]), None);
+    }
+
+    #[test]
+    fn median_odd_length() {
+        assert_eq!(median(vec![dec!(3), dec!(1), dec!(2)]), Some(dec!(2)));
+    }
+
+    #[test]
+    fn median_even_length() {
+        assert_eq!(
+            median(vec![dec!(4), dec!(1), dec!(3), dec!(2)]),
+            Some(dec!(2.5))
+        );
     }
 
     // ── cosine_similarity ──

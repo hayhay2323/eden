@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::ontology::objects::Symbol;
+use crate::us::common::dimension_composite;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -35,7 +36,7 @@ impl UsStructuralFingerprint {
         price: Option<Decimal>,
         dims: &UsSymbolDimensions,
     ) -> Self {
-        let entry_composite = composite_score(dims);
+        let entry_composite = dimension_composite(dims);
         Self {
             symbol,
             entry_tick: tick,
@@ -144,7 +145,7 @@ impl UsPositionTracker {
         current_dims: &UsSymbolDimensions,
         current_tick: u64,
     ) -> UsStructuralDegradation {
-        let current_composite = composite_score(current_dims);
+        let current_composite = dimension_composite(current_dims);
         let composite_drift = current_composite - fingerprint.entry_composite;
 
         let capital_flow_reversal = sign(current_dims.capital_flow_direction)
@@ -209,16 +210,6 @@ impl Default for UsPositionTracker {
 }
 
 // ── Helpers ──
-
-/// Simple composite: equal-weight average of the five US dimensions.
-fn composite_score(dims: &UsSymbolDimensions) -> Decimal {
-    let sum = dims.capital_flow_direction
-        + dims.price_momentum
-        + dims.volume_profile
-        + dims.pre_post_market_anomaly
-        + dims.valuation;
-    sum / Decimal::from(5u32)
-}
 
 /// Sign helper: returns 1, -1, or 0.
 fn sign(value: Decimal) -> i8 {

@@ -75,6 +75,9 @@ pub struct UsActionWorkflow {
     pub setup_id: String,
     /// Tick counter at which this workflow was created.
     pub entry_tick: u64,
+    /// Tick counter at which the current stage was entered.
+    #[serde(default)]
+    pub stage_entered_tick: u64,
     /// Price recorded when the position was executed, if applicable.
     pub entry_price: Option<Decimal>,
     /// Confidence score from the originating tactical setup.
@@ -88,6 +91,25 @@ pub struct UsActionWorkflow {
     /// Freeform audit trail.
     pub notes: Vec<String>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsWorkflowTransitionError {
+    action: &'static str,
+    expected: UsActionStage,
+    actual: UsActionStage,
+}
+
+impl std::fmt::Display for UsWorkflowTransitionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} requires stage {}, got {}",
+            self.action, self.expected, self.actual
+        )
+    }
+}
+
+impl std::error::Error for UsWorkflowTransitionError {}
 
 impl UsActionWorkflow {
     /// Create a new workflow from a tactical setup at a given tick and optional entry price.
@@ -103,6 +125,7 @@ impl UsActionWorkflow {
             stage: UsActionStage::Suggested,
             setup_id: setup.setup_id.clone(),
             entry_tick: tick,
+            stage_entered_tick: tick,
             entry_price: price,
             confidence_at_entry: setup.confidence,
             current_confidence: setup.confidence,
@@ -112,33 +135,43 @@ impl UsActionWorkflow {
         }
     }
 
+    fn ensure_stage(
+        &self,
+        expected: UsActionStage,
+        action: &'static str,
+    ) -> Result<(), UsWorkflowTransitionError> {
+        if self.stage == expected {
+            Ok(())
+        } else {
+            Err(UsWorkflowTransitionError {
+                action,
+                expected,
+                actual: self.stage,
+            })
+        }
+    }
+
     /// Advance from Suggested to Confirmed.
-    ///
-    /// Panics if not in Suggested stage (call sites should guard before calling).
-    pub fn confirm(&mut self) {
-        assert_eq!(
-            self.stage,
-            UsActionStage::Suggested,
-            "confirm() called on workflow not in Suggested stage"
-        );
+    pub fn confirm(&mut self, tick: u64) -> Result<(), UsWorkflowTransitionError> {
+        self.ensure_stage(UsActionStage::Suggested, "confirm")?;
         self.stage = UsActionStage::Confirmed;
+        self.stage_entered_tick = tick;
         self.notes.push("Workflow confirmed.".to_string());
+        Ok(())
     }
 
     /// Advance from Confirmed to Executed and record the actual entry price.
-    pub fn execute(&mut self, price: Decimal) {
-        assert_eq!(
-            self.stage,
-            UsActionStage::Confirmed,
-            "execute() called on workflow not in Confirmed stage"
-        );
+    pub fn execute(&mut self, price: Decimal, tick: u64) -> Result<(), UsWorkflowTransitionError> {
+        self.ensure_stage(UsActionStage::Confirmed, "execute")?;
         self.stage = UsActionStage::Executed;
         self.entry_price = Some(price);
         self.notes.push(format!("Position executed at {price}."));
 
         // Immediately advance to Monitoring since the position is now open.
         self.stage = UsActionStage::Monitoring;
+        self.stage_entered_tick = tick;
         self.notes.push("Monitoring started.".to_string());
+        Ok(())
     }
 
     /// Update monitoring state with the current price and structural degradation.
@@ -146,12 +179,8 @@ impl UsActionWorkflow {
         &mut self,
         current_price: Option<Decimal>,
         degradation: UsStructuralDegradation,
-    ) {
-        assert_eq!(
-            self.stage,
-            UsActionStage::Monitoring,
-            "update_monitoring() called on workflow not in Monitoring stage"
-        );
+    ) -> Result<(), UsWorkflowTransitionError> {
+        self.ensure_stage(UsActionStage::Monitoring, "update_monitoring")?;
 
         // Recompute P&L if both prices are known.
         if let (Some(entry), Some(current)) = (self.entry_price, current_price) {
@@ -171,20 +200,20 @@ impl UsActionWorkflow {
         }
 
         self.degradation = Some(degradation);
+        Ok(())
     }
 
     /// Advance from Monitoring to Reviewed and record the outcome.
-    pub fn review(&mut self, outcome: &str) {
-        assert_eq!(
-            self.stage,
-            UsActionStage::Monitoring,
-            "review() called on workflow not in Monitoring stage"
-        );
+    pub fn review(&mut self, outcome: &str, tick: u64) -> Result<(), UsWorkflowTransitionError> {
+        self.ensure_stage(UsActionStage::Monitoring, "review")?;
         self.stage = UsActionStage::Reviewed;
+        self.stage_entered_tick = tick;
         self.notes.push(format!("Review: {outcome}"));
+        Ok(())
     }
 
-    /// Returns true if the workflow has been in the same stage too long.
+    /// Returns true if the workflow has been in the current stage too long.
+    /// The staleness timer is stage-local and resets on every successful transition.
     ///
     /// Staleness thresholds (in ticks):
     /// - Suggested  → stale after 100 ticks without confirmation
@@ -192,7 +221,7 @@ impl UsActionWorkflow {
     /// - Monitoring → stale after 600 ticks without review
     /// - Reviewed   → never stale
     pub fn is_stale(&self, current_tick: u64) -> bool {
-        let elapsed = current_tick.saturating_sub(self.entry_tick);
+        let elapsed = current_tick.saturating_sub(self.stage_entered_tick);
         match self.stage {
             UsActionStage::Suggested => elapsed > 100,
             UsActionStage::Confirmed => elapsed > 50,
@@ -210,6 +239,7 @@ impl UsActionWorkflow {
             "stage": self.stage.as_str(),
             "setup_id": self.setup_id,
             "entry_tick": self.entry_tick,
+            "stage_entered_tick": self.stage_entered_tick,
             "entry_price": self.entry_price,
             "confidence_at_entry": self.confidence_at_entry,
             "current_confidence": self.current_confidence,
@@ -306,6 +336,7 @@ mod tests {
         assert_eq!(wf.confidence_at_entry, dec!(0.7));
         assert_eq!(wf.current_confidence, dec!(0.7));
         assert_eq!(wf.entry_tick, 42);
+        assert_eq!(wf.stage_entered_tick, 42);
         assert_eq!(wf.entry_price, Some(dec!(120)));
         assert!(wf.pnl.is_none());
         assert!(wf.notes.is_empty());
@@ -317,8 +348,9 @@ mod tests {
     fn confirm_advances_to_confirmed() {
         let setup = make_setup("AAPL.US", dec!(0.65));
         let mut wf = UsActionWorkflow::from_setup(&setup, 10, None);
-        wf.confirm();
+        wf.confirm(10).unwrap();
         assert_eq!(wf.stage, UsActionStage::Confirmed);
+        assert_eq!(wf.stage_entered_tick, 10);
         assert!(!wf.notes.is_empty());
     }
 
@@ -326,9 +358,10 @@ mod tests {
     fn execute_advances_to_monitoring_and_records_price() {
         let setup = make_setup("TSLA.US", dec!(0.72));
         let mut wf = UsActionWorkflow::from_setup(&setup, 5, None);
-        wf.confirm();
-        wf.execute(dec!(215.50));
+        wf.confirm(6).unwrap();
+        wf.execute(dec!(215.50), 7).unwrap();
         assert_eq!(wf.stage, UsActionStage::Monitoring);
+        assert_eq!(wf.stage_entered_tick, 7);
         assert_eq!(wf.entry_price, Some(dec!(215.50)));
     }
 
@@ -338,9 +371,10 @@ mod tests {
     fn update_monitoring_computes_pnl() {
         let setup = make_setup("MSFT.US", dec!(0.6));
         let mut wf = UsActionWorkflow::from_setup(&setup, 0, Some(dec!(300)));
-        wf.confirm();
-        wf.execute(dec!(300));
-        wf.update_monitoring(Some(dec!(310)), make_degradation(false));
+        wf.confirm(1).unwrap();
+        wf.execute(dec!(300), 2).unwrap();
+        wf.update_monitoring(Some(dec!(310)), make_degradation(false))
+            .unwrap();
         assert_eq!(wf.pnl, Some(dec!(10)));
         assert!(wf.degradation.is_some());
     }
@@ -349,9 +383,10 @@ mod tests {
     fn update_monitoring_records_exit_signal_in_notes() {
         let setup = make_setup("BABA.US", dec!(0.55));
         let mut wf = UsActionWorkflow::from_setup(&setup, 0, Some(dec!(80)));
-        wf.confirm();
-        wf.execute(dec!(80));
-        wf.update_monitoring(Some(dec!(75)), make_degradation(true));
+        wf.confirm(1).unwrap();
+        wf.execute(dec!(80), 2).unwrap();
+        wf.update_monitoring(Some(dec!(75)), make_degradation(true))
+            .unwrap();
         assert!(wf.notes.iter().any(|n| n.contains("Exit signal triggered")));
     }
 
@@ -361,10 +396,11 @@ mod tests {
     fn review_advances_to_reviewed() {
         let setup = make_setup("NVDA.US", dec!(0.75));
         let mut wf = UsActionWorkflow::from_setup(&setup, 0, Some(dec!(500)));
-        wf.confirm();
-        wf.execute(dec!(500));
-        wf.update_monitoring(Some(dec!(510)), make_degradation(false));
-        wf.review("closed with +10 profit");
+        wf.confirm(1).unwrap();
+        wf.execute(dec!(500), 2).unwrap();
+        wf.update_monitoring(Some(dec!(510)), make_degradation(false))
+            .unwrap();
+        wf.review("closed with +10 profit", 3).unwrap();
         assert_eq!(wf.stage, UsActionStage::Reviewed);
         assert!(wf
             .notes
@@ -386,20 +422,20 @@ mod tests {
     fn is_stale_monitoring_after_600_ticks() {
         let setup = make_setup("TSLA.US", dec!(0.7));
         let mut wf = UsActionWorkflow::from_setup(&setup, 0, Some(dec!(200)));
-        wf.confirm();
-        wf.execute(dec!(200));
-        assert!(!wf.is_stale(600));
-        assert!(wf.is_stale(601));
+        wf.confirm(25).unwrap();
+        wf.execute(dec!(200), 40).unwrap();
+        assert!(!wf.is_stale(640));
+        assert!(wf.is_stale(641));
     }
 
     #[test]
     fn reviewed_is_never_stale() {
         let setup = make_setup("MSFT.US", dec!(0.65));
         let mut wf = UsActionWorkflow::from_setup(&setup, 0, Some(dec!(300)));
-        wf.confirm();
-        wf.execute(dec!(300));
-        wf.update_monitoring(None, make_degradation(false));
-        wf.review("exit");
+        wf.confirm(1).unwrap();
+        wf.execute(dec!(300), 2).unwrap();
+        wf.update_monitoring(None, make_degradation(false)).unwrap();
+        wf.review("exit", 3).unwrap();
         assert!(!wf.is_stale(999_999));
     }
 
@@ -420,10 +456,21 @@ mod tests {
     fn snapshot_pnl_present_after_monitoring() {
         let setup = make_setup("AAPL.US", dec!(0.65));
         let mut wf = UsActionWorkflow::from_setup(&setup, 0, Some(dec!(150)));
-        wf.confirm();
-        wf.execute(dec!(150));
-        wf.update_monitoring(Some(dec!(155)), make_degradation(false));
+        wf.confirm(1).unwrap();
+        wf.execute(dec!(150), 2).unwrap();
+        wf.update_monitoring(Some(dec!(155)), make_degradation(false))
+            .unwrap();
         let snap = wf.snapshot();
         assert!(!snap["pnl"].is_null());
+    }
+
+    #[test]
+    fn invalid_transition_returns_error_instead_of_panicking() {
+        let setup = make_setup("AMD.US", dec!(0.6));
+        let mut wf = UsActionWorkflow::from_setup(&setup, 0, None);
+
+        let err = wf.execute(dec!(100), 1).unwrap_err();
+        assert_eq!(err.expected, UsActionStage::Confirmed);
+        assert_eq!(err.actual, UsActionStage::Suggested);
     }
 }

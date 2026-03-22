@@ -131,9 +131,22 @@ impl EdenStore {
         &self,
         records: &[CaseReasoningAssessmentRecord],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        for record in records {
-            self.write_case_reasoning_assessment(record).await?;
+        if records.is_empty() {
+            return Ok(());
         }
+
+        let mut request = self.db.query(build_batch_upsert_query(
+            "case_reasoning_assessment",
+            records.len(),
+        ));
+        for (index, record) in records.iter().enumerate() {
+            let id_key = format!("id_{index}");
+            let record_key = format!("record_{index}");
+            request = request
+                .bind((id_key, record.record_id().to_string()))
+                .bind((record_key, record.clone()));
+        }
+        request.await?;
         Ok(())
     }
 
@@ -142,13 +155,22 @@ impl EdenStore {
         &self,
         records: &[CaseRealizedOutcomeRecord],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        for record in records {
-            let _: Option<serde_json::Value> = self
-                .db
-                .upsert(("case_realized_outcome", record.record_id()))
-                .content(record.clone())
-                .await?;
+        if records.is_empty() {
+            return Ok(());
         }
+
+        let mut request = self.db.query(build_batch_upsert_query(
+            "case_realized_outcome",
+            records.len(),
+        ));
+        for (index, record) in records.iter().enumerate() {
+            let id_key = format!("id_{index}");
+            let record_key = format!("record_{index}");
+            request = request
+                .bind((id_key, record.record_id().to_string()))
+                .bind((record_key, record.clone()));
+        }
+        request.await?;
         Ok(())
     }
 
@@ -164,6 +186,24 @@ impl EdenStore {
         let mut result = self.db.query(&query).await?;
         let mut records: Vec<TacticalSetupRecord> = result.take(0)?;
         Ok(records.pop())
+    }
+
+    /// Query latest tactical setups by setup ids in one round-trip.
+    pub async fn tactical_setups_by_ids(
+        &self,
+        setup_ids: &[String],
+    ) -> Result<Vec<TacticalSetupRecord>, Box<dyn std::error::Error>> {
+        if setup_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut result = self
+            .db
+            .query("SELECT * FROM tactical_setup WHERE setup_id INSIDE $setup_ids")
+            .bind(("setup_ids", setup_ids.to_vec()))
+            .await?;
+        let records: Vec<TacticalSetupRecord> = result.take(0)?;
+        Ok(records)
     }
 
     /// Query recent reasoning assessments for one setup, newest first.
@@ -241,6 +281,24 @@ impl EdenStore {
         Ok(records.pop())
     }
 
+    /// Query latest action workflows by workflow ids in one round-trip.
+    pub async fn action_workflows_by_ids(
+        &self,
+        workflow_ids: &[String],
+    ) -> Result<Vec<ActionWorkflowRecord>, Box<dyn std::error::Error>> {
+        if workflow_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut result = self
+            .db
+            .query("SELECT * FROM action_workflow WHERE workflow_id INSIDE $workflow_ids")
+            .bind(("workflow_ids", workflow_ids.to_vec()))
+            .await?;
+        let records: Vec<ActionWorkflowRecord> = result.take(0)?;
+        Ok(records)
+    }
+
     /// Query workflow events in chronological order.
     pub async fn action_workflow_events(
         &self,
@@ -253,6 +311,18 @@ impl EdenStore {
         let mut result = self.db.query(&query).await?;
         let records: Vec<ActionWorkflowEventRecord> = result.take(0)?;
         Ok(records)
+    }
+
+    /// Query the latest workflow mutation timestamp, if any.
+    pub async fn latest_action_workflow_recorded_at(
+        &self,
+    ) -> Result<Option<time::OffsetDateTime>, Box<dyn std::error::Error>> {
+        let mut result = self
+            .db
+            .query("SELECT * FROM action_workflow ORDER BY recorded_at DESC LIMIT 1")
+            .await?;
+        let mut records: Vec<ActionWorkflowRecord> = result.take(0)?;
+        Ok(records.pop().map(|record| record.recorded_at))
     }
 
     /// Persist one lineage evaluation snapshot for historical leaderboard review.
@@ -355,9 +425,10 @@ impl EdenStore {
         symbol: &Symbol,
         limit: usize,
     ) -> Result<Vec<TickRecord>, Box<dyn std::error::Error>> {
+        let sym = validated_surreal_field_key(&symbol.0)?;
         let query = format!(
             "SELECT * FROM tick_record WHERE signals.`{sym}`.composite != NONE ORDER BY tick_number DESC LIMIT {limit}",
-            sym = symbol.0,
+            sym = sym,
             limit = limit,
         );
         let mut result = self.db.query(&query).await?;
@@ -572,6 +643,28 @@ impl EdenStore {
         Ok(compute_us_causal_timelines(&history)
             .remove(&crate::ontology::objects::Symbol(symbol.into())))
     }
+}
+
+fn validated_surreal_field_key(value: &str) -> Result<&str, Box<dyn std::error::Error>> {
+    let valid = !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | ':'));
+    if valid {
+        Ok(value)
+    } else {
+        Err(format!("unsupported symbol key `{value}` for dynamic query").into())
+    }
+}
+
+fn build_batch_upsert_query(table: &str, records: usize) -> String {
+    let mut query = String::new();
+    for index in 0..records {
+        query.push_str(&format!(
+            "UPSERT type::thing('{table}', $id_{index}) CONTENT $record_{index};"
+        ));
+    }
+    query
 }
 
 fn causal_scope_key(scope: &ReasoningScope) -> String {

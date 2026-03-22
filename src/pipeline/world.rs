@@ -133,11 +133,13 @@ fn derive_world_state(
     });
 
     for (sector, hypotheses) in sectors {
-        let top = hypotheses
+        let Some(top) = hypotheses
             .iter()
             .max_by(|a, b| a.confidence.cmp(&b.confidence))
             .copied()
-            .expect("sector hypothesis");
+        else {
+            continue;
+        };
         entities.push(EntityState {
             entity_id: format!("world:sector:{}", sector),
             scope: ReasoningScope::Sector(sector.clone()),

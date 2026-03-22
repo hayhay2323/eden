@@ -1,6 +1,8 @@
 use std::env;
 use std::fs;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use reqwest::Client;
 use rust_decimal::Decimal;
@@ -12,6 +14,7 @@ use crate::ontology::ReasoningScope;
 
 const POLYMARKET_GAMMA_URL: &str = "https://gamma-api.polymarket.com/markets/slug";
 const DEFAULT_POLYMARKET_CONFIG_PATH: &str = "config/polymarket_markets.json";
+const POLYMARKET_WARNING_INTERVAL: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -237,13 +240,32 @@ pub async fn fetch_polymarket_snapshot(
         .filter_map(|result| match result {
             Ok(prior) => Some(prior),
             Err(error) => {
-                eprintln!("Warning: Polymarket fetch failed: {}", error);
+                rate_limited_polymarket_warning(&format!(
+                    "Warning: Polymarket fetch failed: {}",
+                    error
+                ));
                 None
             }
         })
         .collect::<Vec<_>>();
 
     Ok(PolymarketSnapshot { fetched_at, priors })
+}
+
+fn rate_limited_polymarket_warning(message: &str) {
+    static LAST_WARNING_AT: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+    let mutex = LAST_WARNING_AT.get_or_init(|| Mutex::new(None));
+    let Ok(mut guard) = mutex.lock() else {
+        eprintln!("{}", message);
+        return;
+    };
+    let should_log = guard
+        .map(|instant| instant.elapsed() >= POLYMARKET_WARNING_INTERVAL)
+        .unwrap_or(true);
+    if should_log {
+        eprintln!("{}", message);
+        *guard = Some(Instant::now());
+    }
 }
 
 async fn fetch_market_prior(

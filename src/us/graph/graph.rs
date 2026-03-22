@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-use crate::math::cosine_similarity;
+use crate::math::{cosine_similarity, median};
 use crate::ontology::objects::{SectorId, Symbol};
+use crate::us::common::dimension_composite;
 use petgraph::graph::{DiGraph, NodeIndex};
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
@@ -96,7 +97,7 @@ impl UsGraph {
 
         // 1. Create stock nodes
         for (sym, dims) in &dimensions.dimensions {
-            let mean_direction = average_dimension(dims);
+            let mean_direction = dimension_composite(dims);
             let node = UsStockNode {
                 symbol: sym.clone(),
                 mean_direction,
@@ -122,7 +123,7 @@ impl UsGraph {
             let total_direction: Decimal = members
                 .iter()
                 .filter_map(|s| dimensions.dimensions.get(s))
-                .map(average_dimension)
+                .map(dimension_composite)
                 .sum();
             let mean_direction = total_direction / Decimal::from(stock_count.max(1) as i64);
 
@@ -173,17 +174,12 @@ impl UsGraph {
             }
         }
 
-        // Median absolute similarity cutoff
-        let mut abs_sims: Vec<Decimal> = all_pairs.iter().map(|(_, _, s)| s.abs()).collect();
-        abs_sims.sort();
-        let median_cutoff = if abs_sims.is_empty() {
-            Decimal::ZERO
-        } else {
-            abs_sims[abs_sims.len() / 2]
-        };
+        // Median absolute similarity cutoff. Keep only the strict upper half.
+        let median_cutoff =
+            median(all_pairs.iter().map(|(_, _, s)| s.abs()).collect()).unwrap_or(Decimal::ZERO);
 
         for (i, j, similarity) in &all_pairs {
-            if similarity.abs() < median_cutoff {
+            if similarity.abs() <= median_cutoff {
                 continue;
             }
             let &idx_a = stock_nodes.get(&stock_syms[*i]).unwrap();
@@ -264,12 +260,6 @@ fn dims_to_array(dims: &UsSymbolDimensions) -> [Decimal; 5] {
         dims.pre_post_market_anomaly,
         dims.valuation,
     ]
-}
-
-fn average_dimension(dims: &UsSymbolDimensions) -> Decimal {
-    let arr = dims_to_array(dims);
-    let sum: Decimal = arr.iter().copied().sum();
-    sum / Decimal::from(arr.len() as i64)
 }
 
 #[cfg(test)]
@@ -447,7 +437,7 @@ mod tests {
     #[test]
     fn graph_mean_direction() {
         let dims = make_dims(dec!(0.2), dec!(0.4), dec!(0.6), dec!(0.8), dec!(1.0));
-        let avg = average_dimension(&dims);
+        let avg = dimension_composite(&dims);
         // (0.2 + 0.4 + 0.6 + 0.8 + 1.0) / 5 = 3.0 / 5 = 0.6
         assert_eq!(avg, dec!(0.6));
     }

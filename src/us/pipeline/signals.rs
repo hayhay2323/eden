@@ -6,8 +6,9 @@ use crate::ontology::domain::{
     DerivedSignal, Event, Observation, ProvenanceMetadata, ProvenanceSource,
 };
 use crate::ontology::objects::Symbol;
+use crate::us::common::dimension_composite;
 
-use super::dimensions::{UsDimensionSnapshot, UsSymbolDimensions};
+use super::dimensions::UsDimensionSnapshot;
 
 // ── Scope ──
 
@@ -177,12 +178,15 @@ impl UsObservationSnapshot {
             observations.push(Observation::new(
                 UsObservationRecord::CapitalFlow {
                     symbol: cf.symbol.clone(),
-                    net_inflow: cf.net_inflow,
+                    net_inflow: cf.net_inflow.as_yuan(),
                 },
                 provenance(
                     ProvenanceSource::Api,
                     timestamp,
-                    Some((cf.net_inflow.abs() / Decimal::new(1_000_000, 0)).min(Decimal::ONE)),
+                    Some(
+                        (cf.net_inflow.as_yuan().abs() / Decimal::new(1_000_000, 0))
+                            .min(Decimal::ONE),
+                    ),
                     [format!("capital_flow:{}", cf.symbol)],
                 ),
             ));
@@ -367,12 +371,13 @@ impl UsEventSnapshot {
         // CapitalFlowReversal: flow direction flips sign
         for cf in capital_flows {
             if let Some(&prev) = previous_flows.get(&cf.symbol) {
+                let current = cf.net_inflow.as_yuan();
                 if prev != Decimal::ZERO
-                    && cf.net_inflow != Decimal::ZERO
-                    && prev.is_sign_positive() != cf.net_inflow.is_sign_positive()
+                    && current != Decimal::ZERO
+                    && prev.is_sign_positive() != current.is_sign_positive()
                 {
-                    let magnitude = (cf.net_inflow - prev).abs()
-                        / (prev.abs() + cf.net_inflow.abs()).max(Decimal::ONE);
+                    let magnitude =
+                        (current - prev).abs() / (prev.abs() + current.abs()).max(Decimal::ONE);
                     let magnitude = magnitude.min(Decimal::ONE);
                     events.push(Event::new(
                         UsEventRecord {
@@ -381,7 +386,7 @@ impl UsEventSnapshot {
                             magnitude,
                             summary: format!(
                                 "{} capital flow reversed from {:+} to {:+}",
-                                cf.symbol, prev, cf.net_inflow
+                                cf.symbol, prev, current
                             ),
                         },
                         provenance(
@@ -411,7 +416,7 @@ impl UsDerivedSignalSnapshot {
 
         for (symbol, dims) in &dimensions.dimensions {
             // StructuralComposite: weighted mean of 5 dims
-            let composite = average_us_dimensions(dims);
+            let composite = dimension_composite(dims);
             if composite != Decimal::ZERO {
                 signals.push(
                     DerivedSignal::new(
@@ -535,17 +540,6 @@ impl UsDerivedSignalSnapshot {
     }
 }
 
-fn average_us_dimensions(dims: &UsSymbolDimensions) -> Decimal {
-    let values = [
-        dims.capital_flow_direction,
-        dims.price_momentum,
-        dims.volume_profile,
-        dims.pre_post_market_anomaly,
-        dims.valuation,
-    ];
-    values.iter().copied().sum::<Decimal>() / Decimal::from(values.len() as i64)
-}
-
 // ── Tests ──
 
 #[cfg(test)]
@@ -554,6 +548,7 @@ mod tests {
     use crate::ontology::links::{
         CalcIndexObservation, CandlestickObservation, CapitalFlow, MarketStatus, QuoteObservation,
     };
+    use crate::us::pipeline::dimensions::UsSymbolDimensions;
     use rust_decimal_macros::dec;
     use std::collections::HashMap;
 
@@ -588,7 +583,7 @@ mod tests {
         let quotes = vec![make_quote("AAPL.US", dec!(180), dec!(178), dec!(179))];
         let flows = vec![CapitalFlow {
             symbol: sym("AAPL.US"),
-            net_inflow: dec!(5000),
+            net_inflow: crate::ontology::links::YuanAmount::from_yuan(dec!(5000)),
         }];
         let calc = vec![CalcIndexObservation {
             symbol: sym("AAPL.US"),
@@ -742,7 +737,7 @@ mod tests {
         prev.insert(sym("AAPL.US"), dec!(5000));
         let flows = vec![CapitalFlow {
             symbol: sym("AAPL.US"),
-            net_inflow: dec!(-3000),
+            net_inflow: crate::ontology::links::YuanAmount::from_yuan(dec!(-3000)),
         }];
         let snap = UsEventSnapshot::detect(
             &[],
@@ -764,7 +759,7 @@ mod tests {
         prev.insert(sym("AAPL.US"), dec!(5000));
         let flows = vec![CapitalFlow {
             symbol: sym("AAPL.US"),
-            net_inflow: dec!(3000),
+            net_inflow: crate::ontology::links::YuanAmount::from_yuan(dec!(3000)),
         }];
         let snap = UsEventSnapshot::detect(
             &[],
@@ -972,6 +967,6 @@ mod tests {
             valuation: dec!(0.5),
         };
         // (0.2 + 0.4 + 0.6 + 0.3 + 0.5) / 5 = 2.0 / 5 = 0.4
-        assert_eq!(average_us_dimensions(&dims), dec!(0.4));
+        assert_eq!(dimension_composite(&dims), dec!(0.4));
     }
 }
