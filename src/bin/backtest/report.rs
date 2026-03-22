@@ -151,6 +151,23 @@ pub fn print_report(report: &BacktestReport) {
         report.total_row.hit_rates.get(3).copied().unwrap_or(0.0),
     );
 
+    // Contrarian (inverted)
+    let inv_rates: Vec<f64> = report
+        .total_row
+        .hit_rates
+        .iter()
+        .map(|r| 100.0 - r)
+        .collect();
+    println!(
+        "  {:<30} {:>5}  {:>5.1}% {:>5.1}% {:>5.1}% {:>5.1}%",
+        "CONTRARIAN (inverted)",
+        report.total_row.judgments,
+        inv_rates.first().copied().unwrap_or(0.0),
+        inv_rates.get(1).copied().unwrap_or(0.0),
+        inv_rates.get(2).copied().unwrap_or(0.0),
+        inv_rates.get(3).copied().unwrap_or(0.0),
+    );
+
     // Baseline
     println!(
         "  {:<30} {:>5}  {:>5.1}% {:>5.1}% {:>5.1}% {:>5.1}%",

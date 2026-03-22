@@ -44,23 +44,26 @@ pub fn build_synthetic_tick(
 
     // ── signal dimensions ────────────────────────────────────────────────────
 
-    // capital_flow_direction: volume-weighted up vs down
-    let (up_vol, down_vol): (f64, f64) = window.iter().fold((0.0, 0.0), |(u, d), bar| {
-        let vol = bar.volume as f64;
-        if bar.close >= bar.open {
-            (u + vol, d)
-        } else {
-            (u, d + vol)
-        }
-    });
-    let total_vol = up_vol + down_vol;
-    let capital_flow: f64 = if total_vol > 0.0 {
-        (up_vol - down_vol) / total_vol
+    // capital_flow_direction: volume-weighted price impact.
+    // Real Longport capital_flow has mean≈-0.1, std≈0.26, range [-1, +0.06].
+    // We approximate with dollar-volume-weighted return per bar, scaled to match
+    // the real distribution.
+    let total_turnover: f64 = window.iter().map(|b| b.turnover).sum();
+    let capital_flow: f64 = if total_turnover > 0.0 {
+        let weighted_return: f64 = window.iter().map(|b| {
+            let bar_return = if b.open != 0.0 { (b.close - b.open) / b.open } else { 0.0 };
+            bar_return * b.turnover
+        }).sum::<f64>() / total_turnover;
+        // Scale: real data std≈0.26. Raw weighted return over 30 bars is tiny (~0.001).
+        // Multiply by 200 to get into the right range.
+        clamp(weighted_return * 200.0)
     } else {
         0.0
     };
 
-    // price_momentum: return over window, scaled so 5% = 1.0
+    // price_momentum: return over window.
+    // Real momentum has mean≈+0.2, std≈0.67, range [-0.85, +1.0].
+    // A 30-bar (30-min) return is typically 0.1-0.5%. Scale by 150 to match.
     let first_open = window.first().unwrap().open;
     let last_close = window.last().unwrap().close;
     let raw_momentum = if first_open != 0.0 {
@@ -68,10 +71,12 @@ pub fn build_synthetic_tick(
     } else {
         0.0
     };
-    let momentum = clamp(raw_momentum * 20.0);
+    let momentum = clamp(raw_momentum * 150.0);
 
-    // volume_profile: recent 5 bars vs full window
-    let window_avg_vol = window.iter().map(|b| b.volume as f64).sum::<f64>() / window.len() as f64;
+    // volume_profile: recent 5 bars vs full window.
+    // Real volume_profile is often near zero. Keep the scaling modest.
+    let total_vol: f64 = window.iter().map(|b| b.volume as f64).sum();
+    let window_avg_vol = total_vol / window.len() as f64;
     let recent_5 = &window[window.len().saturating_sub(5)..];
     let recent_avg_vol =
         recent_5.iter().map(|b| b.volume as f64).sum::<f64>() / recent_5.len() as f64;
@@ -81,39 +86,42 @@ pub fn build_synthetic_tick(
         0.0
     };
 
-    // composite
-    let composite = capital_flow * 0.4 + momentum * 0.4 + volume_profile * 0.2;
+    // composite: match real distribution (mean≈0, std≈0.2, range [-0.3, +0.3])
+    let composite = clamp(capital_flow * 0.4 + momentum * 0.4 + volume_profile * 0.2);
 
     // ── pressure ─────────────────────────────────────────────────────────────
 
-    // pressure_duration: count of consecutive bars at end with same direction
-    let last_dir_up = window.last().map(|b| b.close >= b.open).unwrap_or(true);
-    let pressure_duration = window
+    // pressure_duration: count of consecutive bars at end with same capital_flow sign.
+    // Real duration is in ticks (mean≈239, max≈265). The predicate engine uses
+    // normalize_count(duration, 8) so we scale bar-count × 30 to approximate ticks.
+    let last_dir_up = capital_flow >= 0.0;
+    let consecutive_bars = window
         .iter()
         .rev()
         .take_while(|b| (b.close >= b.open) == last_dir_up)
         .count() as u64;
+    // Scale to tick-equivalent: each bar ≈ 8 ticks of real-time data at 8s push interval
+    let pressure_duration = consecutive_bars * 8;
 
-    // capital_flow of the earlier half of the window
+    // pressure_delta: difference between current and earlier capital_flow
     let half = window.len() / 2;
     let early_half = &window[..half];
-    let (eu, ed): (f64, f64) = early_half.iter().fold((0.0, 0.0), |(u, d), bar| {
-        let vol = bar.volume as f64;
-        if bar.close >= bar.open {
-            (u + vol, d)
-        } else {
-            (u, d + vol)
-        }
-    });
-    let early_total = eu + ed;
-    let early_cf = if early_total > 0.0 {
-        (eu - ed) / early_total
+    let early_turnover: f64 = early_half.iter().map(|b| b.turnover).sum();
+    let early_cf = if early_turnover > 0.0 {
+        let wr: f64 = early_half.iter().map(|b| {
+            let r = if b.open != 0.0 { (b.close - b.open) / b.open } else { 0.0 };
+            r * b.turnover
+        }).sum::<f64>() / early_turnover;
+        clamp(wr * 200.0)
     } else {
         0.0
     };
     let pressure_delta = capital_flow - early_cf;
 
-    let accelerating = pressure_delta > 0.1 && pressure_delta.signum() == capital_flow.signum();
+    // accelerating: only when delta is meaningful and same-signed
+    let accelerating = pressure_delta.abs() > 0.05
+        && pressure_delta.signum() == capital_flow.signum()
+        && capital_flow.abs() > 0.15;
 
     // ── stress (cross-sectional) ─────────────────────────────────────────────
 
@@ -161,9 +169,11 @@ pub fn build_synthetic_tick(
 
     // ── direction ────────────────────────────────────────────────────────────
 
-    let direction: i8 = if composite > 0.1 {
+    // Direction threshold: real composite has std≈0.2.
+    // Use 0.05 (~0.25 std) as the neutral zone.
+    let direction: i8 = if composite > 0.05 {
         1
-    } else if composite < -0.1 {
+    } else if composite < -0.05 {
         -1
     } else {
         0
