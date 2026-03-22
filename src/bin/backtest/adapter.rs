@@ -4,6 +4,8 @@ use eden::live_snapshot::{
     LiveMarketRegime, LivePressure, LiveSignal, LiveStressSnapshot, LiveTacticalCase,
 };
 
+use std::collections::HashMap;
+
 use super::loader::Bar;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -24,8 +26,23 @@ pub struct SyntheticTick {
     pub pressure: LivePressure,
     pub stress: LiveStressSnapshot,
     pub regime: LiveMarketRegime,
-    pub direction: i8,  // +1 bullish, -1 bearish, 0 neutral
+    pub direction: i8, // +1 bullish, -1 bearish, 0 neutral
     pub timestamp: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct MarketContext {
+    pub stress: LiveStressSnapshot,
+    pub regime: LiveMarketRegime,
+}
+
+#[derive(Default)]
+struct MarketAccumulator {
+    sum_return: f64,
+    sum_abs_return: f64,
+    up_count: usize,
+    down_count: usize,
+    count: usize,
 }
 
 // ── main function ─────────────────────────────────────────────────────────────
@@ -34,7 +51,7 @@ pub fn build_synthetic_tick(
     symbol: &str,
     sector: &str,
     window: &[Bar],
-    all_symbols_bars: &[(String, &[Bar])],
+    market_context: Option<&MarketContext>,
 ) -> Option<SyntheticTick> {
     if window.len() < 5 {
         return None;
@@ -50,10 +67,18 @@ pub fn build_synthetic_tick(
     // the real distribution.
     let total_turnover: f64 = window.iter().map(|b| b.turnover).sum();
     let capital_flow: f64 = if total_turnover > 0.0 {
-        let weighted_return: f64 = window.iter().map(|b| {
-            let bar_return = if b.open != 0.0 { (b.close - b.open) / b.open } else { 0.0 };
-            bar_return * b.turnover
-        }).sum::<f64>() / total_turnover;
+        let weighted_return: f64 = window
+            .iter()
+            .map(|b| {
+                let bar_return = if b.open != 0.0 {
+                    (b.close - b.open) / b.open
+                } else {
+                    0.0
+                };
+                bar_return * b.turnover
+            })
+            .sum::<f64>()
+            / total_turnover;
         // Scale: real data std≈0.26. Raw weighted return over 30 bars is tiny (~0.001).
         // Multiply by 200 to get into the right range.
         clamp(weighted_return * 200.0)
@@ -108,10 +133,18 @@ pub fn build_synthetic_tick(
     let early_half = &window[..half];
     let early_turnover: f64 = early_half.iter().map(|b| b.turnover).sum();
     let early_cf = if early_turnover > 0.0 {
-        let wr: f64 = early_half.iter().map(|b| {
-            let r = if b.open != 0.0 { (b.close - b.open) / b.open } else { 0.0 };
-            r * b.turnover
-        }).sum::<f64>() / early_turnover;
+        let wr: f64 = early_half
+            .iter()
+            .map(|b| {
+                let r = if b.open != 0.0 {
+                    (b.close - b.open) / b.open
+                } else {
+                    0.0
+                };
+                r * b.turnover
+            })
+            .sum::<f64>()
+            / early_turnover;
         clamp(wr * 200.0)
     } else {
         0.0
@@ -122,50 +155,6 @@ pub fn build_synthetic_tick(
     let accelerating = pressure_delta.abs() > 0.05
         && pressure_delta.signum() == capital_flow.signum()
         && capital_flow.abs() > 0.15;
-
-    // ── stress (cross-sectional) ─────────────────────────────────────────────
-
-    let composite_stress: f64 = if all_symbols_bars.is_empty() {
-        0.0
-    } else {
-        let mut negative_count = 0usize;
-        let mut total_magnitude = 0.0f64;
-        let mut count = 0usize;
-
-        for (_sym, bars) in all_symbols_bars {
-            // bars within 120 seconds of current timestamp
-            let nearby: Vec<&Bar> = bars
-                .iter()
-                .filter(|b| (b.ts - timestamp).abs() <= 120)
-                .collect();
-
-            if nearby.len() < 2 {
-                continue;
-            }
-
-            let first_close = nearby.first().unwrap().close;
-            let last_c = nearby.last().unwrap().close;
-            let ret = if first_close != 0.0 {
-                (last_c - first_close) / first_close
-            } else {
-                0.0
-            };
-
-            total_magnitude += ret.abs();
-            if ret < 0.0 {
-                negative_count += 1;
-            }
-            count += 1;
-        }
-
-        if count == 0 {
-            0.0
-        } else {
-            let prop_negative = negative_count as f64 / count as f64;
-            let avg_magnitude = total_magnitude / count as f64;
-            clamp(prop_negative * avg_magnitude * 20.0) // scale similarly to momentum
-        }
-    };
 
     // ── direction ────────────────────────────────────────────────────────────
 
@@ -227,24 +216,28 @@ pub fn build_synthetic_tick(
         accelerating,
     };
 
-    let stress = LiveStressSnapshot {
-        composite_stress: to_dec(composite_stress),
-        sector_synchrony: None,
-        pressure_consensus: None,
-        momentum_consensus: None,
-        pressure_dispersion: None,
-        volume_anomaly: None,
-    };
+    let stress = market_context
+        .map(|context| context.stress.clone())
+        .unwrap_or(LiveStressSnapshot {
+            composite_stress: Decimal::ZERO,
+            sector_synchrony: None,
+            pressure_consensus: None,
+            momentum_consensus: None,
+            pressure_dispersion: None,
+            volume_anomaly: None,
+        });
 
-    let regime = LiveMarketRegime {
-        bias: "neutral".to_string(),
-        confidence: Decimal::ZERO,
-        breadth_up: Decimal::ZERO,
-        breadth_down: Decimal::ZERO,
-        average_return: Decimal::ZERO,
-        directional_consensus: None,
-        pre_market_sentiment: None,
-    };
+    let regime = market_context
+        .map(|context| context.regime.clone())
+        .unwrap_or(LiveMarketRegime {
+            bias: "neutral".to_string(),
+            confidence: Decimal::ZERO,
+            breadth_up: Decimal::ZERO,
+            breadth_down: Decimal::ZERO,
+            average_return: Decimal::ZERO,
+            directional_consensus: None,
+            pre_market_sentiment: None,
+        });
 
     Some(SyntheticTick {
         case,
@@ -255,6 +248,77 @@ pub fn build_synthetic_tick(
         direction,
         timestamp,
     })
+}
+
+pub fn build_market_contexts(
+    symbol_bars: &HashMap<String, Vec<Bar>>,
+) -> HashMap<i64, MarketContext> {
+    let mut accumulators: HashMap<i64, MarketAccumulator> = HashMap::new();
+
+    for bars in symbol_bars.values() {
+        for bar in bars {
+            if bar.open == 0.0 {
+                continue;
+            }
+            let ret = (bar.close - bar.open) / bar.open;
+            let entry = accumulators.entry(bar.ts).or_default();
+            entry.sum_return += ret;
+            entry.sum_abs_return += ret.abs();
+            entry.count += 1;
+            if ret > 0.0 {
+                entry.up_count += 1;
+            } else if ret < 0.0 {
+                entry.down_count += 1;
+            }
+        }
+    }
+
+    accumulators
+        .into_iter()
+        .filter_map(|(timestamp, acc)| {
+            if acc.count == 0 {
+                return None;
+            }
+
+            let count = acc.count as f64;
+            let breadth_up = acc.up_count as f64 / count;
+            let breadth_down = acc.down_count as f64 / count;
+            let average_return = acc.sum_return / count;
+            let avg_abs_return = acc.sum_abs_return / count;
+            let directional_consensus = (breadth_up - breadth_down).abs();
+            let stress = clamp(breadth_down * avg_abs_return * 20.0);
+            let bias = if breadth_down >= 0.55 && average_return < 0.0 {
+                "risk_off"
+            } else if breadth_up >= 0.55 && average_return > 0.0 {
+                "risk_on"
+            } else {
+                "neutral"
+            };
+
+            Some((
+                timestamp,
+                MarketContext {
+                    stress: LiveStressSnapshot {
+                        composite_stress: to_dec(stress),
+                        sector_synchrony: None,
+                        pressure_consensus: None,
+                        momentum_consensus: Some(to_dec(avg_abs_return.min(1.0))),
+                        pressure_dispersion: Some(to_dec((1.0 - directional_consensus).max(0.0))),
+                        volume_anomaly: None,
+                    },
+                    regime: LiveMarketRegime {
+                        bias: bias.to_string(),
+                        confidence: to_dec(directional_consensus.min(1.0)),
+                        breadth_up: to_dec(breadth_up.min(1.0)),
+                        breadth_down: to_dec(breadth_down.min(1.0)),
+                        average_return: to_dec(average_return),
+                        directional_consensus: Some(to_dec(directional_consensus.min(1.0))),
+                        pre_market_sentiment: None,
+                    },
+                },
+            ))
+        })
+        .collect()
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -293,7 +357,7 @@ mod tests {
             ],
             100000,
         );
-        let tick = build_synthetic_tick("700.HK", "tech", &bars, &[]).unwrap();
+        let tick = build_synthetic_tick("700.HK", "tech", &bars, None).unwrap();
         assert_eq!(tick.direction, 1, "uptrend should be bullish");
     }
 
@@ -310,7 +374,7 @@ mod tests {
             ],
             100000,
         );
-        let tick = build_synthetic_tick("700.HK", "tech", &bars, &[]).unwrap();
+        let tick = build_synthetic_tick("700.HK", "tech", &bars, None).unwrap();
         assert_eq!(tick.direction, -1, "downtrend should be bearish");
     }
 
@@ -327,13 +391,13 @@ mod tests {
             ],
             100000,
         );
-        let tick = build_synthetic_tick("700.HK", "tech", &bars, &[]).unwrap();
+        let tick = build_synthetic_tick("700.HK", "tech", &bars, None).unwrap();
         assert_eq!(tick.direction, 0, "flat should be neutral");
     }
 
     #[test]
     fn too_few_bars_returns_none() {
         let bars = make_bars(&[(100.0, 101.0), (101.0, 102.0)], 100000);
-        assert!(build_synthetic_tick("700.HK", "tech", &bars, &[]).is_none());
+        assert!(build_synthetic_tick("700.HK", "tech", &bars, None).is_none());
     }
 }

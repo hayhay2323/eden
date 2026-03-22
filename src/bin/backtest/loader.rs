@@ -24,10 +24,7 @@ pub fn load_symbol_bars(symbol_dir: &Path) -> Result<Vec<Bar>, String> {
         let entry = entry.map_err(|e| format!("Directory entry error: {}", e))?;
         let path = entry.path();
 
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         if !file_name.starts_with("chunk_") || !file_name.ends_with(".json") {
             continue;
@@ -62,7 +59,10 @@ pub fn load_symbols(
         let symbol_dir = cache_dir.join(&dir_name);
 
         if !symbol_dir.exists() {
-            eprintln!("Warning: directory not found for symbol {}: {:?}", symbol, symbol_dir);
+            eprintln!(
+                "Warning: directory not found for symbol {}: {:?}",
+                symbol, symbol_dir
+            );
             continue;
         }
 
@@ -87,7 +87,12 @@ mod tests {
         let bars = load_symbol_bars(dir).unwrap();
         assert!(!bars.is_empty());
         for w in bars.windows(2) {
-            assert!(w[0].ts <= w[1].ts, "bars not sorted: {} > {}", w[0].ts, w[1].ts);
+            assert!(
+                w[0].ts <= w[1].ts,
+                "bars not sorted: {} > {}",
+                w[0].ts,
+                w[1].ts
+            );
         }
         println!("Loaded {} bars for 700.HK", bars.len());
     }

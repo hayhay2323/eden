@@ -1,0 +1,757 @@
+{
+  "overall": {
+    "total_judgments": 81952,
+    "mechanism_rows": [
+      {
+        "mechanism": "Mechanical Execution Signature",
+        "judgments": 41386,
+        "hit_rates": [
+          36.37945198859518,
+          42.758420721983285,
+          45.094959648190205,
+          48.808775914560485
+        ]
+      },
+      {
+        "mechanism": "Mean Reversion Snapback",
+        "judgments": 35920,
+        "hit_rates": [
+          38.672048997772826,
+          44.09242761692651,
+          45.29510022271715,
+          48.981069042316264
+        ]
+      },
+      {
+        "mechanism": "Liquidity Trap",
+        "judgments": 4646,
+        "hit_rates": [
+          33.38355574687903,
+          39.92681876883341,
+          42.897115798536376,
+          49.00990099009901
+        ]
+      }
+    ],
+    "total_row": {
+      "judgments": 81952,
+      "hit_rates": [
+        37.21446700507614,
+        43.18259468957438,
+        45.058082780164,
+        48.89569504099961
+      ]
+    },
+    "date_range": [
+      "2024-03-01",
+      "2026-03-12"
+    ],
+    "symbols_count": 23
+  },
+  "out_of_sample": {
+    "title": "Out-of-Sample (last 30%)",
+    "report": {
+      "total_judgments": 24591,
+      "mechanism_rows": [
+        {
+          "mechanism": "Mechanical Execution Signature",
+          "judgments": 13273,
+          "hit_rates": [
+            37.12800421909139,
+            43.7052663301439,
+            45.58125517968809,
+            48.67776689520078
+          ]
+        },
+        {
+          "mechanism": "Mean Reversion Snapback",
+          "judgments": 10182,
+          "hit_rates": [
+            39.491259084659205,
+            44.84384207424868,
+            45.57061481044981,
+            49.76428992339422
+          ]
+        },
+        {
+          "mechanism": "Liquidity Trap",
+          "judgments": 1136,
+          "hit_rates": [
+            34.066901408450704,
+            42.07746478873239,
+            42.34154929577465,
+            50.08802816901409
+          ]
+        }
+      ],
+      "total_row": {
+        "judgments": 24591,
+        "hit_rates": [
+          37.96510918628766,
+          44.101500548981335,
+          45.42718880891383,
+          49.19279411166687
+        ]
+      },
+      "date_range": [
+        "2025-08-05",
+        "2026-03-12"
+      ],
+      "symbols_count": 23
+    }
+  },
+  "by_session": [
+    {
+      "title": "closing",
+      "report": {
+        "total_judgments": 22039,
+        "mechanism_rows": [
+          {
+            "mechanism": "Mechanical Execution Signature",
+            "judgments": 13715,
+            "hit_rates": [
+              35.42836310608822,
+              42.24571636893912,
+              45.344513306598614,
+              48.640174990885896
+            ]
+          },
+          {
+            "mechanism": "Mean Reversion Snapback",
+            "judgments": 6977,
+            "hit_rates": [
+              36.23333811093593,
+              40.92016626057045,
+              44.43170417084707,
+              46.753619033968754
+            ]
+          },
+          {
+            "mechanism": "Liquidity Trap",
+            "judgments": 1347,
+            "hit_rates": [
+              30.51224944320713,
+              39.495174461766894,
+              43.80103934669636,
+              49.51744617668894
+            ]
+          }
+        ],
+        "total_row": {
+          "judgments": 22039,
+          "hit_rates": [
+            35.3827306139117,
+            41.65796996233949,
+            44.9612051363492,
+            48.096556105086435
+          ]
+        },
+        "date_range": [
+          "2024-03-01",
+          "2026-03-12"
+        ],
+        "symbols_count": 23
+      }
+    },
+    {
+      "title": "midday",
+      "report": {
+        "total_judgments": 44229,
+        "mechanism_rows": [
+          {
+            "mechanism": "Mechanical Execution Signature",
+            "judgments": 22537,
+            "hit_rates": [
+              35.67466832320185,
+              42.516750232950265,
+              44.615521143009275,
+              48.87518303234681
+            ]
+          },
+          {
+            "mechanism": "Mean Reversion Snapback",
+            "judgments": 19175,
+            "hit_rates": [
+              37.97131681877445,
+              44.05215123859192,
+              45.10039113428944,
+              49.7522816166884
+            ]
+          },
+          {
+            "mechanism": "Liquidity Trap",
+            "judgments": 2517,
+            "hit_rates": [
+              32.419547079856976,
+              38.021454112038136,
+              40.96146205800556,
+              48.669050456893125
+            ]
+          }
+        ],
+        "total_row": {
+          "judgments": 44229,
+          "hit_rates": [
+            36.48511157837618,
+            42.92658662868254,
+            44.61778471138845,
+            49.24370887878993
+          ]
+        },
+        "date_range": [
+          "2024-03-01",
+          "2026-03-12"
+        ],
+        "symbols_count": 23
+      }
+    },
+    {
+      "title": "opening",
+      "report": {
+        "total_judgments": 15684,
+        "mechanism_rows": [
+          {
+            "mechanism": "Mean Reversion Snapback",
+            "judgments": 9768,
+            "hit_rates": [
+              41.78951678951679,
+              46.43734643734644,
+              46.29402129402129,
+              49.058149058149056
+            ]
+          },
+          {
+            "mechanism": "Mechanical Execution Signature",
+            "judgments": 5134,
+            "hit_rates": [
+              42.01402415270744,
+              45.18893650175302,
+              46.53291780288274,
+              48.967666536813404
+            ]
+          },
+          {
+            "mechanism": "Liquidity Trap",
+            "judgments": 782,
+            "hit_rates": [
+              41.432225063938624,
+              46.80306905370844,
+              47.570332480818415,
+              49.232736572890026
+            ]
+          }
+        ],
+        "total_row": {
+          "judgments": 15684,
+          "hit_rates": [
+            41.845192552920174,
+            46.046926804386636,
+            46.43585819943892,
+            49.037235399132875
+          ]
+        },
+        "date_range": [
+          "2024-03-01",
+          "2026-03-12"
+        ],
+        "symbols_count": 23
+      }
+    }
+  ],
+  "by_regime": [
+    {
+      "title": "neutral",
+      "report": {
+        "total_judgments": 66001,
+        "mechanism_rows": [
+          {
+            "mechanism": "Mechanical Execution Signature",
+            "judgments": 34777,
+            "hit_rates": [
+              35.82827730971619,
+              42.50797941168013,
+              45.08439485867096,
+              48.91163700146649
+            ]
+          },
+          {
+            "mechanism": "Mean Reversion Snapback",
+            "judgments": 27394,
+            "hit_rates": [
+              37.91706213039352,
+              42.97291377673943,
+              44.54625100386946,
+              48.6456888369716
+            ]
+          },
+          {
+            "mechanism": "Liquidity Trap",
+            "judgments": 3830,
+            "hit_rates": [
+              32.68929503916449,
+              39.73890339425588,
+              43.34203655352481,
+              49.32114882506527
+            ]
+          }
+        ],
+        "total_row": {
+          "judgments": 66001,
+          "hit_rates": [
+            36.51308313510401,
+            42.54026454144634,
+            44.75992787988061,
+            48.82501780276056
+          ]
+        },
+        "date_range": [
+          "2024-03-01",
+          "2026-03-12"
+        ],
+        "symbols_count": 23
+      }
+    },
+    {
+      "title": "risk_off",
+      "report": {
+        "total_judgments": 7648,
+        "mechanism_rows": [
+          {
+            "mechanism": "Mean Reversion Snapback",
+            "judgments": 4336,
+            "hit_rates": [
+              41.14391143911439,
+              48.29335793357934,
+              47.80904059040591,
+              50.83025830258303
+            ]
+          },
+          {
+            "mechanism": "Mechanical Execution Signature",
+            "judgments": 2941,
+            "hit_rates": [
+              39.816388983339,
+              45.08670520231214,
+              46.48078884733084,
+              49.40496429785787
+            ]
+          },
+          {
+            "mechanism": "Liquidity Trap",
+            "judgments": 371,
+            "hit_rates": [
+              35.309973045822105,
+              40.43126684636118,
+              39.083557951482476,
+              46.36118598382749
+            ]
+          }
+        ],
+        "total_row": {
+          "judgments": 7648,
+          "hit_rates": [
+            40.35041841004184,
+            46.678870292887034,
+            46.875,
+            50.06537656903765
+          ]
+        },
+        "date_range": [
+          "2024-03-06",
+          "2026-03-12"
+        ],
+        "symbols_count": 23
+      }
+    },
+    {
+      "title": "risk_on",
+      "report": {
+        "total_judgments": 8303,
+        "mechanism_rows": [
+          {
+            "mechanism": "Mean Reversion Snapback",
+            "judgments": 4190,
+            "hit_rates": [
+              41.05011933174224,
+              47.06443914081145,
+              47.58949880668258,
+              49.260143198090695
+            ]
+          },
+          {
+            "mechanism": "Mechanical Execution Signature",
+            "judgments": 3668,
+            "hit_rates": [
+              38.849509269356595,
+              43.26608505997819,
+              44.083969465648856,
+              47.355507088331514
+            ]
+          },
+          {
+            "mechanism": "Liquidity Trap",
+            "judgments": 445,
+            "hit_rates": [
+              37.752808988764045,
+              41.12359550561798,
+              42.247191011235955,
+              48.53932584269663
+            ]
+          }
+        ],
+        "total_row": {
+          "judgments": 8303,
+          "hit_rates": [
+            39.90124051547633,
+            45.068047693604726,
+            45.754546549439965,
+            48.38010357702036
+          ]
+        },
+        "date_range": [
+          "2024-03-01",
+          "2026-03-12"
+        ],
+        "symbols_count": 23
+      }
+    }
+  ],
+  "mechanism_by_session": [
+    {
+      "mechanism": "Liquidity Trap",
+      "slice": "closing",
+      "judgments": 1347,
+      "hit_rates": [
+        30.51224944320713,
+        39.495174461766894,
+        43.80103934669636,
+        49.51744617668894
+      ],
+      "contrarian_hit_rates": [
+        69.48775055679288,
+        60.504825538233106,
+        56.198960653303644,
+        50.48255382331106
+      ]
+    },
+    {
+      "mechanism": "Liquidity Trap",
+      "slice": "midday",
+      "judgments": 2517,
+      "hit_rates": [
+        32.419547079856976,
+        38.021454112038136,
+        40.96146205800556,
+        48.669050456893125
+      ],
+      "contrarian_hit_rates": [
+        67.58045292014303,
+        61.97854588796186,
+        59.03853794199444,
+        51.330949543106875
+      ]
+    },
+    {
+      "mechanism": "Liquidity Trap",
+      "slice": "opening",
+      "judgments": 782,
+      "hit_rates": [
+        41.432225063938624,
+        46.80306905370844,
+        47.570332480818415,
+        49.232736572890026
+      ],
+      "contrarian_hit_rates": [
+        58.567774936061376,
+        53.196930946291566,
+        52.42966751918159,
+        50.767263427109974
+      ]
+    },
+    {
+      "mechanism": "Mean Reversion Snapback",
+      "slice": "closing",
+      "judgments": 6977,
+      "hit_rates": [
+        36.23333811093593,
+        40.92016626057045,
+        44.43170417084707,
+        46.753619033968754
+      ],
+      "contrarian_hit_rates": [
+        63.76666188906407,
+        59.07983373942955,
+        55.56829582915294,
+        53.246380966031246
+      ]
+    },
+    {
+      "mechanism": "Mean Reversion Snapback",
+      "slice": "midday",
+      "judgments": 19175,
+      "hit_rates": [
+        37.97131681877445,
+        44.05215123859192,
+        45.10039113428944,
+        49.7522816166884
+      ],
+      "contrarian_hit_rates": [
+        62.02868318122555,
+        55.94784876140808,
+        54.89960886571056,
+        50.2477183833116
+      ]
+    },
+    {
+      "mechanism": "Mean Reversion Snapback",
+      "slice": "opening",
+      "judgments": 9768,
+      "hit_rates": [
+        41.78951678951679,
+        46.43734643734644,
+        46.29402129402129,
+        49.058149058149056
+      ],
+      "contrarian_hit_rates": [
+        58.21048321048321,
+        53.56265356265356,
+        53.70597870597871,
+        50.941850941850944
+      ]
+    },
+    {
+      "mechanism": "Mechanical Execution Signature",
+      "slice": "closing",
+      "judgments": 13715,
+      "hit_rates": [
+        35.42836310608822,
+        42.24571636893912,
+        45.344513306598614,
+        48.640174990885896
+      ],
+      "contrarian_hit_rates": [
+        64.57163689391177,
+        57.754283631060886,
+        54.655486693401386,
+        51.35982500911411
+      ]
+    },
+    {
+      "mechanism": "Mechanical Execution Signature",
+      "slice": "midday",
+      "judgments": 22537,
+      "hit_rates": [
+        35.67466832320185,
+        42.516750232950265,
+        44.615521143009275,
+        48.87518303234681
+      ],
+      "contrarian_hit_rates": [
+        64.32533167679816,
+        57.483249767049735,
+        55.384478856990725,
+        51.124816967653196
+      ]
+    },
+    {
+      "mechanism": "Mechanical Execution Signature",
+      "slice": "opening",
+      "judgments": 5134,
+      "hit_rates": [
+        42.01402415270744,
+        45.18893650175302,
+        46.53291780288274,
+        48.967666536813404
+      ],
+      "contrarian_hit_rates": [
+        57.98597584729256,
+        54.81106349824698,
+        53.46708219711726,
+        51.032333463186596
+      ]
+    }
+  ],
+  "mechanism_by_regime": [
+    {
+      "mechanism": "Liquidity Trap",
+      "slice": "neutral",
+      "judgments": 3830,
+      "hit_rates": [
+        32.68929503916449,
+        39.73890339425588,
+        43.34203655352481,
+        49.32114882506527
+      ],
+      "contrarian_hit_rates": [
+        67.31070496083551,
+        60.26109660574412,
+        56.6579634464752,
+        50.67885117493473
+      ]
+    },
+    {
+      "mechanism": "Liquidity Trap",
+      "slice": "risk_off",
+      "judgments": 371,
+      "hit_rates": [
+        35.309973045822105,
+        40.43126684636118,
+        39.083557951482476,
+        46.36118598382749
+      ],
+      "contrarian_hit_rates": [
+        64.6900269541779,
+        59.56873315363881,
+        60.91644204851752,
+        53.63881401617251
+      ]
+    },
+    {
+      "mechanism": "Liquidity Trap",
+      "slice": "risk_on",
+      "judgments": 445,
+      "hit_rates": [
+        37.752808988764045,
+        41.12359550561798,
+        42.247191011235955,
+        48.53932584269663
+      ],
+      "contrarian_hit_rates": [
+        62.247191011235955,
+        58.876404494382015,
+        57.752808988764045,
+        51.460674157303366
+      ]
+    },
+    {
+      "mechanism": "Mean Reversion Snapback",
+      "slice": "neutral",
+      "judgments": 27394,
+      "hit_rates": [
+        37.91706213039352,
+        42.97291377673943,
+        44.54625100386946,
+        48.6456888369716
+      ],
+      "contrarian_hit_rates": [
+        62.08293786960648,
+        57.02708622326057,
+        55.453748996130535,
+        51.3543111630284
+      ]
+    },
+    {
+      "mechanism": "Mean Reversion Snapback",
+      "slice": "risk_off",
+      "judgments": 4336,
+      "hit_rates": [
+        41.14391143911439,
+        48.29335793357934,
+        47.80904059040591,
+        50.83025830258303
+      ],
+      "contrarian_hit_rates": [
+        58.85608856088561,
+        51.70664206642066,
+        52.19095940959409,
+        49.169741697416974
+      ]
+    },
+    {
+      "mechanism": "Mean Reversion Snapback",
+      "slice": "risk_on",
+      "judgments": 4190,
+      "hit_rates": [
+        41.05011933174224,
+        47.06443914081145,
+        47.58949880668258,
+        49.260143198090695
+      ],
+      "contrarian_hit_rates": [
+        58.94988066825776,
+        52.93556085918855,
+        52.41050119331743,
+        50.73985680190931
+      ]
+    },
+    {
+      "mechanism": "Mechanical Execution Signature",
+      "slice": "neutral",
+      "judgments": 34777,
+      "hit_rates": [
+        35.82827730971619,
+        42.50797941168013,
+        45.08439485867096,
+        48.91163700146649
+      ],
+      "contrarian_hit_rates": [
+        64.1717226902838,
+        57.49202058831987,
+        54.91560514132904,
+        51.08836299853351
+      ]
+    },
+    {
+      "mechanism": "Mechanical Execution Signature",
+      "slice": "risk_off",
+      "judgments": 2941,
+      "hit_rates": [
+        39.816388983339,
+        45.08670520231214,
+        46.48078884733084,
+        49.40496429785787
+      ],
+      "contrarian_hit_rates": [
+        60.183611016661,
+        54.91329479768786,
+        53.51921115266916,
+        50.595035702142134
+      ]
+    },
+    {
+      "mechanism": "Mechanical Execution Signature",
+      "slice": "risk_on",
+      "judgments": 3668,
+      "hit_rates": [
+        38.849509269356595,
+        43.26608505997819,
+        44.083969465648856,
+        47.355507088331514
+      ],
+      "contrarian_hit_rates": [
+        61.150490730643405,
+        56.73391494002181,
+        55.916030534351144,
+        52.644492911668486
+      ]
+    }
+  ],
+  "contrarian_bootstrap": [
+    {
+      "horizon_label": "5m",
+      "mean": 62.78733265938476,
+      "lower": 62.443224023087886,
+      "upper": 63.15564249908302
+    },
+    {
+      "horizon_label": "30m",
+      "mean": 56.82152307007306,
+      "lower": 56.46656905807711,
+      "upper": 57.16617138403078
+    },
+    {
+      "horizon_label": "1h",
+      "mean": 54.94688435628791,
+      "lower": 54.58512622353329,
+      "upper": 55.26087963809733
+    },
+    {
+      "horizon_label": "1d",
+      "mean": 51.08478473528054,
+      "lower": 50.75852656975398,
+      "upper": 51.42728182106522
+    }
+  ],
+  "non_overlapping": true,
+  "out_of_sample_start": "2025-08-05"
+}

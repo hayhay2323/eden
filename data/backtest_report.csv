@@ -1,0 +1,37 @@
+section,row_type,label,slice,count,hit_5m,hit_30m,hit_1h,hit_1d,contrarian_5m,contrarian_30m,contrarian_1h,contrarian_1d
+overall,mechanism,"Mechanical Execution Signature","",41386,36.3795,42.7584,45.0950,48.8088,63.6205,57.2416,54.9050,51.1912
+overall,mechanism,"Mean Reversion Snapback","",35920,38.6720,44.0924,45.2951,48.9811,61.3280,55.9076,54.7049,51.0189
+overall,mechanism,"Liquidity Trap","",4646,33.3836,39.9268,42.8971,49.0099,66.6164,60.0732,57.1029,50.9901
+overall,total,"TOTAL","",81952,37.2145,43.1826,45.0581,48.8957,62.7855,56.8174,54.9419,51.1043
+out_of_sample,mechanism,"Mechanical Execution Signature","",13273,37.1280,43.7053,45.5813,48.6778,62.8720,56.2947,54.4187,51.3222
+out_of_sample,mechanism,"Mean Reversion Snapback","",10182,39.4913,44.8438,45.5706,49.7643,60.5087,55.1562,54.4294,50.2357
+out_of_sample,mechanism,"Liquidity Trap","",1136,34.0669,42.0775,42.3415,50.0880,65.9331,57.9225,57.6585,49.9120
+out_of_sample,total,"TOTAL","",24591,37.9651,44.1015,45.4272,49.1928,62.0349,55.8985,54.5728,50.8072
+session,slice_total,"closing","closing",22039,35.3827,41.6580,44.9612,48.0966,64.6173,58.3420,55.0388,51.9034
+session,slice_total,"midday","midday",44229,36.4851,42.9266,44.6178,49.2437,63.5149,57.0734,55.3822,50.7563
+session,slice_total,"opening","opening",15684,41.8452,46.0469,46.4359,49.0372,58.1548,53.9531,53.5641,50.9628
+regime,slice_total,"neutral","neutral",66001,36.5131,42.5403,44.7599,48.8250,63.4869,57.4597,55.2401,51.1750
+regime,slice_total,"risk_off","risk_off",7648,40.3504,46.6789,46.8750,50.0654,59.6496,53.3211,53.1250,49.9346
+regime,slice_total,"risk_on","risk_on",8303,39.9012,45.0680,45.7545,48.3801,60.0988,54.9320,54.2455,51.6199
+mechanism_x_session,cross,"Liquidity Trap","closing",1347,30.5122,39.4952,43.8010,49.5174,69.4878,60.5048,56.1990,50.4826
+mechanism_x_session,cross,"Liquidity Trap","midday",2517,32.4195,38.0215,40.9615,48.6691,67.5805,61.9785,59.0385,51.3309
+mechanism_x_session,cross,"Liquidity Trap","opening",782,41.4322,46.8031,47.5703,49.2327,58.5678,53.1969,52.4297,50.7673
+mechanism_x_session,cross,"Mean Reversion Snapback","closing",6977,36.2333,40.9202,44.4317,46.7536,63.7667,59.0798,55.5683,53.2464
+mechanism_x_session,cross,"Mean Reversion Snapback","midday",19175,37.9713,44.0522,45.1004,49.7523,62.0287,55.9478,54.8996,50.2477
+mechanism_x_session,cross,"Mean Reversion Snapback","opening",9768,41.7895,46.4373,46.2940,49.0581,58.2105,53.5627,53.7060,50.9419
+mechanism_x_session,cross,"Mechanical Execution Signature","closing",13715,35.4284,42.2457,45.3445,48.6402,64.5716,57.7543,54.6555,51.3598
+mechanism_x_session,cross,"Mechanical Execution Signature","midday",22537,35.6747,42.5168,44.6155,48.8752,64.3253,57.4832,55.3845,51.1248
+mechanism_x_session,cross,"Mechanical Execution Signature","opening",5134,42.0140,45.1889,46.5329,48.9677,57.9860,54.8111,53.4671,51.0323
+mechanism_x_regime,cross,"Liquidity Trap","neutral",3830,32.6893,39.7389,43.3420,49.3211,67.3107,60.2611,56.6580,50.6789
+mechanism_x_regime,cross,"Liquidity Trap","risk_off",371,35.3100,40.4313,39.0836,46.3612,64.6900,59.5687,60.9164,53.6388
+mechanism_x_regime,cross,"Liquidity Trap","risk_on",445,37.7528,41.1236,42.2472,48.5393,62.2472,58.8764,57.7528,51.4607
+mechanism_x_regime,cross,"Mean Reversion Snapback","neutral",27394,37.9171,42.9729,44.5463,48.6457,62.0829,57.0271,55.4537,51.3543
+mechanism_x_regime,cross,"Mean Reversion Snapback","risk_off",4336,41.1439,48.2934,47.8090,50.8303,58.8561,51.7066,52.1910,49.1697
+mechanism_x_regime,cross,"Mean Reversion Snapback","risk_on",4190,41.0501,47.0644,47.5895,49.2601,58.9499,52.9356,52.4105,50.7399
+mechanism_x_regime,cross,"Mechanical Execution Signature","neutral",34777,35.8283,42.5080,45.0844,48.9116,64.1717,57.4920,54.9156,51.0884
+mechanism_x_regime,cross,"Mechanical Execution Signature","risk_off",2941,39.8164,45.0867,46.4808,49.4050,60.1836,54.9133,53.5192,50.5950
+mechanism_x_regime,cross,"Mechanical Execution Signature","risk_on",3668,38.8495,43.2661,44.0840,47.3555,61.1505,56.7339,55.9160,52.6445
+bootstrap,ci,5m,0,,,,,62.7873,62.4432,63.1556,
+bootstrap,ci,30m,0,,,,,56.8215,56.4666,57.1662,
+bootstrap,ci,1h,0,,,,,54.9469,54.5851,55.2609,
+bootstrap,ci,1d,0,,,,,51.0848,50.7585,51.4273,

@@ -1,7 +1,7 @@
-use rust_decimal::Decimal;
 use eden::ontology::mechanisms::MechanismCandidateKind;
 use eden::pipeline::mechanism_inference::build_reasoning_profile;
 use eden::pipeline::predicate_engine::{derive_atomic_predicates, PredicateInputs};
+use rust_decimal::Decimal;
 
 use super::adapter::SyntheticTick;
 use super::loader::Bar;
@@ -12,6 +12,8 @@ use super::loader::Bar;
 pub struct Judgment {
     pub timestamp: i64,
     pub symbol: String,
+    pub session: &'static str,
+    pub regime: String,
     pub mechanism: MechanismCandidateKind,
     pub mechanism_label: String,
     pub direction: i8,
@@ -33,12 +35,20 @@ pub struct HorizonOutcome {
     pub hit: bool,
 }
 
-pub const HORIZONS: &[(usize, &str)] = &[
-    (5, "5m"),
-    (30, "30m"),
-    (60, "1h"),
-    (390, "1d"),
-];
+pub const HORIZONS: &[(usize, &str)] = &[(5, "5m"), (30, "30m"), (60, "1h"), (390, "1d")];
+
+pub fn classify_hk_session(timestamp: i64) -> &'static str {
+    let dt = time::OffsetDateTime::from_unix_timestamp(timestamp)
+        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH)
+        .to_offset(time::UtcOffset::from_hms(8, 0, 0).unwrap());
+    let minutes = dt.hour() as i32 * 60 + dt.minute() as i32;
+    match minutes {
+        570..=629 => "opening", // 09:30-10:29 HKT
+        630..=869 => "midday",  // 10:30-14:29 HKT (includes post-lunch continuation)
+        870..=960 => "closing", // 14:30-16:00 HKT
+        _ => "other",
+    }
+}
 
 // ── pipeline evaluation ───────────────────────────────────────────────────────
 
@@ -74,6 +84,8 @@ pub fn evaluate_tick(tick: &SyntheticTick) -> Option<Judgment> {
     Some(Judgment {
         timestamp: tick.timestamp,
         symbol: tick.case.symbol.clone(),
+        session: classify_hk_session(tick.timestamp),
+        regime: tick.regime.bias.clone(),
         mechanism: primary.kind,
         mechanism_label: primary.label.clone(),
         direction: tick.direction,
@@ -102,8 +114,7 @@ pub fn validate_judgment(
                 } else {
                     0.0
                 };
-                let future_return_dec =
-                    Decimal::try_from(future_return).unwrap_or(Decimal::ZERO);
+                let future_return_dec = Decimal::try_from(future_return).unwrap_or(Decimal::ZERO);
                 let hit = if judgment.direction > 0 {
                     future_return > 0.0
                 } else {
@@ -144,6 +155,8 @@ mod tests {
         let judgment = Judgment {
             timestamp: 1700000000,
             symbol: "700.HK".into(),
+            session: "opening",
+            regime: "neutral".into(),
             mechanism: MechanismCandidateKind::MechanicalExecutionSignature,
             mechanism_label: "Mechanical Execution Signature".into(),
             direction: 1,
@@ -175,6 +188,8 @@ mod tests {
         let judgment = Judgment {
             timestamp: 1700000000,
             symbol: "700.HK".into(),
+            session: "opening",
+            regime: "neutral".into(),
             mechanism: MechanismCandidateKind::FragilityBuildUp,
             mechanism_label: "Fragility Build-up".into(),
             direction: -1,
