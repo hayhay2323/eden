@@ -9,10 +9,12 @@ use longport::quote::{
 use longport::{Config, Market};
 use rust_decimal::Decimal;
 use tokio::sync::mpsc;
-use tokio::time::{Duration, Instant};
+use tokio::time::Duration;
 
 use eden::action::narrative::NarrativeSnapshot;
 use eden::action::workflow::{ActionDescriptor, ActionWorkflowSnapshot, SuggestedAction};
+#[cfg(feature = "persistence")]
+use eden::cases::build_case_list;
 use eden::external::polymarket::{
     fetch_polymarket_snapshot, load_polymarket_configs, PolymarketMarketConfig, PolymarketSnapshot,
 };
@@ -21,6 +23,12 @@ use eden::graph::graph::BrainGraph;
 use eden::graph::insights::{ConflictHistory, GraphInsights};
 use eden::graph::tracker::PositionTracker;
 use eden::graph::validation::{SignalScorecard, SignalType};
+use eden::live_snapshot::{
+    ensure_snapshot_parent, snapshot_path, spawn_write_snapshot, LiveBackwardChain,
+    LiveCausalLeader, LiveEvent, LiveEvidence, LiveHypothesisTrack, LiveLineageMetric, LiveMarket,
+    LiveMarketRegime, LivePressure, LiveScorecard, LiveSignal, LiveSnapshot, LiveStressSnapshot,
+    LiveTacticalCase,
+};
 use eden::logic::tension::TensionSnapshot;
 use eden::ontology::links::LinkSnapshot;
 use eden::ontology::objects::{BrokerId, Symbol};
@@ -29,17 +37,24 @@ use eden::ontology::snapshot::{self, RawSnapshot};
 use eden::ontology::store;
 use eden::ontology::TacticalSetup;
 use eden::persistence::action_workflow::{ActionWorkflowEventRecord, ActionWorkflowRecord};
+#[cfg(feature = "persistence")]
+use eden::persistence::case_realized_outcome::CaseRealizedOutcomeRecord;
+#[cfg(feature = "persistence")]
+use eden::persistence::case_reasoning_assessment::CaseReasoningAssessmentRecord;
 use eden::pipeline::dimensions::DimensionSnapshot;
 use eden::pipeline::reasoning::{path_has_family, path_is_mixed_multi_hop, ReasoningSnapshot};
 use eden::pipeline::signals::{
     DerivedSignalSnapshot, EventSnapshot, MarketEventKind, ObservationSnapshot, SignalScope,
 };
 use eden::pipeline::world::WorldSnapshots;
+use eden::runtime_loop::{next_tick, spawn_periodic_fetch, TickState};
 use eden::temporal::analysis::{compute_dynamics, compute_polymarket_dynamics};
 use eden::temporal::buffer::TickHistory;
-use eden::temporal::causality::compute_causal_timelines;
+use eden::temporal::causality::{compute_causal_timelines, CausalTimeline};
 #[cfg(feature = "persistence")]
-use eden::temporal::causality::{CausalFlipEvent, CausalTimeline, CausalTimelinePoint};
+use eden::temporal::causality::{CausalFlipEvent, CausalTimelinePoint};
+#[cfg(feature = "persistence")]
+use eden::temporal::lineage::compute_case_realized_outcomes;
 use eden::temporal::lineage::compute_lineage_stats;
 use eden::temporal::record::TickRecord;
 
@@ -57,6 +72,8 @@ use eden::persistence::store::EdenStore;
 use eden::persistence::tactical_setup::TacticalSetupRecord;
 use eden::temporal::lineage::{LineageAlignmentFilter, LineageFilters, LineageSortKey};
 
+#[cfg(feature = "persistence")]
+const CASE_OUTCOME_RESOLUTION_LAG: u64 = 15;
 const WATCHLIST: &[&str] = &[
     // ── User Holdings ──
     "981.HK",  // SMIC
@@ -474,6 +491,7 @@ const WATCHLIST: &[&str] = &[
 #[derive(Debug)]
 enum CliCommand {
     Live,
+    UsLive,
     Polymarket {
         json: bool,
     },
@@ -501,6 +519,9 @@ enum CliCommand {
     },
 }
 
+const CLI_USAGE: &str =
+    "usage: eden us\n       eden polymarket [--json]\n       eden causal timeline <leaf_scope_key> [limit]\n       eden causal flips [limit]\n       eden lineage [limit] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--json]\n       eden lineage history [snapshots] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--latest-only] [--json]\n       eden lineage rows [rows] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--latest-only] [--json]";
+
 #[derive(Debug, Clone, Copy, Default)]
 struct LineageViewOptions {
     top: usize,
@@ -518,15 +539,15 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, String> {
     }
 
     match args.get(1).map(|value| value.as_str()) {
+        Some("us") => Ok(CliCommand::UsLive),
         Some("polymarket") => Ok(CliCommand::Polymarket {
             json: args.iter().any(|arg| arg == "--json"),
         }),
         Some("causal") => match args.get(2).map(|value| value.as_str()) {
             Some("timeline") => {
-                let leaf_scope_key = args
-                    .get(3)
-                    .cloned()
-                    .ok_or_else(|| "usage: eden causal timeline <leaf_scope_key> [limit]".to_string())?;
+                let leaf_scope_key = args.get(3).cloned().ok_or_else(|| {
+                    "usage: eden causal timeline <leaf_scope_key> [limit]".to_string()
+                })?;
                 let limit = parse_optional_limit(args.get(4), DEFAULT_LIMIT)?;
                 Ok(CliCommand::CausalTimeline {
                     leaf_scope_key,
@@ -537,18 +558,10 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, String> {
                 let limit = parse_optional_limit(args.get(3), DEFAULT_LIMIT)?;
                 Ok(CliCommand::CausalFlips { limit })
             }
-            _ => Err(
-                "usage: eden polymarket [--json]\n       eden causal timeline <leaf_scope_key> [limit]\n       eden causal flips [limit]\n       eden lineage [limit] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--json]\n       eden lineage history [snapshots] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--latest-only] [--json]\n       eden lineage rows [rows] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--latest-only] [--json]"
-                    .into(),
-            ),
+            _ => Err(CLI_USAGE.into()),
         },
-        Some("lineage") => {
-            parse_lineage_cli_command(&args[2..], DEFAULT_LIMIT)
-        }
-        _ => Err(
-            "usage: eden polymarket [--json]\n       eden causal timeline <leaf_scope_key> [limit]\n       eden causal flips [limit]\n       eden lineage [limit] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--json]\n       eden lineage history [snapshots] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--latest-only] [--json]\n       eden lineage rows [rows] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--latest-only] [--json]"
-                .into(),
-        ),
+        Some("lineage") => parse_lineage_cli_command(&args[2..], DEFAULT_LIMIT),
+        _ => Err(CLI_USAGE.into()),
     }
 }
 
@@ -687,6 +700,311 @@ fn parse_optional_limit(arg: Option<&String>, default: usize) -> Result<usize, S
     }
 }
 
+fn summarize_hk_scorecard(scorecard: &SignalScorecard) -> LiveScorecard {
+    let stats = scorecard.stats();
+    let total_signals = stats.iter().map(|item| item.total).sum::<usize>();
+    let resolved_signals = stats.iter().map(|item| item.resolved).sum::<usize>();
+    let hits = stats.iter().map(|item| item.hits).sum::<usize>();
+    let misses = resolved_signals.saturating_sub(hits);
+    let hit_rate = if resolved_signals == 0 {
+        Decimal::ZERO
+    } else {
+        Decimal::from(hits as i64) / Decimal::from(resolved_signals as i64)
+    };
+    let mean_return = if resolved_signals == 0 {
+        Decimal::ZERO
+    } else {
+        stats
+            .iter()
+            .map(|item| item.mean_return * Decimal::from(item.resolved as i64))
+            .sum::<Decimal>()
+            / Decimal::from(resolved_signals as i64)
+    };
+
+    LiveScorecard {
+        total_signals,
+        resolved_signals,
+        hits,
+        misses,
+        hit_rate,
+        mean_return,
+    }
+}
+
+fn build_hk_lineage_metrics(
+    stats: &eden::temporal::lineage::LineageStats,
+) -> Vec<LiveLineageMetric> {
+    stats
+        .promoted_outcomes
+        .iter()
+        .take(6)
+        .map(|item| LiveLineageMetric {
+            template: item.label.clone(),
+            total: item.total,
+            resolved: item.resolved,
+            hits: item.hits,
+            hit_rate: item.hit_rate,
+            mean_return: item.mean_return,
+        })
+        .collect()
+}
+
+fn extract_symbol_scope(scope: &eden::ReasoningScope) -> Option<&Symbol> {
+    match scope {
+        eden::ReasoningScope::Symbol(symbol) => Some(symbol),
+        _ => None,
+    }
+}
+
+fn symbol_string_from_scope(scope: &eden::ReasoningScope) -> String {
+    extract_symbol_scope(scope)
+        .map(|symbol| symbol.0.clone())
+        .unwrap_or_default()
+}
+
+fn sector_name_for_symbol(
+    store: &std::sync::Arc<eden::ontology::store::ObjectStore>,
+    symbol: &Symbol,
+) -> Option<String> {
+    let sector_id = store.stocks.get(symbol)?.sector_id.as_ref()?;
+    store
+        .sectors
+        .get(sector_id)
+        .map(|sector| sector.name.clone())
+}
+
+fn build_hk_backward_chains(snapshot: &eden::BackwardReasoningSnapshot) -> Vec<LiveBackwardChain> {
+    snapshot
+        .investigations
+        .iter()
+        .filter_map(|item| {
+            let symbol = extract_symbol_scope(&item.leaf_scope)?;
+            let leading = item.leading_cause.as_ref()?;
+
+            let mut evidence = leading
+                .supporting_evidence
+                .iter()
+                .map(|e| LiveEvidence {
+                    source: e.channel.clone(),
+                    description: e.statement.clone(),
+                    weight: e.weight,
+                    direction: e.weight,
+                })
+                .collect::<Vec<_>>();
+            evidence.extend(leading.contradicting_evidence.iter().map(|e| LiveEvidence {
+                source: e.channel.clone(),
+                description: e.statement.clone(),
+                weight: e.weight,
+                direction: -e.weight,
+            }));
+
+            Some(LiveBackwardChain {
+                symbol: symbol.0.clone(),
+                conclusion: format!("{} — 主因: {}", item.leaf_label, leading.explanation),
+                primary_driver: leading.explanation.clone(),
+                confidence: leading.confidence,
+                evidence,
+            })
+        })
+        .take(10)
+        .collect()
+}
+
+fn hk_causal_leader_streak(timeline: &CausalTimeline) -> u64 {
+    let Some(latest) = timeline.points.last() else {
+        return 0;
+    };
+    let latest_id = latest.leading_cause_id.as_deref();
+    timeline
+        .points
+        .iter()
+        .rev()
+        .take_while(|point| point.leading_cause_id.as_deref() == latest_id)
+        .count() as u64
+}
+
+fn build_hk_causal_leaders(
+    timelines: &std::collections::HashMap<String, CausalTimeline>,
+) -> Vec<LiveCausalLeader> {
+    let mut items = timelines
+        .values()
+        .filter(|timeline| timeline.leaf_scope_key.ends_with(".HK"))
+        .filter_map(|timeline| {
+            let current_leader = timeline.latest_point()?.leading_explanation.clone()?;
+            Some(LiveCausalLeader {
+                symbol: timeline.leaf_scope_key.clone(),
+                current_leader,
+                leader_streak: hk_causal_leader_streak(timeline),
+                flips: timeline.flip_events.len(),
+            })
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|a, b| b.leader_streak.cmp(&a.leader_streak));
+    items.truncate(10);
+    items
+}
+
+fn build_hk_live_snapshot(
+    tick: u64,
+    timestamp: String,
+    store: &std::sync::Arc<eden::ontology::store::ObjectStore>,
+    brain: &BrainGraph,
+    decision: &DecisionSnapshot,
+    graph_insights: &GraphInsights,
+    reasoning_snapshot: &ReasoningSnapshot,
+    event_snapshot: &EventSnapshot,
+    observation_snapshot: &ObservationSnapshot,
+    scorecard: &SignalScorecard,
+    dim_snapshot: &DimensionSnapshot,
+    latest: &TickRecord,
+    tracker: &PositionTracker,
+    causal_timelines: &std::collections::HashMap<String, CausalTimeline>,
+    lineage_stats: &eden::temporal::lineage::LineageStats,
+) -> LiveSnapshot {
+    let hypothesis_map: HashMap<&str, &eden::Hypothesis> = reasoning_snapshot
+        .hypotheses
+        .iter()
+        .map(|item| (item.hypothesis_id.as_str(), item))
+        .collect();
+
+    let mut top_signals = latest
+        .signals
+        .iter()
+        .map(|(symbol, signal)| {
+            let dims = dim_snapshot.dimensions.get(symbol);
+            LiveSignal {
+                symbol: symbol.0.clone(),
+                sector: sector_name_for_symbol(store, symbol),
+                composite: signal.composite,
+                mark_price: signal.mark_price,
+                dimension_composite: None,
+                capital_flow_direction: signal.capital_flow_direction,
+                price_momentum: dims
+                    .map(|item| item.activity_momentum)
+                    .unwrap_or(Decimal::ZERO),
+                volume_profile: dims
+                    .map(|item| item.candlestick_conviction)
+                    .unwrap_or(Decimal::ZERO),
+                pre_post_market_anomaly: Decimal::ZERO,
+                valuation: dims
+                    .map(|item| item.valuation_support)
+                    .unwrap_or(Decimal::ZERO),
+                cross_stock_correlation: Some(signal.cross_stock_correlation),
+                sector_coherence: signal.sector_coherence,
+                cross_market_propagation: None,
+            }
+        })
+        .filter(|signal| signal.composite.abs() > Decimal::new(3, 2))
+        .collect::<Vec<_>>();
+    top_signals.sort_by(|a, b| b.composite.abs().cmp(&a.composite.abs()));
+    top_signals.truncate(20);
+
+    let tactical_cases = reasoning_snapshot
+        .tactical_setups
+        .iter()
+        .filter(|item| item.action == "enter" || item.action == "review")
+        .take(10)
+        .map(|item| LiveTacticalCase {
+            setup_id: item.setup_id.clone(),
+            symbol: symbol_string_from_scope(&item.scope),
+            title: item.title.clone(),
+            action: item.action.clone(),
+            confidence: item.confidence,
+            confidence_gap: item.confidence_gap,
+            heuristic_edge: item.heuristic_edge,
+            entry_rationale: item.entry_rationale.clone(),
+            family_label: hypothesis_map
+                .get(item.hypothesis_id.as_str())
+                .map(|hypothesis| hypothesis.family_label.clone()),
+            counter_label: item
+                .runner_up_hypothesis_id
+                .as_ref()
+                .and_then(|id| hypothesis_map.get(id.as_str()))
+                .map(|hypothesis| hypothesis.family_label.clone()),
+        })
+        .collect::<Vec<_>>();
+
+    let hypothesis_tracks = reasoning_snapshot
+        .hypothesis_tracks
+        .iter()
+        .filter(|item| item.status.as_str() != "stable")
+        .take(10)
+        .map(|item| LiveHypothesisTrack {
+            symbol: symbol_string_from_scope(&item.scope),
+            title: item.title.clone(),
+            status: item.status.as_str().to_string(),
+            age_ticks: item.age_ticks,
+            confidence: item.confidence,
+        })
+        .collect::<Vec<_>>();
+
+    let pressures = graph_insights
+        .pressures
+        .iter()
+        .take(10)
+        .map(|item| LivePressure {
+            symbol: item.symbol.0.clone(),
+            sector: sector_name_for_symbol(store, &item.symbol),
+            capital_flow_pressure: item.net_pressure,
+            momentum: Decimal::ZERO,
+            pressure_delta: item.pressure_delta,
+            pressure_duration: item.pressure_duration,
+            accelerating: item.accelerating,
+        })
+        .collect::<Vec<_>>();
+
+    let events = event_snapshot
+        .events
+        .iter()
+        .take(8)
+        .map(|item| LiveEvent {
+            kind: format!("{:?}", item.value.kind),
+            magnitude: item.value.magnitude,
+            summary: item.value.summary.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    LiveSnapshot {
+        tick,
+        timestamp,
+        market: LiveMarket::Hk,
+        stock_count: store.stocks.len(),
+        edge_count: brain.graph.edge_count(),
+        hypothesis_count: reasoning_snapshot.hypotheses.len(),
+        observation_count: observation_snapshot.observations.len(),
+        active_positions: tracker.active_count(),
+        market_regime: LiveMarketRegime {
+            bias: decision.market_regime.bias.as_str().to_string(),
+            confidence: decision.market_regime.confidence,
+            breadth_up: decision.market_regime.breadth_up,
+            breadth_down: decision.market_regime.breadth_down,
+            average_return: decision.market_regime.average_return,
+            directional_consensus: Some(decision.market_regime.directional_consensus),
+            pre_market_sentiment: None,
+        },
+        stress: LiveStressSnapshot {
+            composite_stress: graph_insights.stress.composite_stress,
+            sector_synchrony: Some(graph_insights.stress.sector_synchrony),
+            pressure_consensus: Some(graph_insights.stress.pressure_consensus),
+            momentum_consensus: None,
+            pressure_dispersion: None,
+            volume_anomaly: None,
+        },
+        scorecard: summarize_hk_scorecard(scorecard),
+        tactical_cases,
+        hypothesis_tracks,
+        top_signals: top_signals.clone(),
+        convergence_scores: top_signals,
+        pressures,
+        backward_chains: build_hk_backward_chains(&latest.backward_reasoning),
+        causal_leaders: build_hk_causal_leaders(causal_timelines),
+        events,
+        cross_market_signals: Vec::new(),
+        cross_market_anomalies: Vec::new(),
+        lineage: build_hk_lineage_metrics(lineage_stats),
+    }
+}
+
 #[cfg(feature = "persistence")]
 async fn open_query_store() -> Result<EdenStore, Box<dyn std::error::Error>> {
     let eden_db_path = std::env::var("EDEN_DB_PATH").unwrap_or_else(|_| "data/eden.db".into());
@@ -699,6 +1017,7 @@ async fn run_cli_query(command: CliCommand) -> Result<(), Box<dyn std::error::Er
 
     match command {
         CliCommand::Live => Ok(()),
+        CliCommand::UsLive => Ok(()),
         CliCommand::Polymarket { json } => {
             let configs = load_polymarket_configs()
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
@@ -825,6 +1144,7 @@ async fn run_cli_query(command: CliCommand) -> Result<(), Box<dyn std::error::Er
 async fn run_cli_query(command: CliCommand) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         CliCommand::Live => Ok(()),
+        CliCommand::UsLive => Ok(()),
         CliCommand::Polymarket { json } => {
             let configs = load_polymarket_configs()
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
@@ -1718,6 +2038,16 @@ mod tests {
             _ => panic!("expected polymarket command"),
         }
     }
+
+    #[test]
+    fn parse_us_cli_command() {
+        let args = vec!["eden".to_string(), "us".to_string()];
+        let command = parse_cli_command(&args).expect("us command parses");
+        match command {
+            CliCommand::UsLive => {}
+            _ => panic!("expected us command"),
+        }
+    }
 }
 
 /// REST-only data that doesn't come via push.
@@ -1738,6 +2068,32 @@ impl RestSnapshot {
             market_temperature: None,
             polymarket: PolymarketSnapshot::default(),
         }
+    }
+}
+
+struct HkTickState<'a> {
+    live: &'a mut LiveState,
+    rest: &'a mut RestSnapshot,
+    rest_updated: &'a mut bool,
+}
+
+impl TickState<PushEvent, RestSnapshot> for HkTickState<'_> {
+    fn apply_push(&mut self, event: PushEvent) {
+        self.live.apply(event);
+    }
+
+    fn apply_update(&mut self, update: RestSnapshot) {
+        *self.rest = update;
+        *self.rest_updated = true;
+        self.live.dirty = true;
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.live.dirty
+    }
+
+    fn clear_dirty(&mut self) {
+        self.live.dirty = false;
     }
 }
 
@@ -2307,6 +2663,14 @@ async fn main() {
             std::process::exit(2);
         }
     };
+    if matches!(command, CliCommand::UsLive) {
+        if let Err(error) = eden::us::run().await {
+            eprintln!("US runtime failed: {}", error);
+            std::process::exit(1);
+        }
+        return;
+    }
+
     if !matches!(command, CliCommand::Live) {
         if let Err(error) = run_cli_query(command).await {
             eprintln!("Query failed: {}", error);
@@ -2409,6 +2773,8 @@ async fn main() {
     let mut prev_insights: Option<GraphInsights> = None;
     let mut conflict_history = ConflictHistory::new();
     let mut scorecard = SignalScorecard::new(500, 15); // 500 events, resolve after 15 ticks (~30s)
+    let live_snapshot_path = snapshot_path("EDEN_LIVE_SNAPSHOT_PATH", "data/live_snapshot.json");
+    ensure_snapshot_parent(&live_snapshot_path).await;
     let pct = Decimal::new(100, 0);
 
     println!(
@@ -2431,85 +2797,52 @@ async fn main() {
     let debounce = Duration::from_millis(DEBOUNCE_MS);
 
     // Refresh heavy REST data in the background so bootstrap can reach the first tick quickly.
-    let capital_refresh_interval = Duration::from_secs(60);
-    let (rest_tx, mut rest_rx) = mpsc::channel::<RestSnapshot>(1);
     let rest_ctx = ctx.clone();
     let rest_watchlist = watchlist_symbols.clone();
     let rest_polymarket = polymarket_configs.clone();
-    tokio::spawn(async move {
-        loop {
-            let snapshot = fetch_rest_data(&rest_ctx, &rest_watchlist, &rest_polymarket).await;
-            if rest_tx.send(snapshot).await.is_err() {
-                break;
-            }
-            tokio::time::sleep(capital_refresh_interval).await;
-        }
+    let mut rest_rx = spawn_periodic_fetch(1, Duration::from_secs(60), move || {
+        let rest_ctx = rest_ctx.clone();
+        let rest_watchlist = rest_watchlist.clone();
+        let rest_polymarket = rest_polymarket.clone();
+        async move { fetch_rest_data(&rest_ctx, &rest_watchlist, &rest_polymarket).await }
     });
     let mut bootstrap_pending = live.dirty;
 
     loop {
-        let mut received_push = false;
         let mut rest_updated = false;
-
-        if bootstrap_pending {
-            bootstrap_pending = false;
-        } else {
-            tokio::select! {
-                maybe_event = push_rx.recv() => {
-                    match maybe_event {
-                        Some(event) => {
-                            live.apply(event);
-                            received_push = true;
-                        }
-                        None => {
-                            eprintln!("Push channel closed. Exiting.");
-                            break;
-                        }
-                    }
-                }
-                maybe_rest = rest_rx.recv() => {
-                    if let Some(new_rest) = maybe_rest {
-                        rest = new_rest;
-                        rest_updated = true;
-                        live.dirty = true;
-                    }
-                }
-            }
-        }
-
-        if received_push {
-            // Debounce: drain all events that arrive within the window
-            let deadline = Instant::now() + debounce;
-            loop {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
+        let Some(tick_advance) = ({
+            let mut tick_state = HkTickState {
+                live: &mut live,
+                rest: &mut rest,
+                rest_updated: &mut rest_updated,
+            };
+            match next_tick(
+                &mut bootstrap_pending,
+                &mut push_rx,
+                &mut rest_rx,
+                debounce,
+                &mut tick_state,
+                &mut tick,
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(()) => {
+                    eprintln!("Push channel closed. Exiting.");
                     break;
                 }
-                match tokio::time::timeout(remaining, push_rx.recv()).await {
-                    Ok(Some(event)) => live.apply(event),
-                    _ => break,
-                }
             }
-        }
-
-        while let Ok(new_rest) = rest_rx.try_recv() {
-            rest = new_rest;
-            rest_updated = true;
-            live.dirty = true;
-        }
-
-        if !live.dirty {
+        }) else {
             continue;
-        }
+        };
 
-        tick += 1;
-        let now = time::OffsetDateTime::now_utc();
+        let now = tick_advance.now;
         let previous_polymarket = history
             .latest()
             .map(|tick| tick.polymarket_priors.clone())
             .unwrap_or_default();
 
-        if rest_updated {
+        if tick_advance.received_update {
             for idx in rest.calc_indexes.values() {
                 if let (Some(vr), Some(tr)) = (idx.volume_ratio, idx.turnover_rate) {
                     if vr > Decimal::TWO {
@@ -2715,122 +3048,6 @@ async fn main() {
         );
         history.push(tick_record);
 
-        // ── Write live snapshot JSON for frontend API ──
-        if let Some(latest) = history.latest() {
-            let live_snapshot = serde_json::json!({
-                "tick": tick,
-                "timestamp": now.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
-                "market_regime": {
-                    "bias": decision.market_regime.bias.as_str(),
-                    "confidence": decision.market_regime.confidence,
-                    "breadth_up": decision.market_regime.breadth_up,
-                    "breadth_down": decision.market_regime.breadth_down,
-                    "average_return": decision.market_regime.average_return,
-                },
-                "stress": {
-                    "sector_synchrony": graph_insights.stress.sector_synchrony,
-                    "pressure_consensus": graph_insights.stress.pressure_consensus,
-                    "conflict_intensity_mean": graph_insights.stress.conflict_intensity_mean,
-                    "market_temperature_stress": graph_insights.stress.market_temperature_stress,
-                    "composite_stress": graph_insights.stress.composite_stress,
-                },
-                "pressures": graph_insights.pressures.iter().take(10).map(|p| serde_json::json!({
-                    "symbol": p.symbol.0,
-                    "net_pressure": p.net_pressure,
-                    "pressure_delta": p.pressure_delta,
-                    "pressure_duration": p.pressure_duration,
-                    "accelerating": p.accelerating,
-                    "buy_inst_count": p.buy_inst_count,
-                    "sell_inst_count": p.sell_inst_count,
-                })).collect::<Vec<_>>(),
-                "pair_trades": graph_insights.inst_rotations.iter().take(5).map(|r| {
-                    let name = store.institutions.get(&r.institution_id).map(|i| i.name_en.as_str()).unwrap_or("?");
-                    serde_json::json!({
-                        "institution": name,
-                        "buy_symbols": r.buy_symbols.iter().take(3).map(|s| &s.0).collect::<Vec<_>>(),
-                        "sell_symbols": r.sell_symbols.iter().take(3).map(|s| &s.0).collect::<Vec<_>>(),
-                        "net_direction": r.net_direction,
-                    })
-                }).collect::<Vec<_>>(),
-                "exoduses": graph_insights.inst_exoduses.iter().take(5).map(|e| {
-                    let name = store.institutions.get(&e.institution_id).map(|i| i.name_en.as_str()).unwrap_or("?");
-                    serde_json::json!({
-                        "institution": name,
-                        "prev_stock_count": e.prev_stock_count,
-                        "curr_stock_count": e.curr_stock_count,
-                        "dropped_count": e.dropped_count,
-                    })
-                }).collect::<Vec<_>>(),
-                "hidden_links": graph_insights.shared_holders.iter().take(5).map(|s| serde_json::json!({
-                    "symbol_a": s.symbol_a.0,
-                    "symbol_b": s.symbol_b.0,
-                    "sector_a": s.sector_a.as_ref().map(|s| &s.0),
-                    "sector_b": s.sector_b.as_ref().map(|s| &s.0),
-                    "jaccard": s.jaccard,
-                    "shared_institutions": s.shared_institutions,
-                })).collect::<Vec<_>>(),
-                "conflicts": graph_insights.conflicts.iter().take(5).map(|c| {
-                    let name_a = store.institutions.get(&c.inst_a).map(|i| i.name_en.as_str()).unwrap_or("?");
-                    let name_b = store.institutions.get(&c.inst_b).map(|i| i.name_en.as_str()).unwrap_or("?");
-                    serde_json::json!({
-                        "inst_a": name_a,
-                        "inst_b": name_b,
-                        "jaccard_overlap": c.jaccard_overlap,
-                        "direction_a": c.direction_a,
-                        "direction_b": c.direction_b,
-                        "conflict_age": c.conflict_age,
-                        "intensity_delta": c.intensity_delta,
-                    })
-                }).collect::<Vec<_>>(),
-                "tactical_cases": reasoning_snapshot.tactical_setups.iter()
-                    .filter(|s| s.action == "enter" || s.action == "review")
-                    .take(10)
-                    .map(|s| serde_json::json!({
-                        "title": s.title,
-                        "action": s.action,
-                        "confidence": s.confidence,
-                        "confidence_gap": s.confidence_gap,
-                        "heuristic_edge": s.heuristic_edge,
-                    }))
-                    .collect::<Vec<_>>(),
-                "hypothesis_tracks": reasoning_snapshot.hypothesis_tracks.iter()
-                    .filter(|t| t.status.as_str() == "strengthening" || t.status.as_str() == "weakening")
-                    .take(10)
-                    .map(|t| serde_json::json!({
-                        "title": t.title,
-                        "status": t.status.as_str(),
-                        "age_ticks": t.age_ticks,
-                        "confidence": t.confidence,
-                    }))
-                    .collect::<Vec<_>>(),
-                "scorecard": scorecard.stats().iter().map(|s| serde_json::json!({
-                    "signal_type": s.signal_type.to_string(),
-                    "total": s.total,
-                    "resolved": s.resolved,
-                    "hits": s.hits,
-                    "hit_rate": s.hit_rate,
-                    "mean_return": s.mean_return,
-                })).collect::<Vec<_>>(),
-                "top_signals": latest.signals.iter()
-                    .filter(|(_, sig)| sig.composite.abs() > Decimal::new(3, 2))
-                    .map(|(sym, sig)| serde_json::json!({
-                        "symbol": sym.0,
-                        "composite": sig.composite,
-                        "institutional_alignment": sig.institutional_alignment,
-                        "sector_coherence": sig.sector_coherence,
-                        "cross_stock_correlation": sig.cross_stock_correlation,
-                        "mark_price": sig.mark_price,
-                    }))
-                    .take(20)
-                    .collect::<Vec<_>>(),
-            });
-            // Write snapshot to file (non-blocking)
-            let snapshot_json = serde_json::to_string(&live_snapshot).unwrap_or_default();
-            tokio::spawn(async move {
-                let _ = tokio::fs::write("data/live_snapshot.json", snapshot_json).await;
-            });
-        }
-
         // ── Persist to SurrealDB (non-blocking, fire-and-forget) ──
         #[cfg(feature = "persistence")]
         if let Some(ref store) = eden_store {
@@ -2906,6 +3123,78 @@ async fn main() {
         let polymarket_dynamics = compute_polymarket_dynamics(&history);
         let causal_timelines = compute_causal_timelines(&history);
         let lineage_stats = compute_lineage_stats(&history, LINEAGE_WINDOW);
+
+        if let Some(latest) = history.latest() {
+            let live_snapshot = build_hk_live_snapshot(
+                tick,
+                now.format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_default(),
+                &store,
+                &brain,
+                &decision,
+                &graph_insights,
+                &reasoning_snapshot,
+                &event_snapshot,
+                &observation_snapshot,
+                &scorecard,
+                &dim_snapshot,
+                latest,
+                &tracker,
+                &causal_timelines,
+                &lineage_stats,
+            );
+            #[cfg(feature = "persistence")]
+            let reasoning_assessment_records = eden_store
+                .as_ref()
+                .map(|_| {
+                    build_case_list(&live_snapshot)
+                        .cases
+                        .iter()
+                        .map(|case| {
+                            CaseReasoningAssessmentRecord::from_case_summary(case, now, "runtime")
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            spawn_write_snapshot(live_snapshot_path.clone(), live_snapshot);
+
+            #[cfg(feature = "persistence")]
+            if let Some(ref store) = eden_store {
+                if !reasoning_assessment_records.is_empty() {
+                    let assessment_records = reasoning_assessment_records.clone();
+                    let store_ref = store.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = store_ref
+                            .write_case_reasoning_assessments(&assessment_records)
+                            .await
+                        {
+                            eprintln!("Warning: failed to write case reasoning assessments: {}", e);
+                        }
+                    });
+                }
+
+                let realized_outcomes = compute_case_realized_outcomes(
+                    &history,
+                    LINEAGE_WINDOW,
+                    CASE_OUTCOME_RESOLUTION_LAG,
+                )
+                .into_iter()
+                .map(|outcome| CaseRealizedOutcomeRecord::from_outcome(&outcome, "hk"))
+                .collect::<Vec<_>>();
+                if !realized_outcomes.is_empty() {
+                    let realized_outcomes = realized_outcomes.clone();
+                    let store_ref = store.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = store_ref
+                            .write_case_realized_outcomes(&realized_outcomes)
+                            .await
+                        {
+                            eprintln!("Warning: failed to write case realized outcomes: {}", e);
+                        }
+                    });
+                }
+            }
+        }
 
         #[cfg(feature = "persistence")]
         if let Some(ref store) = eden_store {

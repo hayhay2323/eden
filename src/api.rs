@@ -1,21 +1,39 @@
+use std::convert::Infallible;
 use std::env;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 
+#[cfg(feature = "persistence")]
+use crate::action::workflow::ActionStage;
+use crate::cases::{
+    build_case_briefing, build_case_detail, build_case_list, build_case_review,
+    filter_case_list_by_actor, filter_case_list_by_owner, filter_case_list_by_reviewer,
+    load_snapshot, CaseBriefingResponse, CaseDetail, CaseListResponse, CaseMarket,
+    CaseMechanismStory, CaseMechanismTransitionDigest, CaseMechanismTransitionSliceStat,
+    CaseMechanismTransitionStat, CaseReviewResponse,
+};
+#[cfg(feature = "persistence")]
+use crate::cases::{
+    enrich_case_detail, enrich_case_review, enrich_case_summaries, workflow_record_payload,
+    CaseWorkflowState,
+};
+#[cfg(feature = "persistence")]
+use crate::persistence::case_reasoning_assessment::CaseReasoningAssessmentRecord;
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use axum::body::Body;
-use axum::extract::State;
-#[cfg(feature = "persistence")]
-use axum::extract::{Path, Query};
+use axum::extract::{Path, Query, State};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
 use axum::middleware::{self, Next};
+use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use futures::{stream, Stream};
 use rand::RngCore;
 #[cfg(feature = "persistence")]
 use rust_decimal::Decimal;
@@ -37,6 +55,13 @@ use crate::persistence::lineage_snapshot::LineageSnapshotRecord;
 #[cfg(feature = "persistence")]
 use crate::persistence::store::EdenStore;
 #[cfg(feature = "persistence")]
+use crate::persistence::us_lineage_metric_row::{
+    us_row_matches_filters, us_snapshot_records_from_rows, UsLineageFilters,
+    UsLineageMetricRowRecord,
+};
+#[cfg(feature = "persistence")]
+use crate::persistence::us_lineage_snapshot::UsLineageSnapshotRecord;
+#[cfg(feature = "persistence")]
 use crate::temporal::buffer::TickHistory;
 #[cfg(feature = "persistence")]
 use crate::temporal::causality::{
@@ -45,6 +70,14 @@ use crate::temporal::causality::{
 use crate::temporal::lineage::{
     LineageAlignmentFilter, LineageFilters, LineageSortKey, LineageStats,
 };
+#[cfg(feature = "persistence")]
+use crate::us::temporal::buffer::UsTickHistory;
+#[cfg(feature = "persistence")]
+use crate::us::temporal::causality::{
+    compute_causal_timelines as compute_us_causal_timelines, UsCausalFlip, UsCausalTimeline,
+};
+#[cfg(feature = "persistence")]
+use crate::us::temporal::lineage::UsLineageStats;
 
 #[cfg(feature = "persistence")]
 const DEFAULT_LIMIT: usize = 120;
@@ -54,9 +87,12 @@ const DEFAULT_TOP: usize = 5;
 const MAX_LIMIT: usize = 2_000;
 #[cfg(feature = "persistence")]
 const MAX_TOP: usize = 100;
+#[cfg(feature = "persistence")]
+const DEFAULT_US_RESOLUTION_LAG: u64 = 15;
 const DEFAULT_API_SCOPE: &str = "frontend:readonly";
 const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8787";
 const API_KEY_PREFIX: &str = "eden_pk_";
+const CASE_STREAM_INTERVAL_SECS: u64 = 4;
 
 #[derive(Clone)]
 pub struct ApiState {
@@ -69,6 +105,8 @@ pub struct ApiState {
 pub struct ApiKeyCipher {
     cipher: Arc<Aes256Gcm>,
 }
+
+type JsonEventStream = Pin<Box<dyn Stream<Item = Result<SseEvent, Infallible>> + Send>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApiKeyClaims {
@@ -166,9 +204,132 @@ struct CausalFlipsResponse {
     flips: Vec<FlatCausalFlip>,
 }
 
+#[cfg(feature = "persistence")]
+#[derive(Debug, Serialize)]
+struct UsLineageResponse {
+    window_size: usize,
+    resolution_lag: u64,
+    filters: UsLineageFilters,
+    top: usize,
+    sort_by: UsLineageSortKey,
+    stats: UsLineageStats,
+}
+
+#[cfg(feature = "persistence")]
+#[derive(Debug, Serialize)]
+struct UsLineageHistoryResponse {
+    requested_snapshots: usize,
+    returned_snapshots: usize,
+    filters: UsLineageFilters,
+    top: usize,
+    latest_only: bool,
+    sort_by: UsLineageSortKey,
+    snapshots: Vec<UsLineageSnapshotRecord>,
+}
+
+#[cfg(feature = "persistence")]
+#[derive(Debug, Serialize)]
+struct UsLineageRowsResponse {
+    requested_rows: usize,
+    returned_rows: usize,
+    filters: UsLineageFilters,
+    top: usize,
+    latest_only: bool,
+    sort_by: UsLineageSortKey,
+    rows: Vec<UsLineageMetricRowRecord>,
+}
+
+#[cfg(feature = "persistence")]
+#[derive(Debug, Serialize)]
+struct UsCausalTimelineResponse {
+    window_size: usize,
+    timeline: UsCausalTimeline,
+}
+
+#[cfg(feature = "persistence")]
+#[derive(Debug, Clone, Serialize)]
+struct FlatUsCausalFlip {
+    symbol: String,
+    event: UsCausalFlip,
+}
+
+#[cfg(feature = "persistence")]
+#[derive(Debug, Serialize)]
+struct UsCausalFlipsResponse {
+    window_size: usize,
+    total: usize,
+    flips: Vec<FlatUsCausalFlip>,
+}
+
 #[derive(Debug, Serialize)]
 struct ErrorBody {
     error: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CaseTransitionAnalyticsResponse {
+    market: String,
+    tick: u64,
+    timestamp: String,
+    filters: CaseTransitionAnalyticsFilters,
+    mechanism_transition_breakdown: Vec<CaseMechanismTransitionStat>,
+    transition_by_sector: Vec<CaseMechanismTransitionSliceStat>,
+    transition_by_regime: Vec<CaseMechanismTransitionSliceStat>,
+    transition_by_reviewer: Vec<CaseMechanismTransitionSliceStat>,
+    recent_mechanism_transitions: Vec<CaseMechanismTransitionDigest>,
+}
+
+#[derive(Debug, Serialize)]
+struct CaseTransitionAnalyticsFilters {
+    classification: Option<String>,
+    limit: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct CaseMechanismStoryResponse {
+    market: String,
+    setup_id: String,
+    symbol: String,
+    title: String,
+    workflow_state: String,
+    market_regime_bias: String,
+    current_mechanism: Option<String>,
+    mechanism_story: CaseMechanismStory,
+}
+
+#[cfg(feature = "persistence")]
+#[derive(Debug, Deserialize)]
+struct CaseTransitionBody {
+    target_stage: String,
+    actor: Option<String>,
+    note: Option<String>,
+}
+
+#[cfg(feature = "persistence")]
+#[derive(Debug, Deserialize)]
+struct CaseAssignBody {
+    #[serde(default)]
+    owner: Option<Option<String>>,
+    #[serde(default)]
+    reviewer: Option<Option<String>>,
+    actor: Option<String>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+struct CaseQuery {
+    actor: Option<String>,
+    owner: Option<String>,
+    reviewer: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+struct CaseTransitionAnalyticsQuery {
+    actor: Option<String>,
+    owner: Option<String>,
+    reviewer: Option<String>,
+    classification: Option<String>,
+    limit: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -227,6 +388,53 @@ struct CausalQuery {
     limit: Option<usize>,
 }
 
+#[cfg(feature = "persistence")]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum UsLineageSortKey {
+    MeanReturn,
+    HitRate,
+}
+
+#[cfg(feature = "persistence")]
+#[derive(Debug, Deserialize, Default)]
+struct UsLineageQuery {
+    limit: Option<usize>,
+    top: Option<usize>,
+    resolution_lag: Option<u64>,
+    template: Option<String>,
+    bucket: Option<String>,
+    session: Option<String>,
+    regime: Option<String>,
+    sort: Option<String>,
+}
+
+#[cfg(feature = "persistence")]
+#[derive(Debug, Deserialize, Default)]
+struct UsLineageHistoryQuery {
+    snapshots: Option<usize>,
+    top: Option<usize>,
+    latest_only: Option<bool>,
+    template: Option<String>,
+    bucket: Option<String>,
+    session: Option<String>,
+    regime: Option<String>,
+    sort: Option<String>,
+}
+
+#[cfg(feature = "persistence")]
+#[derive(Debug, Deserialize, Default)]
+struct UsLineageRowsQuery {
+    rows: Option<usize>,
+    top: Option<usize>,
+    latest_only: Option<bool>,
+    template: Option<String>,
+    bucket: Option<String>,
+    session: Option<String>,
+    regime: Option<String>,
+    sort: Option<String>,
+}
+
 impl ApiError {
     fn bad_request(message: impl Into<String>) -> Self {
         Self {
@@ -242,7 +450,13 @@ impl ApiError {
         }
     }
 
-    #[cfg(feature = "persistence")]
+    fn forbidden(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            message: message.into(),
+        }
+    }
+
     fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
@@ -250,6 +464,7 @@ impl ApiError {
         }
     }
 
+    #[cfg(not(feature = "persistence"))]
     fn not_implemented(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_IMPLEMENTED,
@@ -411,7 +626,25 @@ fn build_router(state: ApiState) -> Result<Router, ApiError> {
     let auth_state = state.clone();
     let api_routes = Router::new()
         .route("/live", get(get_live_snapshot))
+        .route("/cases/:market", get(get_cases))
+        .route("/briefing/:market", get(get_case_briefing))
+        .route("/review/:market", get(get_case_review))
+        .route("/stream/:market/cases", get(stream_cases))
+        .route("/stream/:market/briefing", get(stream_case_briefing))
+        .route("/stream/:market/review", get(stream_case_review))
+        .route("/stream/:market/cases/:setup_id", get(stream_case_detail))
+        .route("/cases/:market/:setup_id", get(get_case_detail))
+        .route("/cases/:market/:setup_id/assign", post(post_case_assign))
+        .route(
+            "/cases/:market/:setup_id/transition",
+            post(post_case_transition),
+        )
         .route("/us/live", get(get_us_live_snapshot))
+        .route("/us/lineage", get(get_us_lineage))
+        .route("/us/lineage/history", get(get_us_lineage_history))
+        .route("/us/lineage/rows", get(get_us_lineage_rows))
+        .route("/us/causal/flips", get(get_us_causal_flips))
+        .route("/us/causal/timeline/:symbol", get(get_us_causal_timeline))
         .route("/polymarket", get(get_polymarket))
         .route("/lineage", get(get_lineage))
         .route("/lineage/history", get(get_lineage_history))
@@ -430,7 +663,7 @@ fn build_router(state: ApiState) -> Result<Router, ApiError> {
 fn build_cors_layer() -> Result<CorsLayer, ApiError> {
     let x_api_key = HeaderName::from_static("x-api-key");
     let mut cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::OPTIONS])
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
         .allow_headers([AUTHORIZATION, CONTENT_TYPE, x_api_key]);
 
     let raw = env::var("EDEN_API_ALLOWED_ORIGINS").unwrap_or_else(|_| "*".to_string());
@@ -462,7 +695,8 @@ async fn require_api_key(
 ) -> Result<Response, ApiError> {
     let token = extract_api_key(request.headers())
         .ok_or_else(|| ApiError::unauthorized("missing API key"))?;
-    state.auth.validate(token)?;
+    let claims = state.auth.validate(token)?;
+    ensure_scope_allows_method(&claims.scope, request.method())?;
     Ok(next.run(request).await)
 }
 
@@ -485,26 +719,734 @@ fn extract_api_key(headers: &HeaderMap) -> Option<&str> {
         .map(str::trim)
 }
 
+fn ensure_scope_allows_method(scope: &str, method: &Method) -> Result<(), ApiError> {
+    if scope_allows_method(scope, method) {
+        return Ok(());
+    }
+
+    Err(ApiError::forbidden(format!(
+        "API scope `{scope}` does not allow {} requests",
+        method.as_str()
+    )))
+}
+
+fn scope_allows_method(scope: &str, method: &Method) -> bool {
+    let requires_write =
+        method != Method::GET && method != Method::HEAD && method != Method::OPTIONS;
+
+    scope
+        .split(|ch: char| ch == ',' || ch.is_ascii_whitespace())
+        .filter(|token| !token.is_empty())
+        .any(|token| match token {
+            "*" | "frontend:*" | "frontend:write" | "frontend:readwrite" | "frontend:operator" => {
+                true
+            }
+            "frontend:readonly" | "frontend:read" => !requires_write,
+            _ => false,
+        })
+}
+
 async fn get_live_snapshot() -> Result<Json<serde_json::Value>, ApiError> {
     let path = std::env::var("EDEN_LIVE_SNAPSHOT_PATH")
         .unwrap_or_else(|_| "data/live_snapshot.json".into());
     let content = tokio::fs::read_to_string(&path)
         .await
         .map_err(|_| ApiError::bad_request("live snapshot not available — is eden running?"))?;
-    let value: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| ApiError::internal(&format!("invalid snapshot json: {e}")))?;
+    let value: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| ApiError::internal(&format!("invalid snapshot json: {e}")))?;
     Ok(Json(value))
 }
 
 async fn get_us_live_snapshot() -> Result<Json<serde_json::Value>, ApiError> {
     let path = std::env::var("EDEN_US_LIVE_SNAPSHOT_PATH")
         .unwrap_or_else(|_| "data/us_live_snapshot.json".into());
-    let content = tokio::fs::read_to_string(&path)
-        .await
-        .map_err(|_| ApiError::bad_request("US live snapshot not available — is eden-us running?"))?;
-    let value: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| ApiError::internal(&format!("invalid US snapshot json: {e}")))?;
+    let content = tokio::fs::read_to_string(&path).await.map_err(|_| {
+        ApiError::bad_request("US live snapshot not available — is `eden us` running?")
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| ApiError::internal(&format!("invalid US snapshot json: {e}")))?;
     Ok(Json(value))
+}
+
+async fn get_cases(
+    Path(market): Path<String>,
+    Query(query): Query<CaseQuery>,
+) -> Result<Json<CaseListResponse>, ApiError> {
+    let market = parse_case_market(&market)?;
+    Ok(Json(load_case_list_response(market, &query).await?))
+}
+
+async fn get_case_briefing(
+    Path(market): Path<String>,
+    Query(query): Query<CaseQuery>,
+) -> Result<Json<CaseBriefingResponse>, ApiError> {
+    let market = parse_case_market(&market)?;
+    let response = load_case_list_response(market, &query).await?;
+    Ok(Json(build_case_briefing(&response)))
+}
+
+async fn get_case_review(
+    Path(market): Path<String>,
+    Query(query): Query<CaseQuery>,
+) -> Result<Json<CaseReviewResponse>, ApiError> {
+    let market = parse_case_market(&market)?;
+    Ok(Json(load_case_review_response(market, &query).await?))
+}
+
+async fn stream_cases(
+    Path(market): Path<String>,
+    Query(query): Query<CaseQuery>,
+) -> Result<Sse<JsonEventStream>, ApiError> {
+    let market = parse_case_market(&market)?;
+    Ok(json_sse(move || {
+        let query = query.clone();
+        async move { load_case_list_response(market, &query).await }
+    }))
+}
+
+async fn stream_case_briefing(
+    Path(market): Path<String>,
+    Query(query): Query<CaseQuery>,
+) -> Result<Sse<JsonEventStream>, ApiError> {
+    let market = parse_case_market(&market)?;
+    Ok(json_sse(move || {
+        let query = query.clone();
+        async move {
+            let response = load_case_list_response(market, &query).await?;
+            Ok(build_case_briefing(&response))
+        }
+    }))
+}
+
+async fn stream_case_review(
+    Path(market): Path<String>,
+    Query(query): Query<CaseQuery>,
+) -> Result<Sse<JsonEventStream>, ApiError> {
+    let market = parse_case_market(&market)?;
+    Ok(json_sse(move || {
+        let query = query.clone();
+        async move { load_case_review_response(market, &query).await }
+    }))
+}
+
+async fn get_case_detail(
+    Path((market, setup_id)): Path<(String, String)>,
+) -> Result<Json<CaseDetail>, ApiError> {
+    let market = parse_case_market(&market)?;
+    Ok(Json(load_case_detail_response(market, &setup_id).await?))
+}
+
+async fn stream_case_detail(
+    Path((market, setup_id)): Path<(String, String)>,
+) -> Result<Sse<JsonEventStream>, ApiError> {
+    let market = parse_case_market(&market)?;
+    Ok(json_sse(move || {
+        let setup_id = setup_id.clone();
+        async move { load_case_detail_response(market, &setup_id).await }
+    }))
+}
+
+async fn load_case_list_response(
+    market: CaseMarket,
+    query: &CaseQuery,
+) -> Result<CaseListResponse, ApiError> {
+    let snapshot = load_snapshot(market)
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to load cases snapshot: {error}")))?;
+    #[cfg(feature = "persistence")]
+    let mut response = build_case_list(&snapshot);
+    #[cfg(not(feature = "persistence"))]
+    let mut response = build_case_list(&snapshot);
+
+    #[cfg(feature = "persistence")]
+    {
+        let store = open_store().await?;
+        enrich_case_summaries(&store, &mut response.cases)
+            .await
+            .map_err(|error| ApiError::internal(format!("failed to enrich cases: {error}")))?;
+    }
+
+    filter_case_list_by_owner(&mut response, query.owner.as_deref());
+    filter_case_list_by_reviewer(&mut response, query.reviewer.as_deref());
+    filter_case_list_by_actor(&mut response, query.actor.as_deref());
+
+    Ok(response)
+}
+
+async fn load_case_detail_response(
+    market: CaseMarket,
+    setup_id: &str,
+) -> Result<CaseDetail, ApiError> {
+    let snapshot = load_snapshot(market).await.map_err(|error| {
+        ApiError::internal(format!("failed to load case detail snapshot: {error}"))
+    })?;
+    #[cfg(feature = "persistence")]
+    let mut detail = build_case_detail(&snapshot, setup_id)
+        .ok_or_else(|| ApiError::not_found(format!("case `{setup_id}` not found")))?;
+    #[cfg(not(feature = "persistence"))]
+    let detail = build_case_detail(&snapshot, setup_id)
+        .ok_or_else(|| ApiError::not_found(format!("case `{setup_id}` not found")))?;
+
+    #[cfg(feature = "persistence")]
+    {
+        let store = open_store().await?;
+        enrich_case_detail(&store, &mut detail)
+            .await
+            .map_err(|error| {
+                ApiError::internal(format!("failed to enrich case detail: {error}"))
+            })?;
+    }
+
+    Ok(detail)
+}
+
+async fn load_case_review_response(
+    market: CaseMarket,
+    query: &CaseQuery,
+) -> Result<CaseReviewResponse, ApiError> {
+    let response = load_case_list_response(market, query).await?;
+    #[cfg(feature = "persistence")]
+    let mut review = build_case_review(&response);
+    #[cfg(not(feature = "persistence"))]
+    let review = build_case_review(&response);
+
+    #[cfg(feature = "persistence")]
+    {
+        let store = open_store().await?;
+        enrich_case_review(&store, market, &mut review)
+            .await
+            .map_err(|error| {
+                ApiError::internal(format!("failed to enrich case review: {error}"))
+            })?;
+    }
+
+    Ok(review)
+}
+
+fn json_sse<T, F, Fut>(loader: F) -> Sse<JsonEventStream>
+where
+    T: Serialize + Send + 'static,
+    F: Fn() -> Fut + Clone + Send + 'static,
+    Fut: std::future::Future<Output = Result<T, ApiError>> + Send + 'static,
+{
+    let stream = stream::unfold(true, move |first| {
+        let loader = loader.clone();
+        async move {
+            if !first {
+                tokio::time::sleep(tokio::time::Duration::from_secs(CASE_STREAM_INTERVAL_SECS))
+                    .await;
+            }
+
+            let event = match loader().await {
+                Ok(payload) => sse_event_from_payload(&payload),
+                Err(error) => sse_event_from_error(&error.to_string()),
+            };
+
+            Some((Ok(event), false))
+        }
+    });
+
+    let stream: JsonEventStream = Box::pin(stream);
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::default()
+            .interval(tokio::time::Duration::from_secs(15))
+            .text("keep-alive"),
+    )
+}
+
+fn sse_event_from_payload<T: Serialize>(payload: &T) -> SseEvent {
+    match SseEvent::default().json_data(payload) {
+        Ok(event) => event,
+        Err(error) => sse_event_from_error(&format!("failed to encode SSE payload: {error}")),
+    }
+}
+
+fn sse_event_from_error(message: &str) -> SseEvent {
+    let sanitized = message.replace('\n', " ");
+    SseEvent::default().event("stream_error").data(sanitized)
+}
+
+#[cfg(feature = "persistence")]
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+#[cfg(feature = "persistence")]
+fn normalize_assignment_update(value: Option<Option<String>>) -> Option<Option<String>> {
+    value.map(|next| next.and_then(|value| normalize_optional_string(Some(value))))
+}
+
+#[cfg(feature = "persistence")]
+fn assignment_note(
+    owner: Option<&Option<String>>,
+    reviewer: Option<&Option<String>>,
+) -> Option<String> {
+    let mut parts = Vec::new();
+
+    match owner {
+        Some(Some(owner)) => parts.push(format!("assigned owner -> {owner}")),
+        Some(None) => parts.push("owner cleared".to_string()),
+        None => {}
+    }
+
+    match reviewer {
+        Some(Some(reviewer)) => parts.push(format!("assigned reviewer -> {reviewer}")),
+        Some(None) => parts.push("reviewer cleared".to_string()),
+        None => {}
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
+}
+
+#[cfg(feature = "persistence")]
+async fn post_case_assign(
+    Path((market, setup_id)): Path<(String, String)>,
+    Json(body): Json<CaseAssignBody>,
+) -> Result<Json<CaseWorkflowState>, ApiError> {
+    let market = parse_case_market(&market)?;
+    let store = open_store().await?;
+    let setup = store
+        .tactical_setup_by_id(&setup_id)
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to load tactical setup: {error}")))?
+        .ok_or_else(|| ApiError::not_found(format!("case `{setup_id}` not found")))?;
+    let workflow_id = setup
+        .workflow_id
+        .clone()
+        .unwrap_or_else(|| format!("setup:{}", setup.setup_id));
+    let current = store
+        .action_workflow_by_id(&workflow_id)
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to load workflow: {error}")))?;
+
+    let timestamp = OffsetDateTime::now_utc();
+    let actor = normalize_optional_string(body.actor.clone()).or(Some("frontend".into()));
+    let requested_owner = normalize_assignment_update(body.owner.clone());
+    let requested_reviewer = normalize_assignment_update(body.reviewer.clone());
+    let owner = match requested_owner.as_ref() {
+        Some(next) => next.clone(),
+        None => current.as_ref().and_then(|record| record.owner.clone()),
+    };
+    let reviewer = match requested_reviewer.as_ref() {
+        Some(next) => next.clone(),
+        None => current.as_ref().and_then(|record| record.reviewer.clone()),
+    };
+    let note = body
+        .note
+        .clone()
+        .or_else(|| assignment_note(requested_owner.as_ref(), requested_reviewer.as_ref()));
+    let stage = current
+        .as_ref()
+        .map(|record| record.current_stage)
+        .unwrap_or(ActionStage::Suggest);
+    let title = current
+        .as_ref()
+        .map(|record| record.title.clone())
+        .unwrap_or_else(|| setup.title.clone());
+    let payload = current
+        .as_ref()
+        .map(|record| record.payload.clone())
+        .unwrap_or_else(|| workflow_record_payload(&setup));
+
+    let record = crate::persistence::action_workflow::ActionWorkflowRecord {
+        workflow_id: workflow_id.clone(),
+        title: title.clone(),
+        payload: payload.clone(),
+        current_stage: stage,
+        recorded_at: timestamp,
+        actor: actor.clone(),
+        owner: owner.clone(),
+        reviewer: reviewer.clone(),
+        note: note.clone(),
+    };
+    let event = crate::persistence::action_workflow::ActionWorkflowEventRecord {
+        event_id: crate::persistence::action_workflow::event_id_for(&workflow_id, stage, timestamp),
+        workflow_id: workflow_id.clone(),
+        title,
+        payload,
+        from_stage: current.as_ref().map(|item| item.current_stage),
+        to_stage: stage,
+        recorded_at: timestamp,
+        actor: actor.clone(),
+        owner: owner.clone(),
+        reviewer: reviewer.clone(),
+        note: note.clone(),
+    };
+
+    store
+        .write_action_workflow_event(&event)
+        .await
+        .map_err(|error| {
+            ApiError::internal(format!("failed to write assignment event: {error}"))
+        })?;
+    store
+        .write_action_workflow(&record)
+        .await
+        .map_err(|error| {
+            ApiError::internal(format!("failed to write assignment state: {error}"))
+        })?;
+    persist_reasoning_assessment_snapshot(&store, market, &setup_id, timestamp, "workflow_update")
+        .await;
+
+    Ok(Json(CaseWorkflowState {
+        workflow_id,
+        stage: stage.as_str().to_string(),
+        timestamp,
+        actor,
+        owner,
+        reviewer,
+        note,
+    }))
+}
+
+#[cfg(not(feature = "persistence"))]
+async fn post_case_assign() -> Result<Json<serde_json::Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "case assignment requires building with `--features persistence`",
+    ))
+}
+
+#[cfg(feature = "persistence")]
+async fn post_case_transition(
+    Path((market, setup_id)): Path<(String, String)>,
+    Json(body): Json<CaseTransitionBody>,
+) -> Result<Json<CaseWorkflowState>, ApiError> {
+    let target_stage = parse_action_stage(&body.target_stage)?;
+    let market = parse_case_market(&market)?;
+    let store = open_store().await?;
+    let setup = store
+        .tactical_setup_by_id(&setup_id)
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to load tactical setup: {error}")))?
+        .ok_or_else(|| ApiError::not_found(format!("case `{setup_id}` not found")))?;
+    let workflow_id = setup
+        .workflow_id
+        .clone()
+        .unwrap_or_else(|| format!("setup:{}", setup.setup_id));
+    let current = store
+        .action_workflow_by_id(&workflow_id)
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to load workflow: {error}")))?;
+    validate_transition(
+        current.as_ref().map(|record| record.current_stage),
+        target_stage,
+    )?;
+
+    let timestamp = OffsetDateTime::now_utc();
+    let actor = normalize_optional_string(body.actor.clone()).or(Some("frontend".into()));
+    let note = body.note.clone();
+    let title = current
+        .as_ref()
+        .map(|record| record.title.clone())
+        .unwrap_or_else(|| setup.title.clone());
+    let owner = current.as_ref().and_then(|record| record.owner.clone());
+    let reviewer = current.as_ref().and_then(|record| record.reviewer.clone());
+    let payload = current
+        .as_ref()
+        .map(|record| record.payload.clone())
+        .unwrap_or_else(|| workflow_record_payload(&setup));
+
+    let record = crate::persistence::action_workflow::ActionWorkflowRecord {
+        workflow_id: workflow_id.clone(),
+        title: title.clone(),
+        payload: payload.clone(),
+        current_stage: target_stage,
+        recorded_at: timestamp,
+        actor: actor.clone(),
+        owner: owner.clone(),
+        reviewer: reviewer.clone(),
+        note: note.clone(),
+    };
+    let event = crate::persistence::action_workflow::ActionWorkflowEventRecord {
+        event_id: crate::persistence::action_workflow::event_id_for(
+            &workflow_id,
+            target_stage,
+            timestamp,
+        ),
+        workflow_id: workflow_id.clone(),
+        title,
+        payload,
+        from_stage: current.as_ref().map(|item| item.current_stage),
+        to_stage: target_stage,
+        recorded_at: timestamp,
+        actor: actor.clone(),
+        owner: owner.clone(),
+        reviewer: reviewer.clone(),
+        note: note.clone(),
+    };
+
+    store
+        .write_action_workflow_event(&event)
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to write workflow event: {error}")))?;
+    store
+        .write_action_workflow(&record)
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to write workflow state: {error}")))?;
+    persist_reasoning_assessment_snapshot(&store, market, &setup_id, timestamp, "workflow_update")
+        .await;
+
+    Ok(Json(CaseWorkflowState {
+        workflow_id,
+        stage: target_stage.as_str().to_string(),
+        timestamp,
+        actor,
+        owner,
+        reviewer,
+        note,
+    }))
+}
+
+#[cfg(feature = "persistence")]
+async fn persist_reasoning_assessment_snapshot(
+    store: &EdenStore,
+    market: CaseMarket,
+    setup_id: &str,
+    recorded_at: OffsetDateTime,
+    source: &str,
+) {
+    let Ok(snapshot) = load_snapshot(market).await else {
+        eprintln!(
+            "Warning: failed to reload snapshot for reasoning assessment {}",
+            setup_id
+        );
+        return;
+    };
+    let Some(mut detail) = build_case_detail(&snapshot, setup_id) else {
+        eprintln!(
+            "Warning: failed to rebuild case detail for reasoning assessment {}",
+            setup_id
+        );
+        return;
+    };
+    if let Err(error) = enrich_case_detail(store, &mut detail).await {
+        eprintln!(
+            "Warning: failed to enrich case detail for reasoning assessment {}: {}",
+            setup_id, error
+        );
+        return;
+    }
+
+    let record =
+        CaseReasoningAssessmentRecord::from_case_summary(&detail.summary, recorded_at, source);
+    if let Err(error) = store.write_case_reasoning_assessment(&record).await {
+        eprintln!(
+            "Warning: failed to write reasoning assessment for {}: {}",
+            setup_id, error
+        );
+    }
+}
+
+#[cfg(not(feature = "persistence"))]
+async fn post_case_transition() -> Result<Json<serde_json::Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "case transitions require building with `--features persistence`",
+    ))
+}
+
+#[cfg(feature = "persistence")]
+async fn get_us_lineage(
+    State(state): State<ApiState>,
+    Query(query): Query<UsLineageQuery>,
+) -> Result<Json<UsLineageResponse>, ApiError> {
+    let limit = bounded(query.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?;
+    let top = bounded(query.top, DEFAULT_TOP, MAX_TOP, "top")?;
+    let resolution_lag = query.resolution_lag.unwrap_or(DEFAULT_US_RESOLUTION_LAG);
+    if resolution_lag == 0 {
+        return Err(ApiError::bad_request(
+            "resolution_lag must be greater than 0",
+        ));
+    }
+    let filters = us_filters_from_parts(query.template, query.bucket, query.session, query.regime);
+    let sort_by = parse_us_lineage_sort_key(query.sort.as_deref())?;
+
+    let stats = state
+        .store
+        .recent_us_lineage_stats(limit, resolution_lag)
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to load US lineage stats: {error}")))?;
+    let stats = filter_us_lineage_stats(&stats, &filters, top, sort_by);
+
+    Ok(Json(UsLineageResponse {
+        window_size: limit,
+        resolution_lag,
+        filters,
+        top,
+        sort_by,
+        stats,
+    }))
+}
+
+#[cfg(not(feature = "persistence"))]
+async fn get_us_lineage() -> Result<Json<serde_json::Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "US lineage endpoints require building with `--features persistence`",
+    ))
+}
+
+#[cfg(feature = "persistence")]
+async fn get_us_lineage_history(
+    State(state): State<ApiState>,
+    Query(query): Query<UsLineageHistoryQuery>,
+) -> Result<Json<UsLineageHistoryResponse>, ApiError> {
+    let snapshots = bounded(query.snapshots, DEFAULT_LIMIT, MAX_LIMIT, "snapshots")?;
+    let top = bounded(query.top, DEFAULT_TOP, MAX_TOP, "top")?;
+    let latest_only = query.latest_only.unwrap_or(false);
+    let filters = us_filters_from_parts(query.template, query.bucket, query.session, query.regime);
+    let sort_by = parse_us_lineage_sort_key(query.sort.as_deref())?;
+
+    let rows = state
+        .store
+        .recent_ranked_us_lineage_metric_rows(snapshots, top)
+        .await
+        .map_err(|error| {
+            ApiError::internal(format!("failed to load US lineage history rows: {error}"))
+        })?;
+    let rows = select_us_lineage_rows(
+        &rows,
+        &filters,
+        snapshots.saturating_mul(top.max(1)),
+        latest_only,
+        sort_by,
+    );
+    let records = us_snapshot_records_from_rows(&rows, &filters, latest_only);
+
+    Ok(Json(UsLineageHistoryResponse {
+        requested_snapshots: snapshots,
+        returned_snapshots: records.len(),
+        filters,
+        top,
+        latest_only,
+        sort_by,
+        snapshots: records,
+    }))
+}
+
+#[cfg(not(feature = "persistence"))]
+async fn get_us_lineage_history() -> Result<Json<serde_json::Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "US lineage history endpoints require building with `--features persistence`",
+    ))
+}
+
+#[cfg(feature = "persistence")]
+async fn get_us_lineage_rows(
+    State(state): State<ApiState>,
+    Query(query): Query<UsLineageRowsQuery>,
+) -> Result<Json<UsLineageRowsResponse>, ApiError> {
+    let rows_limit = bounded(query.rows, DEFAULT_LIMIT, MAX_LIMIT, "rows")?;
+    let top = bounded(query.top, DEFAULT_TOP, MAX_TOP, "top")?;
+    let latest_only = query.latest_only.unwrap_or(false);
+    let filters = us_filters_from_parts(query.template, query.bucket, query.session, query.regime);
+    let sort_by = parse_us_lineage_sort_key(query.sort.as_deref())?;
+
+    let ranked_rows = state
+        .store
+        .recent_ranked_us_lineage_metric_rows(rows_limit.max(1), top)
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to load US lineage rows: {error}")))?;
+    let rows = select_us_lineage_rows(&ranked_rows, &filters, rows_limit, latest_only, sort_by);
+
+    Ok(Json(UsLineageRowsResponse {
+        requested_rows: rows_limit,
+        returned_rows: rows.len(),
+        filters,
+        top,
+        latest_only,
+        sort_by,
+        rows,
+    }))
+}
+
+#[cfg(not(feature = "persistence"))]
+async fn get_us_lineage_rows() -> Result<Json<serde_json::Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "US lineage row endpoints require building with `--features persistence`",
+    ))
+}
+
+#[cfg(feature = "persistence")]
+async fn get_us_causal_timeline(
+    State(state): State<ApiState>,
+    Path(symbol): Path<String>,
+    Query(query): Query<CausalQuery>,
+) -> Result<Json<UsCausalTimelineResponse>, ApiError> {
+    let limit = bounded(query.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?;
+    let timeline = state
+        .store
+        .recent_us_causal_timeline(&symbol, limit)
+        .await
+        .map_err(|error| {
+            ApiError::internal(format!("failed to load US causal timeline: {error}"))
+        })?;
+    let timeline = timeline.ok_or_else(|| {
+        ApiError::not_found(format!("no US causal timeline found for `{symbol}`"))
+    })?;
+
+    Ok(Json(UsCausalTimelineResponse {
+        window_size: limit,
+        timeline,
+    }))
+}
+
+#[cfg(not(feature = "persistence"))]
+async fn get_us_causal_timeline() -> Result<Json<serde_json::Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "US causal timeline endpoints require building with `--features persistence`",
+    ))
+}
+
+#[cfg(feature = "persistence")]
+async fn get_us_causal_flips(
+    State(state): State<ApiState>,
+    Query(query): Query<CausalQuery>,
+) -> Result<Json<UsCausalFlipsResponse>, ApiError> {
+    let limit = bounded(query.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?;
+    let records = state
+        .store
+        .recent_us_tick_window(limit)
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to load US causal flips: {error}")))?;
+    let mut history = UsTickHistory::new(records.len().max(1));
+    for record in records {
+        history.push(record);
+    }
+    let timelines = compute_us_causal_timelines(&history);
+
+    let mut flips = timelines
+        .values()
+        .flat_map(|timeline| {
+            timeline
+                .flips
+                .iter()
+                .cloned()
+                .map(move |event| FlatUsCausalFlip {
+                    symbol: timeline.symbol.0.clone(),
+                    event,
+                })
+        })
+        .collect::<Vec<_>>();
+    flips.sort_by(|a, b| b.event.tick.cmp(&a.event.tick));
+
+    Ok(Json(UsCausalFlipsResponse {
+        window_size: limit,
+        total: flips.len(),
+        flips,
+    }))
+}
+
+#[cfg(not(feature = "persistence"))]
+async fn get_us_causal_flips() -> Result<Json<serde_json::Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "US causal flip endpoints require building with `--features persistence`",
+    ))
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -825,6 +1767,159 @@ fn random_token_id() -> String {
 }
 
 #[cfg(feature = "persistence")]
+fn us_filters_from_parts(
+    template: Option<String>,
+    bucket: Option<String>,
+    session: Option<String>,
+    regime: Option<String>,
+) -> UsLineageFilters {
+    UsLineageFilters {
+        template,
+        bucket,
+        session,
+        market_regime: regime,
+    }
+}
+
+#[cfg(feature = "persistence")]
+fn parse_us_lineage_sort_key(raw: Option<&str>) -> Result<UsLineageSortKey, ApiError> {
+    match raw.unwrap_or("return") {
+        "return" | "mean_return" | "ret" => Ok(UsLineageSortKey::MeanReturn),
+        "hit" | "hit_rate" => Ok(UsLineageSortKey::HitRate),
+        value => Err(ApiError::bad_request(format!(
+            "invalid US lineage sort value `{value}`"
+        ))),
+    }
+}
+
+#[cfg(feature = "persistence")]
+fn filter_us_lineage_stats(
+    stats: &UsLineageStats,
+    filters: &UsLineageFilters,
+    top: usize,
+    sort_by: UsLineageSortKey,
+) -> UsLineageStats {
+    let mut by_template = if filters.session.is_some() || filters.market_regime.is_some() {
+        Vec::new()
+    } else if us_bucket_matches(filters.bucket.as_deref(), "by_template") {
+        stats
+            .by_template
+            .iter()
+            .filter(|item| us_matches_text(filters.template.as_deref(), &item.template))
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    let mut by_context = if us_bucket_matches(filters.bucket.as_deref(), "by_context") {
+        stats
+            .by_context
+            .iter()
+            .filter(|item| {
+                us_matches_text(filters.template.as_deref(), &item.template)
+                    && us_matches_text(filters.session.as_deref(), &item.session)
+                    && us_matches_text(filters.market_regime.as_deref(), &item.market_regime)
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    sort_us_lineage_contexts(&mut by_template, sort_by);
+    sort_us_lineage_contexts(&mut by_context, sort_by);
+    by_template.truncate(top);
+    by_context.truncate(top);
+
+    UsLineageStats {
+        by_template,
+        by_context,
+    }
+}
+
+#[cfg(feature = "persistence")]
+fn sort_us_lineage_contexts(
+    items: &mut [crate::us::temporal::lineage::UsLineageContextStats],
+    sort_by: UsLineageSortKey,
+) {
+    items.sort_by(|a, b| {
+        us_lineage_metric_for_stat(b, sort_by)
+            .cmp(&us_lineage_metric_for_stat(a, sort_by))
+            .then_with(|| a.template.cmp(&b.template))
+            .then_with(|| a.session.cmp(&b.session))
+    });
+}
+
+#[cfg(feature = "persistence")]
+fn us_lineage_metric_for_stat(
+    item: &crate::us::temporal::lineage::UsLineageContextStats,
+    sort_by: UsLineageSortKey,
+) -> Decimal {
+    match sort_by {
+        UsLineageSortKey::MeanReturn => item.mean_return,
+        UsLineageSortKey::HitRate => item.hit_rate,
+    }
+}
+
+#[cfg(feature = "persistence")]
+fn select_us_lineage_rows(
+    rows: &[UsLineageMetricRowRecord],
+    filters: &UsLineageFilters,
+    limit: usize,
+    latest_only: bool,
+    sort_by: UsLineageSortKey,
+) -> Vec<UsLineageMetricRowRecord> {
+    let mut filtered_rows = rows
+        .iter()
+        .filter(|row| us_row_matches_filters(row, filters))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    filtered_rows.sort_by(|a, b| {
+        us_lineage_row_metric(b, sort_by)
+            .cmp(&us_lineage_row_metric(a, sort_by))
+            .then_with(|| a.rank.cmp(&b.rank))
+            .then_with(|| a.template.cmp(&b.template))
+    });
+
+    if latest_only {
+        if let Some(snapshot_id) = filtered_rows.first().map(|row| row.snapshot_id.clone()) {
+            filtered_rows.retain(|row| row.snapshot_id == snapshot_id);
+        }
+    }
+
+    filtered_rows.truncate(limit);
+    filtered_rows
+}
+
+#[cfg(feature = "persistence")]
+fn us_lineage_row_metric(row: &UsLineageMetricRowRecord, sort_by: UsLineageSortKey) -> Decimal {
+    match sort_by {
+        UsLineageSortKey::MeanReturn => row.mean_return.parse().unwrap_or(Decimal::ZERO),
+        UsLineageSortKey::HitRate => row.hit_rate.parse().unwrap_or(Decimal::ZERO),
+    }
+}
+
+#[cfg(feature = "persistence")]
+fn us_bucket_matches(filter: Option<&str>, bucket: &str) -> bool {
+    match filter {
+        None => true,
+        Some(filter) => filter.eq_ignore_ascii_case(bucket),
+    }
+}
+
+#[cfg(feature = "persistence")]
+fn us_matches_text(filter: Option<&str>, value: &str) -> bool {
+    match filter {
+        None => true,
+        Some(filter) => value
+            .to_ascii_lowercase()
+            .contains(&filter.to_ascii_lowercase()),
+    }
+}
+
+#[cfg(feature = "persistence")]
 fn select_lineage_rows(
     rows: &[LineageMetricRowRecord],
     filters: &LineageFilters,
@@ -884,6 +1979,53 @@ fn matches_lineage_alignment(value: Decimal, alignment: LineageAlignmentFilter) 
     }
 }
 
+fn parse_case_market(raw: &str) -> Result<CaseMarket, ApiError> {
+    CaseMarket::parse(raw)
+        .ok_or_else(|| ApiError::bad_request(format!("unsupported market `{raw}`")))
+}
+
+#[cfg(feature = "persistence")]
+fn parse_action_stage(raw: &str) -> Result<ActionStage, ApiError> {
+    match raw {
+        "suggest" => Ok(ActionStage::Suggest),
+        "confirm" => Ok(ActionStage::Confirm),
+        "execute" => Ok(ActionStage::Execute),
+        "monitor" => Ok(ActionStage::Monitor),
+        "review" => Ok(ActionStage::Review),
+        _ => Err(ApiError::bad_request(format!(
+            "unsupported action stage `{raw}`"
+        ))),
+    }
+}
+
+#[cfg(feature = "persistence")]
+fn validate_transition(current: Option<ActionStage>, target: ActionStage) -> Result<(), ApiError> {
+    match current {
+        None if matches!(target, ActionStage::Suggest | ActionStage::Confirm | ActionStage::Review) => Ok(()),
+        None => Err(ApiError::bad_request(
+            "workflow does not exist yet; first transition must be `suggest`, `confirm`, or `review`",
+        )),
+        Some(stage) if stage == target => Err(ApiError::bad_request(
+            "workflow is already in the requested stage",
+        )),
+        Some(_) if target == ActionStage::Review => Ok(()),
+        Some(stage) if stage.next() == Some(target) => Ok(()),
+        Some(stage) => Err(ApiError::bad_request(format!(
+            "invalid transition from `{}` to `{}`",
+            stage.as_str(),
+            target.as_str()
+        ))),
+    }
+}
+
+#[cfg(feature = "persistence")]
+async fn open_store() -> Result<EdenStore, ApiError> {
+    let path = env::var("EDEN_DB_PATH").unwrap_or_else(|_| "data/eden.db".to_string());
+    EdenStore::open(&path)
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to open EdenStore: {error}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -907,5 +2049,17 @@ mod tests {
         let cipher = ApiKeyCipher::from_secret("test-master-secret").expect("cipher");
         let error = cipher.validate("not-eden").expect_err("error");
         assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn readonly_scope_blocks_mutations() {
+        assert!(scope_allows_method("frontend:readonly", &Method::GET));
+        assert!(!scope_allows_method("frontend:readonly", &Method::POST));
+    }
+
+    #[test]
+    fn write_scope_allows_mutations() {
+        assert!(scope_allows_method("frontend:write", &Method::POST));
+        assert!(scope_allows_method("frontend:write", &Method::GET));
     }
 }

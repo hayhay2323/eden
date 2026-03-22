@@ -3,6 +3,17 @@ use std::hash::Hash;
 
 use rust_decimal::Decimal;
 
+/// Clamp a decimal to the closed unit interval [0, 1].
+pub fn clamp_unit_interval(value: Decimal) -> Decimal {
+    if value < Decimal::ZERO {
+        Decimal::ZERO
+    } else if value > Decimal::ONE {
+        Decimal::ONE
+    } else {
+        value
+    }
+}
+
 /// (A - B) / (A + B). Returns 0 when denominator is 0. Arithmetic identity, not a threshold.
 pub fn normalized_ratio(a: Decimal, b: Decimal) -> Decimal {
     let sum = a + b;
@@ -75,6 +86,13 @@ mod tests {
     #[test]
     fn normalized_ratio_basic() {
         assert_eq!(normalized_ratio(dec!(3), dec!(1)), dec!(0.5));
+    }
+
+    #[test]
+    fn clamp_unit_interval_bounds_values() {
+        assert_eq!(clamp_unit_interval(dec!(-0.2)), Decimal::ZERO);
+        assert_eq!(clamp_unit_interval(dec!(0.4)), dec!(0.4));
+        assert_eq!(clamp_unit_interval(dec!(1.4)), Decimal::ONE);
     }
 
     #[test]

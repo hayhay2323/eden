@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use time::UtcOffset;
+use time::{OffsetDateTime, UtcOffset};
 
 use super::buffer::TickHistory;
 use super::record::SymbolSignals;
@@ -61,6 +61,31 @@ pub struct ContextualLineageOutcome {
     pub mean_convergence_score: Decimal,
     pub mean_external_delta: Decimal,
     pub external_follow_through_rate: Decimal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaseRealizedOutcome {
+    pub setup_id: String,
+    pub workflow_id: Option<String>,
+    pub symbol: Option<String>,
+    pub entry_tick: u64,
+    #[serde(with = "time::serde::rfc3339")]
+    pub entry_timestamp: OffsetDateTime,
+    pub resolved_tick: u64,
+    #[serde(with = "time::serde::rfc3339")]
+    pub resolved_at: OffsetDateTime,
+    pub family: String,
+    pub session: String,
+    pub market_regime: String,
+    pub direction: i8,
+    pub return_pct: Decimal,
+    pub net_return: Decimal,
+    pub max_favorable_excursion: Decimal,
+    pub max_adverse_excursion: Decimal,
+    pub followed_through: bool,
+    pub invalidated: bool,
+    pub structure_retained: bool,
+    pub convergence_score: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -356,6 +381,84 @@ pub fn compute_lineage_stats(history: &TickHistory, limit: usize) -> LineageStat
     }
 }
 
+pub fn compute_case_realized_outcomes(
+    history: &TickHistory,
+    limit: usize,
+    resolution_lag: u64,
+) -> Vec<CaseRealizedOutcome> {
+    let window = history.latest_n(limit);
+    if window.is_empty() {
+        return Vec::new();
+    }
+
+    let current_tick = window
+        .last()
+        .map(|record| record.tick_number)
+        .unwrap_or_default();
+    let window_by_tick = window
+        .iter()
+        .copied()
+        .map(|record| (record.tick_number, record))
+        .collect::<HashMap<_, _>>();
+    let mut seen_setups = HashMap::<String, SetupOutcomeContext>::new();
+
+    for record in &window {
+        for setup in &record.tactical_setups {
+            seen_setups
+                .entry(setup.setup_id.clone())
+                .or_insert_with(|| setup_context(record, setup));
+        }
+    }
+
+    let mut outcomes = seen_setups
+        .into_values()
+        .filter_map(|context| {
+            let resolved_tick = context.entry_tick + resolution_lag;
+            if current_tick < resolved_tick {
+                return None;
+            }
+
+            let future_records = window
+                .iter()
+                .copied()
+                .filter(|record| {
+                    record.tick_number >= context.entry_tick && record.tick_number <= resolved_tick
+                })
+                .collect::<Vec<_>>();
+            let outcome = evaluate_setup_outcome(&context, &future_records, &window_by_tick)?;
+            let resolved_at = window_by_tick
+                .get(&resolved_tick)
+                .copied()
+                .map(|record| record.timestamp)?;
+
+            Some(CaseRealizedOutcome {
+                setup_id: context.setup_id,
+                workflow_id: context.workflow_id,
+                symbol: context.symbol.map(|symbol| symbol.0),
+                entry_tick: context.entry_tick,
+                entry_timestamp: context.entry_timestamp,
+                resolved_tick,
+                resolved_at,
+                family: context.family,
+                session: context.session,
+                market_regime: context.market_regime,
+                direction: context.direction,
+                return_pct: outcome.return_pct,
+                net_return: outcome.net_return,
+                max_favorable_excursion: outcome.max_favorable_excursion,
+                max_adverse_excursion: outcome.max_adverse_excursion,
+                followed_through: outcome.followed_through,
+                invalidated: outcome.invalidated,
+                structure_retained: outcome.structure_retained,
+                convergence_score: outcome.convergence_score,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    outcomes.sort_by(|left, right| right.resolved_tick.cmp(&left.resolved_tick));
+    outcomes
+}
+
 fn setup_context(
     record: &crate::temporal::record::TickRecord,
     setup: &crate::ontology::TacticalSetup,
@@ -387,9 +490,12 @@ fn setup_context(
         .unwrap_or_else(|| "unknown".into());
 
     SetupOutcomeContext {
+        setup_id: setup.setup_id.clone(),
+        workflow_id: setup.workflow_id.clone(),
         symbol,
         hypothesis_id: setup.hypothesis_id.clone(),
         entry_tick: record.tick_number,
+        entry_timestamp: record.timestamp,
         entry_price,
         entry_composite,
         direction: setup_direction(setup),
@@ -483,9 +589,12 @@ struct OutcomeAccumulator {
 }
 
 struct SetupOutcomeContext {
+    setup_id: String,
+    workflow_id: Option<String>,
     symbol: Option<Symbol>,
     hypothesis_id: String,
     entry_tick: u64,
+    entry_timestamp: OffsetDateTime,
     entry_price: Option<Decimal>,
     entry_composite: Option<Decimal>,
     direction: i8,

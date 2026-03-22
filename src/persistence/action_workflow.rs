@@ -15,6 +15,8 @@ pub struct ActionWorkflowRecord {
     #[serde(with = "rfc3339")]
     pub recorded_at: OffsetDateTime,
     pub actor: Option<String>,
+    pub owner: Option<String>,
+    pub reviewer: Option<String>,
     pub note: Option<String>,
 }
 
@@ -27,6 +29,8 @@ impl ActionWorkflowRecord {
             current_stage: state.stage(),
             recorded_at: state.timestamp(),
             actor: state.actor().map(str::to_owned),
+            owner: None,
+            reviewer: None,
             note: state.note().map(str::to_owned),
         }
     }
@@ -48,6 +52,8 @@ pub struct ActionWorkflowEventRecord {
     #[serde(with = "rfc3339")]
     pub recorded_at: OffsetDateTime,
     pub actor: Option<String>,
+    pub owner: Option<String>,
+    pub reviewer: Option<String>,
     pub note: Option<String>,
 }
 
@@ -62,6 +68,8 @@ impl ActionWorkflowEventRecord {
             to_stage: snapshot.stage,
             recorded_at: snapshot.timestamp,
             actor: snapshot.actor.clone(),
+            owner: None,
+            reviewer: None,
             note: snapshot.note.clone(),
         }
     }
@@ -79,6 +87,8 @@ impl ActionWorkflowEventRecord {
             to_stage: to.stage(),
             recorded_at: to.timestamp(),
             actor: to.actor().map(str::to_owned),
+            owner: None,
+            reviewer: None,
             note: to.note().map(str::to_owned),
         }
     }

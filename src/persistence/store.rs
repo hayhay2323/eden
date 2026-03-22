@@ -4,6 +4,8 @@ use surrealdb::Surreal;
 use crate::ontology::links::CrossStockPresence;
 use crate::ontology::{ReasoningScope, Symbol};
 use crate::persistence::action_workflow::{ActionWorkflowEventRecord, ActionWorkflowRecord};
+use crate::persistence::case_realized_outcome::CaseRealizedOutcomeRecord;
+use crate::persistence::case_reasoning_assessment::CaseReasoningAssessmentRecord;
 use crate::persistence::hypothesis_track::HypothesisTrackRecord;
 use crate::persistence::lineage_metric_row::LineageMetricRowRecord;
 use crate::persistence::lineage_snapshot::LineageSnapshotRecord;
@@ -12,6 +14,16 @@ use crate::temporal::buffer::TickHistory;
 use crate::temporal::causality::{compute_causal_timelines, CausalTimeline};
 use crate::temporal::lineage::{compute_lineage_stats, LineageStats};
 use crate::temporal::record::TickRecord;
+use crate::us::temporal::buffer::UsTickHistory;
+use crate::us::temporal::causality::{
+    compute_causal_timelines as compute_us_causal_timelines, UsCausalTimeline,
+};
+use crate::us::temporal::lineage::{compute_us_lineage_stats, UsLineageStats};
+use crate::us::temporal::record::UsTickRecord;
+use crate::{
+    persistence::us_lineage_metric_row::UsLineageMetricRowRecord,
+    persistence::us_lineage_snapshot::UsLineageSnapshotRecord,
+};
 
 use super::schema;
 
@@ -39,6 +51,24 @@ impl EdenStore {
         let _: Option<serde_json::Value> = self
             .db
             .upsert(("tick_record", &id))
+            .content(record.clone())
+            .await?;
+        Ok(())
+    }
+
+    /// Persist a US tick record.
+    pub async fn write_us_tick(
+        &self,
+        record: &UsTickRecord,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let id = format!(
+            "us_tick_{}_{}",
+            record.timestamp.unix_timestamp(),
+            record.tick_number
+        );
+        let _: Option<serde_json::Value> = self
+            .db
+            .upsert(("us_tick_record", &id))
             .content(record.clone())
             .await?;
         Ok(())
@@ -83,6 +113,107 @@ impl EdenStore {
         Ok(())
     }
 
+    /// Persist one reasoning assessment snapshot for a case.
+    pub async fn write_case_reasoning_assessment(
+        &self,
+        record: &CaseReasoningAssessmentRecord,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let _: Option<serde_json::Value> = self
+            .db
+            .upsert(("case_reasoning_assessment", record.record_id()))
+            .content(record.clone())
+            .await?;
+        Ok(())
+    }
+
+    /// Persist many reasoning assessment snapshots.
+    pub async fn write_case_reasoning_assessments(
+        &self,
+        records: &[CaseReasoningAssessmentRecord],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for record in records {
+            self.write_case_reasoning_assessment(record).await?;
+        }
+        Ok(())
+    }
+
+    /// Persist latest resolved per-case outcomes.
+    pub async fn write_case_realized_outcomes(
+        &self,
+        records: &[CaseRealizedOutcomeRecord],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for record in records {
+            let _: Option<serde_json::Value> = self
+                .db
+                .upsert(("case_realized_outcome", record.record_id()))
+                .content(record.clone())
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Query the latest tactical setup projection by setup id.
+    pub async fn tactical_setup_by_id(
+        &self,
+        setup_id: &str,
+    ) -> Result<Option<TacticalSetupRecord>, Box<dyn std::error::Error>> {
+        let query = format!(
+            "SELECT * FROM tactical_setup WHERE setup_id = {} LIMIT 1",
+            serde_json::to_string(setup_id)?
+        );
+        let mut result = self.db.query(&query).await?;
+        let mut records: Vec<TacticalSetupRecord> = result.take(0)?;
+        Ok(records.pop())
+    }
+
+    /// Query recent reasoning assessments for one setup, newest first.
+    pub async fn recent_case_reasoning_assessments(
+        &self,
+        setup_id: &str,
+        limit: usize,
+    ) -> Result<Vec<CaseReasoningAssessmentRecord>, Box<dyn std::error::Error>> {
+        let query = format!(
+            "SELECT * FROM case_reasoning_assessment WHERE setup_id = {} ORDER BY recorded_at DESC LIMIT {}",
+            serde_json::to_string(setup_id)?,
+            limit,
+        );
+        let mut result = self.db.query(&query).await?;
+        let records: Vec<CaseReasoningAssessmentRecord> = result.take(0)?;
+        Ok(records)
+    }
+
+    /// Query recent reasoning assessments for one market, newest first.
+    pub async fn recent_case_reasoning_assessments_by_market(
+        &self,
+        market: &str,
+        limit: usize,
+    ) -> Result<Vec<CaseReasoningAssessmentRecord>, Box<dyn std::error::Error>> {
+        let query = format!(
+            "SELECT * FROM case_reasoning_assessment WHERE market = {} ORDER BY recorded_at DESC LIMIT {}",
+            serde_json::to_string(market)?,
+            limit,
+        );
+        let mut result = self.db.query(&query).await?;
+        let records: Vec<CaseReasoningAssessmentRecord> = result.take(0)?;
+        Ok(records)
+    }
+
+    /// Query recent realized case outcomes for one market, newest first.
+    pub async fn recent_case_realized_outcomes_by_market(
+        &self,
+        market: &str,
+        limit: usize,
+    ) -> Result<Vec<CaseRealizedOutcomeRecord>, Box<dyn std::error::Error>> {
+        let query = format!(
+            "SELECT * FROM case_realized_outcome WHERE market = {} ORDER BY resolved_at DESC LIMIT {}",
+            serde_json::to_string(market)?,
+            limit,
+        );
+        let mut result = self.db.query(&query).await?;
+        let records: Vec<CaseRealizedOutcomeRecord> = result.take(0)?;
+        Ok(records)
+    }
+
     /// Persist the latest hypothesis track projection.
     pub async fn write_hypothesis_track(
         &self,
@@ -94,6 +225,34 @@ impl EdenStore {
             .content(record.clone())
             .await?;
         Ok(())
+    }
+
+    /// Query the latest action workflow state by workflow id.
+    pub async fn action_workflow_by_id(
+        &self,
+        workflow_id: &str,
+    ) -> Result<Option<ActionWorkflowRecord>, Box<dyn std::error::Error>> {
+        let query = format!(
+            "SELECT * FROM action_workflow WHERE workflow_id = {} LIMIT 1",
+            serde_json::to_string(workflow_id)?
+        );
+        let mut result = self.db.query(&query).await?;
+        let mut records: Vec<ActionWorkflowRecord> = result.take(0)?;
+        Ok(records.pop())
+    }
+
+    /// Query workflow events in chronological order.
+    pub async fn action_workflow_events(
+        &self,
+        workflow_id: &str,
+    ) -> Result<Vec<ActionWorkflowEventRecord>, Box<dyn std::error::Error>> {
+        let query = format!(
+            "SELECT * FROM action_workflow_event WHERE workflow_id = {} ORDER BY recorded_at ASC",
+            serde_json::to_string(workflow_id)?
+        );
+        let mut result = self.db.query(&query).await?;
+        let records: Vec<ActionWorkflowEventRecord> = result.take(0)?;
+        Ok(records)
     }
 
     /// Persist one lineage evaluation snapshot for historical leaderboard review.
@@ -109,6 +268,19 @@ impl EdenStore {
         Ok(())
     }
 
+    /// Persist one US lineage evaluation snapshot.
+    pub async fn write_us_lineage_snapshot(
+        &self,
+        record: &UsLineageSnapshotRecord,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let _: Option<serde_json::Value> = self
+            .db
+            .upsert(("us_lineage_snapshot", record.record_id()))
+            .content(record.clone())
+            .await?;
+        Ok(())
+    }
+
     /// Persist flattened lineage metric rows for fast filtered lookups.
     pub async fn write_lineage_metric_rows(
         &self,
@@ -118,6 +290,21 @@ impl EdenStore {
             let _: Option<serde_json::Value> = self
                 .db
                 .upsert(("lineage_metric_row", &record.row_id))
+                .content(record.clone())
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Persist flattened US lineage metric rows.
+    pub async fn write_us_lineage_metric_rows(
+        &self,
+        records: &[UsLineageMetricRowRecord],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for record in records {
+            let _: Option<serde_json::Value> = self
+                .db
+                .upsert(("us_lineage_metric_row", &record.row_id))
                 .content(record.clone())
                 .await?;
         }
@@ -193,6 +380,21 @@ impl EdenStore {
         Ok(records)
     }
 
+    /// Query a recent US tick window in chronological order.
+    pub async fn recent_us_tick_window(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<UsTickRecord>, Box<dyn std::error::Error>> {
+        let query = format!(
+            "SELECT * FROM us_tick_record ORDER BY tick_number DESC LIMIT {limit}",
+            limit = limit,
+        );
+        let mut result = self.db.query(&query).await?;
+        let mut records: Vec<UsTickRecord> = result.take(0)?;
+        records.sort_by_key(|record| record.tick_number);
+        Ok(records)
+    }
+
     /// Query recent tick records whose backward reasoning includes the requested leaf scope.
     pub async fn recent_causal_history(
         &self,
@@ -247,6 +449,25 @@ impl EdenStore {
         Ok(compute_lineage_stats(&history, limit))
     }
 
+    /// Reconstruct recent US lineage evaluation statistics from persisted tick history.
+    pub async fn recent_us_lineage_stats(
+        &self,
+        limit: usize,
+        resolution_lag: u64,
+    ) -> Result<UsLineageStats, Box<dyn std::error::Error>> {
+        let records = self.recent_us_tick_window(limit).await?;
+        if records.is_empty() {
+            return Ok(UsLineageStats::default());
+        }
+
+        let mut history = UsTickHistory::new(records.len().max(1));
+        for record in records {
+            history.push(record);
+        }
+
+        Ok(compute_us_lineage_stats(&history, resolution_lag))
+    }
+
     /// Query recent persisted lineage snapshots in reverse chronological order.
     pub async fn recent_lineage_snapshots(
         &self,
@@ -295,6 +516,61 @@ impl EdenStore {
         let mut result = self.db.query(&query).await?;
         let records: Vec<LineageMetricRowRecord> = result.take(0)?;
         Ok(records)
+    }
+
+    /// Query recent flattened US lineage metric rows in reverse chronological order.
+    pub async fn recent_us_lineage_metric_rows(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<UsLineageMetricRowRecord>, Box<dyn std::error::Error>> {
+        let query = format!(
+            "SELECT * FROM us_lineage_metric_row ORDER BY tick_number DESC, bucket ASC, rank ASC LIMIT {limit}",
+            limit = limit,
+        );
+        let mut result = self.db.query(&query).await?;
+        let records: Vec<UsLineageMetricRowRecord> = result.take(0)?;
+        Ok(records)
+    }
+
+    /// Query recent flattened US lineage rows with bounded rank range and headroom for filtering.
+    pub async fn recent_ranked_us_lineage_metric_rows(
+        &self,
+        snapshots: usize,
+        max_rank: usize,
+    ) -> Result<Vec<UsLineageMetricRowRecord>, Box<dyn std::error::Error>> {
+        let rank_limit = max_rank.max(1);
+        let max_rows = snapshots
+            .saturating_mul(rank_limit)
+            .saturating_mul(4)
+            .max(64);
+        let query = format!(
+            "SELECT * FROM us_lineage_metric_row WHERE rank < {rank_limit} ORDER BY tick_number DESC, bucket ASC, rank ASC LIMIT {max_rows}",
+            rank_limit = rank_limit,
+            max_rows = max_rows,
+        );
+        let mut result = self.db.query(&query).await?;
+        let records: Vec<UsLineageMetricRowRecord> = result.take(0)?;
+        Ok(records)
+    }
+
+    /// Reconstruct the recent US causal timeline for one symbol.
+    pub async fn recent_us_causal_timeline(
+        &self,
+        symbol: &str,
+        limit: usize,
+    ) -> Result<Option<UsCausalTimeline>, Box<dyn std::error::Error>> {
+        let records = self.recent_us_tick_window(limit).await?;
+        if records.is_empty() {
+            return Ok(None);
+        }
+
+        let mut history = UsTickHistory::new(records.len().max(1));
+        for record in records {
+            history.push(record);
+        }
+
+        Ok(compute_us_causal_timelines(&history)
+            .remove(&crate::ontology::objects::Symbol(symbol.into())))
     }
 }
 

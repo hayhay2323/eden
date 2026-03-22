@@ -18,7 +18,8 @@ async fn main() {
 async fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     match args.get(1).map(|value| value.as_str()) {
         None | Some("serve") => {
-            let bind = parse_bind_arg(&args[2..])?;
+            let rest = if args.len() > 2 { &args[2..] } else { &[] };
+            let bind = parse_bind_arg(rest)?;
             println!("eden-api listening on http://{bind}");
             serve(bind).await?;
             Ok(())
