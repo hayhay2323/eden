@@ -677,3 +677,313 @@ fn capital_rotation_fires_on_sector_substitution_flow() {
         .regime("neutral")
         .assert_primary(MechanismCandidateKind::CapitalRotation);
 }
+
+// ---------------------------------------------------------------------------
+// Negative tests — mechanism must NOT fire
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mechanical_execution_does_not_fire_under_high_ambiguity() {
+    // High flips + short streak + counter_label + weakening track + moderate stress
+    // → high MechanisticAmbiguity pushes toward NarrativeFailure, NOT MechanicalExecution
+    ScenarioBuilder::new("1299.HK")
+        .confidence(dec!(0.48))
+        .action("review")
+        .counter_label("thesis_under_dispute")
+        .signal(dec!(-0.25))
+        .pressure(dec!(-0.20), 3, false)
+        .causal("macro_risk", 1, 7)
+        .track("bull thesis", "weakening", 3, dec!(0.40))
+        .stress(dec!(0.55))
+        .regime("neutral")
+        .assert_not_primary(MechanismCandidateKind::MechanicalExecutionSignature);
+}
+
+#[test]
+fn fragility_does_not_fire_under_low_stress() {
+    // Low stress, strong directional signal, sustained pressure, strengthening track, high confidence
+    // → classic MechanicalExecution territory; StructuralFragility stays near zero
+    ScenarioBuilder::new("700.HK")
+        .confidence(dec!(0.85))
+        .action("enter")
+        .signal(dec!(0.80))
+        .pressure(dec!(0.75), 10, true)
+        .track("momentum bid", "strengthening", 12, dec!(0.82))
+        .chain("capital_flow", &[("capital_flow", dec!(0.88))])
+        .causal("capital_flow", 10, 0)
+        .stress(dec!(0.10))
+        .regime("bullish")
+        .assert_not_primary(MechanismCandidateKind::FragilityBuildUp);
+}
+
+#[test]
+fn contagion_does_not_fire_without_cross_scope_evidence() {
+    // No backward chain, no cross-market signals — purely local directional story
+    // → CrossScopePropagation near zero, ContagionOnset stays low
+    ScenarioBuilder::new("2318.HK")
+        .confidence(dec!(0.80))
+        .action("enter")
+        .signal(dec!(0.75))
+        .pressure(dec!(0.70), 9, true)
+        .track("momentum bid", "strengthening", 11, dec!(0.78))
+        .causal("capital_flow", 9, 0)
+        .stress(dec!(0.12))
+        .regime("bullish")
+        .assert_not_primary(MechanismCandidateKind::ContagionOnset);
+}
+
+#[test]
+fn narrative_failure_does_not_fire_with_stable_leader() {
+    // Zero flips, long streak, no counter_label, strengthening track, high confidence
+    // → MechanisticAmbiguity near zero; NarrativeFailure cannot score high
+    ScenarioBuilder::new("941.HK")
+        .confidence(dec!(0.83))
+        .action("enter")
+        .signal(dec!(0.78))
+        .pressure(dec!(0.72), 11, true)
+        .causal("capital_flow", 12, 0)
+        .track("bull momentum", "strengthening", 14, dec!(0.84))
+        .chain("capital_flow", &[("capital_flow", dec!(0.86))])
+        .stress(dec!(0.08))
+        .regime("bullish")
+        .assert_not_primary(MechanismCandidateKind::NarrativeFailure);
+}
+
+#[test]
+fn liquidity_trap_does_not_fire_when_price_follows_pressure() {
+    // Both capital_flow_direction and price_momentum are large and aligned
+    // → absorption_gap ≈ 0; LiquidityConstraint stays near zero
+    ScenarioBuilder::new("3988.HK")
+        .confidence(dec!(0.78))
+        .action("enter")
+        .signal_full(LiveSignal {
+            symbol: "3988.HK".to_string(),
+            sector: None,
+            composite: dec!(0.72),
+            mark_price: None,
+            dimension_composite: Some(dec!(0.72)),
+            capital_flow_direction: dec!(0.75),
+            price_momentum: dec!(0.70),
+            volume_profile: dec!(0.65),
+            pre_post_market_anomaly: Decimal::ZERO,
+            valuation: Decimal::ZERO,
+            cross_stock_correlation: None,
+            sector_coherence: None,
+            cross_market_propagation: None,
+        })
+        .pressure(dec!(0.73), 10, true)
+        .track("momentum bid", "strengthening", 10, dec!(0.80))
+        .stress(dec!(0.12))
+        .regime("bullish")
+        .assert_not_primary(MechanismCandidateKind::LiquidityTrap);
+}
+
+#[test]
+fn event_driven_does_not_fire_without_events() {
+    // No events at all, strong directional local signal
+    // → EventCatalyst stays at zero; EventDrivenDislocation cannot score
+    ScenarioBuilder::new("9988.HK")
+        .confidence(dec!(0.80))
+        .action("enter")
+        .signal(dec!(0.77))
+        .pressure(dec!(0.72), 9, true)
+        .track("momentum bid", "strengthening", 11, dec!(0.79))
+        .chain("capital_flow", &[("capital_flow", dec!(0.84))])
+        .causal("capital_flow", 9, 0)
+        .stress(dec!(0.10))
+        .regime("bullish")
+        .assert_not_primary(MechanismCandidateKind::EventDrivenDislocation);
+}
+
+#[test]
+fn mean_reversion_does_not_fire_with_low_valuation() {
+    // Near-zero valuation, strong positive momentum, strengthening track
+    // → ReversionPressure near zero; MeanReversionSnapback cannot win
+    ScenarioBuilder::new("2331.HK")
+        .confidence(dec!(0.82))
+        .action("enter")
+        .signal_full(LiveSignal {
+            symbol: "2331.HK".to_string(),
+            sector: None,
+            composite: dec!(0.78),
+            mark_price: None,
+            dimension_composite: Some(dec!(0.78)),
+            capital_flow_direction: dec!(0.75),
+            price_momentum: dec!(0.72),
+            volume_profile: dec!(0.65),
+            pre_post_market_anomaly: Decimal::ZERO,
+            valuation: dec!(0.02),
+            cross_stock_correlation: None,
+            sector_coherence: None,
+            cross_market_propagation: None,
+        })
+        .pressure(dec!(0.70), 10, true)
+        .track("momentum bid", "strengthening", 11, dec!(0.80))
+        .chain("capital_flow", &[("capital_flow", dec!(0.85))])
+        .causal("capital_flow", 10, 0)
+        .stress(dec!(0.10))
+        .regime("bullish")
+        .assert_not_primary(MechanismCandidateKind::MeanReversionSnapback);
+}
+
+#[test]
+fn arbitrage_does_not_fire_without_cross_market_anomaly() {
+    // No cross-market anomalies, no cross-market signals — pure local directional story
+    // → CrossMarketDislocation near zero; ArbitrageConvergence cannot win
+    ScenarioBuilder::new("5.HK")
+        .confidence(dec!(0.81))
+        .action("enter")
+        .signal(dec!(0.76))
+        .pressure(dec!(0.71), 10, true)
+        .track("momentum bid", "strengthening", 12, dec!(0.81))
+        .chain("capital_flow", &[("capital_flow", dec!(0.86))])
+        .causal("capital_flow", 10, 0)
+        .stress(dec!(0.09))
+        .regime("bullish")
+        .assert_not_primary(MechanismCandidateKind::ArbitrageConvergence);
+}
+
+#[test]
+fn capital_rotation_does_not_fire_with_single_sector() {
+    // All signals in the same "tech" sector, no opposing sector pressure
+    // → SubstitutionFlow near zero; CapitalRotation cannot score
+    ScenarioBuilder::new("700.HK")
+        .confidence(dec!(0.80))
+        .action("enter")
+        .signal_full(LiveSignal {
+            symbol: "700.HK".to_string(),
+            sector: Some("tech".to_string()),
+            composite: dec!(0.75),
+            mark_price: None,
+            dimension_composite: Some(dec!(0.75)),
+            capital_flow_direction: dec!(0.72),
+            price_momentum: dec!(0.68),
+            volume_profile: dec!(0.65),
+            pre_post_market_anomaly: Decimal::ZERO,
+            valuation: Decimal::ZERO,
+            cross_stock_correlation: None,
+            sector_coherence: None,
+            cross_market_propagation: None,
+        })
+        .pressure(dec!(0.70), 10, true)
+        .extra_pressure(LivePressure {
+            symbol: "9999.HK".to_string(),
+            sector: Some("tech".to_string()),
+            capital_flow_pressure: dec!(0.68),
+            momentum: dec!(0.60),
+            pressure_delta: dec!(0.63),
+            pressure_duration: 9,
+            accelerating: true,
+        })
+        .extra_pressure(LivePressure {
+            symbol: "9618.HK".to_string(),
+            sector: Some("tech".to_string()),
+            capital_flow_pressure: dec!(0.65),
+            momentum: dec!(0.58),
+            pressure_delta: dec!(0.60),
+            pressure_duration: 8,
+            accelerating: true,
+        })
+        .track("momentum bid", "strengthening", 12, dec!(0.80))
+        .chain("capital_flow", &[("capital_flow", dec!(0.85))])
+        .causal("capital_flow", 10, 0)
+        .stress(dec!(0.10))
+        .regime("bullish")
+        .assert_not_primary(MechanismCandidateKind::CapitalRotation);
+}
+
+// ---------------------------------------------------------------------------
+// Structural tests — verify output shape
+// ---------------------------------------------------------------------------
+
+#[test]
+fn positive_scenarios_always_produce_factors_and_counterfactuals() {
+    // Mirror the MechanicalExecution positive scenario
+    let profile = ScenarioBuilder::new("700.HK")
+        .confidence(dec!(0.82))
+        .signal(dec!(0.75))
+        .pressure(dec!(0.7), 8, true)
+        .track("momentum bid", "strengthening", 10, dec!(0.80))
+        .chain("capital_flow", &[("capital_flow", dec!(0.85))])
+        .causal("capital_flow", 8, 0)
+        .stress(dec!(0.15))
+        .run();
+
+    let primary = profile
+        .primary_mechanism
+        .as_ref()
+        .expect("primary mechanism must exist");
+
+    assert!(
+        !primary.factors.is_empty(),
+        "primary.factors must be non-empty"
+    );
+
+    for factor in &primary.factors {
+        assert!(
+            factor.contribution >= Decimal::ZERO,
+            "factor '{}' has negative contribution: {}",
+            factor.label,
+            factor.contribution
+        );
+    }
+
+    assert!(
+        !primary.counterfactuals.is_empty(),
+        "primary.counterfactuals must be non-empty"
+    );
+
+    for cf in &primary.counterfactuals {
+        assert!(
+            cf.score_delta <= Decimal::ZERO,
+            "counterfactual '{}' has positive score_delta: {} (removing a factor must lower or maintain score)",
+            cf.factor_label,
+            cf.score_delta
+        );
+    }
+}
+
+#[test]
+fn ambiguous_scenario_produces_competing_mechanisms() {
+    // Moderate everything + a cross-market signal + a couple of flips
+    // → rich composite profile with multiple mechanisms
+    let profile = ScenarioBuilder::new("388.HK")
+        .confidence(dec!(0.52))
+        .action("review")
+        .signal_full(LiveSignal {
+            symbol: "388.HK".to_string(),
+            sector: None,
+            composite: dec!(0.48),
+            mark_price: None,
+            dimension_composite: Some(dec!(0.48)),
+            capital_flow_direction: dec!(0.45),
+            price_momentum: dec!(0.40),
+            volume_profile: dec!(0.50),
+            pre_post_market_anomaly: Decimal::ZERO,
+            valuation: dec!(0.30),
+            cross_stock_correlation: None,
+            sector_coherence: None,
+            cross_market_propagation: Some(dec!(0.55)),
+        })
+        .pressure(dec!(0.45), 5, false)
+        .causal("mixed_drivers", 3, 2)
+        .cross_market_signal("SPY.US", "388.HK", dec!(0.58))
+        .stress(dec!(0.50))
+        .regime("neutral")
+        .run();
+
+    assert!(
+        profile.primary_mechanism.is_some(),
+        "ambiguous scenario must still produce a primary mechanism"
+    );
+
+    assert!(
+        !profile.composite_states.is_empty(),
+        "composite_states must be non-empty"
+    );
+
+    assert!(
+        !profile.predicates.is_empty(),
+        "predicates must be non-empty"
+    );
+}
