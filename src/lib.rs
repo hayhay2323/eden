@@ -11,6 +11,7 @@ pub mod persistence;
 pub mod pipeline;
 pub mod runtime_loop;
 pub mod temporal;
+pub mod trading;
 pub mod us;
 
 pub use ontology::{
