@@ -10,12 +10,13 @@ use crate::live_snapshot::{
 };
 use crate::math::clamp_unit_interval;
 use crate::ontology::{
-    AtomicPredicate, AtomicPredicateKind, HumanReviewContext, HumanReviewReason,
-    HumanReviewReasonKind, HumanReviewVerdict,
+    ActionDirection, ActionNode, AtomicPredicate, AtomicPredicateKind, HumanReviewContext,
+    HumanReviewReason, HumanReviewReasonKind, HumanReviewVerdict,
 };
 
 pub struct PredicateInputs<'a> {
     pub tactical_case: &'a LiveTacticalCase,
+    pub active_positions: &'a [ActionNode],
     pub chain: Option<&'a LiveBackwardChain>,
     pub pressure: Option<&'a LivePressure>,
     pub signal: Option<&'a LiveSignal>,
@@ -63,6 +64,10 @@ pub fn derive_atomic_predicates(inputs: &PredicateInputs<'_>) -> Vec<AtomicPredi
         sector_rotation_pressure(inputs),
         leader_flip_detected(inputs),
         counterevidence_present(inputs),
+        position_conflict(inputs),
+        position_reinforcement(inputs),
+        concentration_risk(inputs),
+        exit_condition_forming(inputs),
     ];
 
     predicates.retain(|predicate| predicate.score > dec!(0.15));
@@ -428,14 +433,13 @@ fn cross_market_link_active(inputs: &PredicateInputs<'_>) -> AtomicPredicate {
 fn source_concentrated(inputs: &PredicateInputs<'_>) -> AtomicPredicate {
     let concentration = inputs
         .chain
-        .map(|chain| evidence_concentration(&chain.evidence))
-        .unwrap_or_else(|| {
-            if inputs.chain.is_some() {
-                dec!(0.55)
-            } else {
-                Decimal::ZERO
-            }
-        });
+        .map(|chain| {
+            let c = evidence_concentration(&chain.evidence);
+            // A chain with no evidence items is structurally concentrated
+            // (single implied driver), so use a moderate default.
+            if chain.evidence.is_empty() { dec!(0.55) } else { c }
+        })
+        .unwrap_or(Decimal::ZERO);
     let leader = inputs
         .causal
         .map(|causal| normalize_count(causal.leader_streak as usize, 6))
@@ -981,6 +985,209 @@ fn counterevidence_present(inputs: &PredicateInputs<'_>) -> AtomicPredicate {
     )
 }
 
+fn position_conflict(inputs: &PredicateInputs<'_>) -> AtomicPredicate {
+    let desired = case_direction(inputs);
+    let conflicts = active_positions_for_symbol(inputs)
+        .into_iter()
+        .filter(|position| directions_conflict(desired, position.direction))
+        .collect::<Vec<_>>();
+    let score = conflicts
+        .iter()
+        .map(|position| {
+            weighted_sum(&[
+                (clamp_unit_interval(position.current_confidence), dec!(0.45)),
+                (clamp_unit_interval(position.entry_confidence), dec!(0.20)),
+                (normalize_count(position.age_ticks as usize, 24), dec!(0.20)),
+                (
+                    if position.exit_forming {
+                        Decimal::ZERO
+                    } else {
+                        dec!(0.15)
+                    },
+                    Decimal::ONE,
+                ),
+            ])
+        })
+        .max()
+        .unwrap_or(Decimal::ZERO);
+
+    let evidence = conflicts
+        .iter()
+        .take(3)
+        .map(|position| {
+            format!(
+                "{} {} stage={} age={} pnl={}",
+                position.workflow_id,
+                direction_label(position.direction),
+                stage_label(position),
+                position.age_ticks,
+                position.pnl.unwrap_or(Decimal::ZERO).round_dp(2)
+            )
+        })
+        .collect::<Vec<_>>();
+
+    predicate(
+        AtomicPredicateKind::PositionConflict,
+        score,
+        "現有倉位方向與新 case 相衝，新增行動更像在對沖或互相打架。",
+        evidence,
+    )
+}
+
+fn position_reinforcement(inputs: &PredicateInputs<'_>) -> AtomicPredicate {
+    let desired = case_direction(inputs);
+    let reinforcements = active_positions_for_symbol(inputs)
+        .into_iter()
+        .filter(|position| directions_align(desired, position.direction))
+        .collect::<Vec<_>>();
+    let score = reinforcements
+        .iter()
+        .map(|position| {
+            let pnl_support = position
+                .pnl
+                .map(|pnl| clamp_unit_interval(pnl.max(Decimal::ZERO)))
+                .unwrap_or(Decimal::ZERO);
+            weighted_sum(&[
+                (clamp_unit_interval(position.current_confidence), dec!(0.40)),
+                (normalize_count(position.age_ticks as usize, 24), dec!(0.20)),
+                (pnl_support, dec!(0.20)),
+                (
+                    if position.exit_forming {
+                        Decimal::ZERO
+                    } else {
+                        dec!(0.20)
+                    },
+                    Decimal::ONE,
+                ),
+            ])
+        })
+        .max()
+        .unwrap_or(Decimal::ZERO);
+
+    let evidence = reinforcements
+        .iter()
+        .take(3)
+        .map(|position| {
+            format!(
+                "{} {} stage={} age={} current_conf={}",
+                position.workflow_id,
+                direction_label(position.direction),
+                stage_label(position),
+                position.age_ticks,
+                position.current_confidence.round_dp(2)
+            )
+        })
+        .collect::<Vec<_>>();
+
+    predicate(
+        AtomicPredicateKind::PositionReinforcement,
+        score,
+        "現有倉位已在同方向運行，新的 case 更像加碼/續抱而非全新論點。",
+        evidence,
+    )
+}
+
+fn concentration_risk(inputs: &PredicateInputs<'_>) -> AtomicPredicate {
+    let Some(case_sector) = case_sector(inputs) else {
+        return predicate(
+            AtomicPredicateKind::ConcentrationRisk,
+            Decimal::ZERO,
+            "同板塊倉位過多時，新增 case 可能只是把風險堆得更集中。",
+            vec![],
+        );
+    };
+
+    let same_sector = inputs
+        .active_positions
+        .iter()
+        .filter(|position| {
+            position
+                .sector
+                .as_deref()
+                .map(str::trim)
+                .filter(|sector| !sector.is_empty())
+                .map(|sector| sector == case_sector)
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    let desired = case_direction(inputs);
+    let aligned = same_sector
+        .iter()
+        .filter(|position| directions_align(desired, position.direction))
+        .count();
+    let same_sector_count = same_sector.len();
+    let aligned_share = if same_sector_count == 0 {
+        Decimal::ZERO
+    } else {
+        Decimal::from(aligned as i64) / Decimal::from(same_sector_count as i64)
+    };
+    let book_share = if inputs.active_positions.is_empty() {
+        Decimal::ZERO
+    } else {
+        Decimal::from(same_sector_count as i64)
+            / Decimal::from(inputs.active_positions.len() as i64)
+    };
+    let score = weighted_sum(&[
+        (normalize_count(same_sector_count, 4), dec!(0.45)),
+        (clamp_unit_interval(aligned_share), dec!(0.35)),
+        (clamp_unit_interval(book_share), dec!(0.20)),
+    ]);
+    let evidence = vec![
+        format!("sector {}", case_sector),
+        format!("same-sector positions {}", same_sector_count),
+        format!("aligned share {}", aligned_share.round_dp(2)),
+    ];
+
+    predicate(
+        AtomicPredicateKind::ConcentrationRisk,
+        score,
+        "同板塊倉位過多時，新增 case 可能只是把風險堆得更集中。",
+        evidence,
+    )
+}
+
+fn exit_condition_forming(inputs: &PredicateInputs<'_>) -> AtomicPredicate {
+    let positions = active_positions_for_symbol(inputs);
+    let score = positions
+        .iter()
+        .map(|position| {
+            let degradation = position.degradation_score.unwrap_or(Decimal::ZERO);
+            clamp_unit_interval(if position.exit_forming {
+                degradation.max(dec!(0.85))
+            } else {
+                degradation
+            })
+        })
+        .max()
+        .unwrap_or(Decimal::ZERO);
+    let evidence = positions
+        .iter()
+        .filter(|position| {
+            position.exit_forming
+                || position.degradation_score.unwrap_or(Decimal::ZERO) > Decimal::ZERO
+        })
+        .take(3)
+        .map(|position| {
+            format!(
+                "{} exit_forming={} degradation={}",
+                position.workflow_id,
+                position.exit_forming,
+                position
+                    .degradation_score
+                    .unwrap_or(Decimal::ZERO)
+                    .round_dp(2)
+            )
+        })
+        .collect::<Vec<_>>();
+
+    predicate(
+        AtomicPredicateKind::ExitConditionForming,
+        score,
+        "既有倉位已接近出場條件，新 case 的可持續性需要打折看待。",
+        evidence,
+    )
+}
+
 fn human_rejected(review: &HumanReviewContext) -> Option<AtomicPredicate> {
     let verdict_score = match review.verdict {
         HumanReviewVerdict::Rejected => dec!(0.55),
@@ -1051,6 +1258,87 @@ fn evidence_concentration(items: &[crate::live_snapshot::LiveEvidence]) -> Decim
         .max()
         .unwrap_or(Decimal::ZERO);
     clamp_unit_interval(peak / total)
+}
+
+fn active_positions_for_symbol<'a>(inputs: &'a PredicateInputs<'_>) -> Vec<&'a ActionNode> {
+    let symbol = inputs.tactical_case.symbol.trim();
+    if symbol.is_empty() {
+        return Vec::new();
+    }
+    inputs
+        .active_positions
+        .iter()
+        .filter(|position| position.symbol.0 == symbol)
+        .collect()
+}
+
+fn case_direction(inputs: &PredicateInputs<'_>) -> ActionDirection {
+    if let Some(signal) = inputs.signal {
+        if signal.composite > Decimal::ZERO {
+            return ActionDirection::Long;
+        }
+        if signal.composite < Decimal::ZERO {
+            return ActionDirection::Short;
+        }
+        let signed_flow = signal.capital_flow_direction + signal.price_momentum;
+        if signed_flow > Decimal::ZERO {
+            return ActionDirection::Long;
+        }
+        if signed_flow < Decimal::ZERO {
+            return ActionDirection::Short;
+        }
+    }
+
+    if let Some(pressure) = inputs.pressure {
+        if pressure.capital_flow_pressure > Decimal::ZERO {
+            return ActionDirection::Long;
+        }
+        if pressure.capital_flow_pressure < Decimal::ZERO {
+            return ActionDirection::Short;
+        }
+    }
+
+    if inputs.tactical_case.title.starts_with("Long ") {
+        ActionDirection::Long
+    } else if inputs.tactical_case.title.starts_with("Short ") {
+        ActionDirection::Short
+    } else {
+        ActionDirection::Neutral
+    }
+}
+
+fn directions_conflict(case_direction: ActionDirection, active_direction: ActionDirection) -> bool {
+    matches!(
+        (case_direction, active_direction),
+        (ActionDirection::Long, ActionDirection::Short)
+            | (ActionDirection::Short, ActionDirection::Long)
+    )
+}
+
+fn directions_align(case_direction: ActionDirection, active_direction: ActionDirection) -> bool {
+    matches!(
+        (case_direction, active_direction),
+        (ActionDirection::Long, ActionDirection::Long)
+            | (ActionDirection::Short, ActionDirection::Short)
+    )
+}
+
+fn direction_label(direction: ActionDirection) -> &'static str {
+    match direction {
+        ActionDirection::Long => "long",
+        ActionDirection::Short => "short",
+        ActionDirection::Neutral => "neutral",
+    }
+}
+
+fn stage_label(position: &ActionNode) -> &'static str {
+    match position.stage {
+        crate::ontology::ActionNodeStage::Suggested => "suggested",
+        crate::ontology::ActionNodeStage::Confirmed => "confirmed",
+        crate::ontology::ActionNodeStage::Executed => "executed",
+        crate::ontology::ActionNodeStage::Monitoring => "monitoring",
+        crate::ontology::ActionNodeStage::Reviewed => "reviewed",
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1183,6 +1471,7 @@ mod tests {
         LiveHypothesisTrack, LiveMarketRegime, LivePressure, LiveSignal, LiveStressSnapshot,
         LiveTacticalCase,
     };
+    use crate::ontology::{ActionDirection, ActionNode, ActionNodeStage, Market, Symbol};
 
     #[test]
     fn workflow_rejection_predicate_can_be_injected() {
@@ -1259,6 +1548,7 @@ mod tests {
         };
         let inputs = PredicateInputs {
             tactical_case: &tactical_case,
+            active_positions: &[],
             chain: Some(&chain),
             pressure: Some(&pressure),
             signal: Some(&signal),
@@ -1345,6 +1635,208 @@ mod tests {
         assert!(predicates
             .iter()
             .any(|item| item.kind == AtomicPredicateKind::SectorRotationPressure));
+    }
+
+    fn base_case(symbol: &str, title: &str) -> LiveTacticalCase {
+        LiveTacticalCase {
+            setup_id: format!("setup:{symbol}:enter"),
+            symbol: symbol.into(),
+            title: title.into(),
+            action: "enter".into(),
+            confidence: dec!(0.8),
+            confidence_gap: dec!(0.2),
+            heuristic_edge: dec!(0.1),
+            entry_rationale: "test".into(),
+            family_label: Some("Momentum".into()),
+            counter_label: None,
+        }
+    }
+
+    fn base_signal(symbol: &str, sector: &str, composite: Decimal) -> LiveSignal {
+        LiveSignal {
+            symbol: symbol.into(),
+            sector: Some(sector.into()),
+            composite,
+            mark_price: Some(dec!(100)),
+            dimension_composite: Some(composite),
+            capital_flow_direction: composite,
+            price_momentum: composite / Decimal::TWO,
+            volume_profile: dec!(0.2),
+            pre_post_market_anomaly: dec!(0.1),
+            valuation: Decimal::ZERO,
+            cross_stock_correlation: None,
+            sector_coherence: None,
+            cross_market_propagation: None,
+        }
+    }
+
+    fn active_position(
+        symbol: &str,
+        sector: &str,
+        direction: ActionDirection,
+        exit_forming: bool,
+    ) -> ActionNode {
+        ActionNode {
+            workflow_id: format!("wf:{symbol}"),
+            symbol: Symbol(symbol.into()),
+            market: Market::Hk,
+            sector: Some(sector.into()),
+            stage: ActionNodeStage::Monitoring,
+            direction,
+            entry_confidence: dec!(0.7),
+            current_confidence: dec!(0.8),
+            entry_price: Some(dec!(95)),
+            pnl: Some(dec!(0.05)),
+            age_ticks: 12,
+            degradation_score: Some(if exit_forming { dec!(0.9) } else { dec!(0.2) }),
+            exit_forming,
+        }
+    }
+
+    #[test]
+    fn position_conflict_predicate_triggers_on_opposing_active_position() {
+        let tactical_case = base_case("700.HK", "Long 700.HK");
+        let signal = base_signal("700.HK", "tech", dec!(0.7));
+        let active_positions = [active_position(
+            "700.HK",
+            "tech",
+            ActionDirection::Short,
+            false,
+        )];
+
+        let predicates = derive_atomic_predicates(&PredicateInputs {
+            tactical_case: &tactical_case,
+            active_positions: &active_positions,
+            chain: None,
+            pressure: None,
+            signal: Some(&signal),
+            causal: None,
+            track: None,
+            stress: &LiveStressSnapshot {
+                composite_stress: Decimal::ZERO,
+                sector_synchrony: None,
+                pressure_consensus: None,
+                momentum_consensus: None,
+                pressure_dispersion: None,
+                volume_anomaly: None,
+            },
+            market_regime: &LiveMarketRegime {
+                bias: "neutral".into(),
+                confidence: Decimal::ZERO,
+                breadth_up: Decimal::ZERO,
+                breadth_down: Decimal::ZERO,
+                average_return: Decimal::ZERO,
+                directional_consensus: None,
+                pre_market_sentiment: None,
+            },
+            all_signals: std::slice::from_ref(&signal),
+            all_pressures: &[],
+            events: &[],
+            cross_market_signals: &[],
+            cross_market_anomalies: &[],
+        });
+
+        assert!(predicates
+            .iter()
+            .any(|predicate| predicate.kind == AtomicPredicateKind::PositionConflict));
+    }
+
+    #[test]
+    fn reinforcement_and_exit_predicates_use_active_position_overlay() {
+        let tactical_case = base_case("700.HK", "Long 700.HK");
+        let signal = base_signal("700.HK", "tech", dec!(0.7));
+        let active_positions = [active_position(
+            "700.HK",
+            "tech",
+            ActionDirection::Long,
+            true,
+        )];
+
+        let predicates = derive_atomic_predicates(&PredicateInputs {
+            tactical_case: &tactical_case,
+            active_positions: &active_positions,
+            chain: None,
+            pressure: None,
+            signal: Some(&signal),
+            causal: None,
+            track: None,
+            stress: &LiveStressSnapshot {
+                composite_stress: Decimal::ZERO,
+                sector_synchrony: None,
+                pressure_consensus: None,
+                momentum_consensus: None,
+                pressure_dispersion: None,
+                volume_anomaly: None,
+            },
+            market_regime: &LiveMarketRegime {
+                bias: "neutral".into(),
+                confidence: Decimal::ZERO,
+                breadth_up: Decimal::ZERO,
+                breadth_down: Decimal::ZERO,
+                average_return: Decimal::ZERO,
+                directional_consensus: None,
+                pre_market_sentiment: None,
+            },
+            all_signals: std::slice::from_ref(&signal),
+            all_pressures: &[],
+            events: &[],
+            cross_market_signals: &[],
+            cross_market_anomalies: &[],
+        });
+
+        assert!(predicates
+            .iter()
+            .any(|predicate| predicate.kind == AtomicPredicateKind::PositionReinforcement));
+        assert!(predicates
+            .iter()
+            .any(|predicate| predicate.kind == AtomicPredicateKind::ExitConditionForming));
+    }
+
+    #[test]
+    fn concentration_risk_triggers_for_same_sector_stack() {
+        let tactical_case = base_case("700.HK", "Long 700.HK");
+        let signal = base_signal("700.HK", "tech", dec!(0.7));
+        let active_positions = [
+            active_position("700.HK", "tech", ActionDirection::Long, false),
+            active_position("9988.HK", "tech", ActionDirection::Long, false),
+            active_position("3690.HK", "tech", ActionDirection::Long, false),
+        ];
+
+        let predicates = derive_atomic_predicates(&PredicateInputs {
+            tactical_case: &tactical_case,
+            active_positions: &active_positions,
+            chain: None,
+            pressure: None,
+            signal: Some(&signal),
+            causal: None,
+            track: None,
+            stress: &LiveStressSnapshot {
+                composite_stress: Decimal::ZERO,
+                sector_synchrony: None,
+                pressure_consensus: None,
+                momentum_consensus: None,
+                pressure_dispersion: None,
+                volume_anomaly: None,
+            },
+            market_regime: &LiveMarketRegime {
+                bias: "neutral".into(),
+                confidence: Decimal::ZERO,
+                breadth_up: Decimal::ZERO,
+                breadth_down: Decimal::ZERO,
+                average_return: Decimal::ZERO,
+                directional_consensus: None,
+                pre_market_sentiment: None,
+            },
+            all_signals: std::slice::from_ref(&signal),
+            all_pressures: &[],
+            events: &[],
+            cross_market_signals: &[],
+            cross_market_anomalies: &[],
+        });
+
+        assert!(predicates
+            .iter()
+            .any(|predicate| predicate.kind == AtomicPredicateKind::ConcentrationRisk));
     }
 
     #[test]

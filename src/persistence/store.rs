@@ -658,6 +658,10 @@ fn validated_surreal_field_key(value: &str) -> Result<&str, Box<dyn std::error::
 }
 
 fn build_batch_upsert_query(table: &str, records: usize) -> String {
+    assert!(
+        table.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+        "table name must be [a-z_], got `{table}`"
+    );
     let mut query = String::new();
     for index in 0..records {
         query.push_str(&format!(
