@@ -356,3 +356,324 @@ fn mechanical_execution_fires_on_sustained_directional_signal() {
         .stress(dec!(0.15))
         .assert_primary(MechanismCandidateKind::MechanicalExecutionSignature);
 }
+
+#[test]
+fn fragility_fires_on_high_stress_and_degradation() {
+    // High composite_stress + pressure_dispersion → StructuralDegradation (score ~0.58)
+    // Tiny accelerating pressure → StressAccelerating fires (~0.64)
+    // → StructuralFragility ~0.45.
+    // Adding 3 causal flips + counter_label → MechanisticAmbiguity ~0.47, clarity ~0.53.
+    // This suppresses MechanicalExecution's clarity bonus while raising FragilityBuildUp score:
+    //   FragilityBuildUp = 0.45*0.60 + 0.47*0.25 = 0.27 + 0.12 = 0.39
+    //   NarrativeFailure = 0.47*0.50 + 0.45*0.30 = 0.24 + 0.14 = 0.37  (less than FragilityBuildUp)
+    //   MechanicalExecution = D*0.45 + 0.53*0.20 ≈ 0.12 + 0.11 = 0.22  (lowest)
+    ScenarioBuilder::new("2318.HK")
+        .confidence(dec!(0.45))
+        .action("review")
+        .counter_label("stress_driven_not_directional")
+        .signal_full(LiveSignal {
+            symbol: "2318.HK".to_string(),
+            sector: None,
+            composite: dec!(-0.15),
+            mark_price: None,
+            dimension_composite: Some(dec!(-0.15)),
+            capital_flow_direction: dec!(-0.15),
+            price_momentum: dec!(-0.14),
+            volume_profile: dec!(0.20),
+            pre_post_market_anomaly: Decimal::ZERO,
+            valuation: Decimal::ZERO,
+            cross_stock_correlation: None,
+            sector_coherence: None,
+            cross_market_propagation: None,
+        })
+        // Tiny pressure magnitude ≈ price_momentum → absorption_gap ≈ 0 (suppresses LiquidityTrap).
+        // Accelerating = true → StressAccelerating fires.
+        // Short duration → PressurePersists stays weak.
+        .pressure(dec!(-0.16), 2, true)
+        // 3 flips, short streak → LeaderFlipDetected high (~0.77)
+        // Combined with counter_label → MechanisticAmbiguity ~0.47, reducing clarity to ~0.53
+        .causal("macro_stress", 2, 3)
+        .stress_full(LiveStressSnapshot {
+            composite_stress: dec!(0.92),
+            sector_synchrony: Some(dec!(0.75)),
+            pressure_consensus: Some(dec!(0.82)),
+            momentum_consensus: Some(dec!(0.78)),
+            pressure_dispersion: Some(dec!(0.85)),
+            volume_anomaly: Some(dec!(0.70)),
+        })
+        // No track → SignalRecurs = 0, no track_score in StructuralDegradation.
+        // Stress + dispersion alone drive StructuralDegradation to ~0.58.
+        .regime("neutral")
+        .assert_primary(MechanismCandidateKind::FragilityBuildUp);
+}
+
+#[test]
+fn contagion_fires_on_deep_cross_scope_propagation() {
+    // 4-item evidence chain + multiple cross-market signals + high cross_market_propagation
+    // → CrossScopePropagation (≈1.0) + CrossMarketLinkActive → CrossScopeContagion (high)
+    // High stress + dispersion → StructuralFragility (ContagionOnset weight 0.40)
+    // No track → SignalRecurs = 0. Very low confidence → ConfidenceBuilds low.
+    // No pressure → PressurePersists = 0. Result: DirectionalReinforcement near 0.
+    // ContagionOnset score = CrossScopeContagion*0.50 + StructuralFragility*0.40 beats
+    // MechanicalExecution = CrossScopeContagion*0.35 + clarity*0.20 (≈0.55 + 0.20 = 0.75 vs
+    // ContagionOnset ≈ C*0.50 + F*0.40 which at C≈0.80, F≈0.50 gives 0.60).
+    // Actually MechanicalExecution clarity factor (0.20) and no DirectionalReinforcement
+    // means: Mech = C*0.35 + 0.20 ≈ 0.48; Contagion = C*0.50 + F*0.40 ≈ 0.60.
+    ScenarioBuilder::new("941.HK")
+        .confidence(dec!(0.42))
+        .action("review")
+        .signal_full(LiveSignal {
+            symbol: "941.HK".to_string(),
+            sector: None,
+            composite: dec!(0.20),
+            mark_price: None,
+            dimension_composite: Some(dec!(0.20)),
+            capital_flow_direction: dec!(0.18),
+            price_momentum: dec!(0.16),
+            volume_profile: dec!(0.20),
+            pre_post_market_anomaly: Decimal::ZERO,
+            valuation: Decimal::ZERO,
+            cross_stock_correlation: None,
+            sector_coherence: None,
+            cross_market_propagation: Some(dec!(0.95)),
+        })
+        // No pressure → PressurePersists = 0, no StressAccelerating acceleration bonus
+        .chain(
+            "cross_market_flow",
+            &[
+                ("us_tech_selloff", dec!(0.82)),
+                ("hk_index_drag", dec!(0.78)),
+                ("sector_contagion", dec!(0.74)),
+                ("option_chain_signal", dec!(0.70)),
+            ],
+        )
+        .cross_market_signal("BABA.US", "941.HK", dec!(0.90))
+        .cross_market_signal("TCOM.US", "941.HK", dec!(0.85))
+        .stress_full(LiveStressSnapshot {
+            composite_stress: dec!(0.88),
+            sector_synchrony: Some(dec!(0.82)),
+            pressure_consensus: Some(dec!(0.78)),
+            momentum_consensus: Some(dec!(0.72)),
+            pressure_dispersion: Some(dec!(0.80)),
+            volume_anomaly: Some(dec!(0.65)),
+        })
+        // No track → SignalRecurs = 0, StructuralDegradation uses only stress + dispersion
+        .regime("neutral")
+        .assert_primary(MechanismCandidateKind::ContagionOnset);
+}
+
+#[test]
+fn narrative_failure_fires_on_flips_and_counterevidence() {
+    // Many causal flips + short streak + counter_label + weakening track
+    // → LeaderFlipDetected + CounterevidencePresent → MechanisticAmbiguity → NarrativeFailure
+    ScenarioBuilder::new("1299.HK")
+        .confidence(dec!(0.55))
+        .action("review")
+        .counter_label("macro_headwind_invalidates_thesis")
+        .signal_full(LiveSignal {
+            symbol: "1299.HK".to_string(),
+            sector: None,
+            composite: dec!(-0.20),
+            mark_price: None,
+            dimension_composite: Some(dec!(-0.20)),
+            capital_flow_direction: dec!(-0.25),
+            price_momentum: dec!(-0.15),
+            volume_profile: dec!(0.30),
+            pre_post_market_anomaly: Decimal::ZERO,
+            valuation: Decimal::ZERO,
+            cross_stock_correlation: None,
+            sector_coherence: None,
+            cross_market_propagation: None,
+        })
+        .pressure(dec!(-0.30), 5, false)
+        .causal("macro_risk", 1, 6)
+        .track("momentum thesis", "weakening", 4, dec!(0.45))
+        .stress(dec!(0.40))
+        .regime("neutral")
+        .assert_primary(MechanismCandidateKind::NarrativeFailure);
+}
+
+#[test]
+fn liquidity_trap_fires_on_pressure_without_price_movement() {
+    // High capital_flow_pressure but near-zero price_momentum → high absorption_gap
+    // → LiquidityImbalance → LiquidityConstraint → LiquidityTrap
+    ScenarioBuilder::new("3988.HK")
+        .confidence(dec!(0.65))
+        .action("watch")
+        .signal_full(LiveSignal {
+            symbol: "3988.HK".to_string(),
+            sector: None,
+            composite: dec!(0.30),
+            mark_price: None,
+            dimension_composite: Some(dec!(0.30)),
+            capital_flow_direction: dec!(0.70),
+            price_momentum: dec!(0.02),
+            volume_profile: dec!(0.45),
+            pre_post_market_anomaly: Decimal::ZERO,
+            valuation: Decimal::ZERO,
+            cross_stock_correlation: None,
+            sector_coherence: None,
+            cross_market_propagation: None,
+        })
+        .pressure(dec!(0.75), 14, true)
+        .chain(
+            "capital_flow",
+            &[
+                ("large_order_flow", dec!(0.80)),
+                ("dark_pool_activity", dec!(0.75)),
+            ],
+        )
+        .stress(dec!(0.30))
+        .regime("neutral")
+        .assert_primary(MechanismCandidateKind::LiquidityTrap);
+}
+
+#[test]
+fn event_driven_fires_on_strong_event_catalyst() {
+    // 2+ events mentioning the symbol + high pre_post_market_anomaly
+    // → EventCatalystActive → EventCatalyst → EventDrivenDislocation
+    ScenarioBuilder::new("9988.HK")
+        .confidence(dec!(0.75))
+        .action("enter")
+        .signal_full(LiveSignal {
+            symbol: "9988.HK".to_string(),
+            sector: None,
+            composite: dec!(0.70),
+            mark_price: None,
+            dimension_composite: Some(dec!(0.70)),
+            capital_flow_direction: dec!(0.65),
+            price_momentum: dec!(0.55),
+            volume_profile: dec!(0.60),
+            pre_post_market_anomaly: dec!(0.82),
+            valuation: Decimal::ZERO,
+            cross_stock_correlation: None,
+            sector_coherence: None,
+            cross_market_propagation: None,
+        })
+        .pressure(dec!(0.60), 6, true)
+        .event("earnings_beat", dec!(0.90), "9988.HK quarterly earnings significantly exceeded analyst estimates")
+        .event("analyst_upgrade", dec!(0.85), "9988.HK receives major analyst upgrade with raised price target")
+        .regime("neutral")
+        .assert_primary(MechanismCandidateKind::EventDrivenDislocation);
+}
+
+#[test]
+fn mean_reversion_fires_on_extreme_valuation_and_counter_momentum() {
+    // High valuation + large |price_momentum| (stretch) + no flow support → high MeanReversionPressure
+    // counter_label + weakening track → CounterevidencePresent → ReversionPressure
+    // Keep confidence low, no causal leader → suppress DirectionalReinforcement / ConfidenceBuilds
+    // No pressure provided → weak_flow_support = stretch itself (high)
+    ScenarioBuilder::new("2331.HK")
+        .confidence(dec!(0.50))
+        .action("review")
+        .counter_label("overextended_mean_reversion_imminent")
+        .signal_full(LiveSignal {
+            symbol: "2331.HK".to_string(),
+            sector: None,
+            composite: dec!(-0.15),
+            mark_price: None,
+            dimension_composite: Some(dec!(-0.15)),
+            capital_flow_direction: dec!(-0.10),
+            price_momentum: dec!(-0.78),
+            volume_profile: dec!(0.30),
+            pre_post_market_anomaly: dec!(0.10),
+            valuation: dec!(0.90),
+            cross_stock_correlation: None,
+            sector_coherence: None,
+            cross_market_propagation: None,
+        })
+        // No pressure → weak_flow_support = |price_momentum| = 0.78 (high)
+        .track("uptrend thesis", "weakening", 3, dec!(0.38))
+        .stress(dec!(0.25))
+        .regime("neutral")
+        .assert_primary(MechanismCandidateKind::MeanReversionSnapback);
+}
+
+#[test]
+fn arbitrage_convergence_fires_on_cross_market_dislocation() {
+    // High-divergence cross-market anomalies (direction mismatch) + strong cross-market signals
+    // → CrossMarketDislocation + CrossMarketLinkActive → CrossMarketDislocation state → ArbitrageConvergence
+    ScenarioBuilder::new("5.HK")
+        .confidence(dec!(0.72))
+        .action("enter")
+        .signal_full(LiveSignal {
+            symbol: "5.HK".to_string(),
+            sector: None,
+            composite: dec!(0.50),
+            mark_price: None,
+            dimension_composite: Some(dec!(0.50)),
+            capital_flow_direction: dec!(0.55),
+            price_momentum: dec!(0.40),
+            volume_profile: dec!(0.45),
+            pre_post_market_anomaly: Decimal::ZERO,
+            valuation: Decimal::ZERO,
+            cross_stock_correlation: None,
+            sector_coherence: None,
+            cross_market_propagation: Some(dec!(0.78)),
+        })
+        .pressure(dec!(0.55), 7, false)
+        .cross_market_signal("HSBC.US", "5.HK", dec!(0.85))
+        .cross_market_signal("JPM.US", "5.HK", dec!(0.75))
+        // expected positive but actual strongly negative → high divergence + direction mismatch
+        .cross_market_anomaly("HSBC.US", "5.HK", dec!(0.60), dec!(-0.55))
+        .cross_market_anomaly("C.US", "5.HK", dec!(0.50), dec!(-0.45))
+        .regime("neutral")
+        .assert_primary(MechanismCandidateKind::ArbitrageConvergence);
+}
+
+#[test]
+fn capital_rotation_fires_on_sector_substitution_flow() {
+    // "tech" sector: 2 symbols with positive capital_flow_pressure
+    // "finance" sector: 2 symbols with NEGATIVE capital_flow_pressure (opposite direction)
+    // → SectorRotationPressure → SubstitutionFlow → CapitalRotation
+    ScenarioBuilder::new("700.HK")
+        .confidence(dec!(0.68))
+        .action("enter")
+        .signal_full(LiveSignal {
+            symbol: "700.HK".to_string(),
+            sector: Some("tech".to_string()),
+            composite: dec!(0.60),
+            mark_price: None,
+            dimension_composite: Some(dec!(0.60)),
+            capital_flow_direction: dec!(0.65),
+            price_momentum: dec!(0.50),
+            volume_profile: dec!(0.55),
+            pre_post_market_anomaly: Decimal::ZERO,
+            valuation: Decimal::ZERO,
+            cross_stock_correlation: None,
+            sector_coherence: None,
+            cross_market_propagation: None,
+        })
+        .pressure(dec!(0.70), 10, true)
+        // Second tech symbol (positive pressure — same direction as case)
+        .extra_pressure(LivePressure {
+            symbol: "9999.HK".to_string(),
+            sector: Some("tech".to_string()),
+            capital_flow_pressure: dec!(0.65),
+            momentum: dec!(0.55),
+            pressure_delta: dec!(0.60),
+            pressure_duration: 9,
+            accelerating: true,
+        })
+        // Finance sector — two symbols with negative pressure (opposite direction)
+        .extra_pressure(LivePressure {
+            symbol: "939.HK".to_string(),
+            sector: Some("finance".to_string()),
+            capital_flow_pressure: dec!(-0.68),
+            momentum: dec!(-0.55),
+            pressure_delta: dec!(-0.60),
+            pressure_duration: 10,
+            accelerating: true,
+        })
+        .extra_pressure(LivePressure {
+            symbol: "1398.HK".to_string(),
+            sector: Some("finance".to_string()),
+            capital_flow_pressure: dec!(-0.62),
+            momentum: dec!(-0.50),
+            pressure_delta: dec!(-0.55),
+            pressure_duration: 9,
+            accelerating: false,
+        })
+        .regime("neutral")
+        .assert_primary(MechanismCandidateKind::CapitalRotation);
+}
