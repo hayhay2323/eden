@@ -44,9 +44,10 @@ use super::super::lineage_api::{
 use super::super::ontology_api::{
     get_backward_investigation_sidecar, get_case_contract, get_case_contracts,
     get_macro_event_contract, get_macro_event_contracts, get_market_session_contract,
-    get_operational_snapshot, get_recommendation_contract, get_recommendation_contracts,
-    get_sector_flow_sidecars, get_symbol_state_contract, get_symbol_state_contracts,
-    get_thread_contract, get_thread_contracts, get_workflow_contract, get_workflow_contracts,
+    get_operational_neighborhood, get_operational_snapshot, get_recommendation_contract,
+    get_recommendation_contracts, get_sector_flow_sidecars, get_symbol_state_contract,
+    get_symbol_state_contracts, get_thread_contract, get_thread_contracts,
+    get_workflow_contract, get_workflow_contracts,
 };
 use super::super::ontology_graph_api::{
     get_graph_links, get_graph_node, get_knowledge_link_history, get_knowledge_link_state,
@@ -143,6 +144,10 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
         .route(
             "/ontology/:market/operational-snapshot",
             get(get_operational_snapshot),
+        )
+        .route(
+            "/ontology/:market/neighborhood/:kind/:id",
+            get(get_operational_neighborhood),
         )
         .route(
             "/ontology/:market/market-session",

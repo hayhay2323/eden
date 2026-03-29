@@ -280,6 +280,7 @@ pub fn build_symbol_state_contract(
         observed_at,
         symbol: state.symbol.clone(),
         sector: state.sector.clone(),
+        relationships: SymbolStateRelationships::default(),
         graph_ref: symbol_graph_ref(snapshot.market, &state.symbol),
         state: state.clone(),
     })
@@ -298,10 +299,98 @@ pub fn build_macro_event_contracts(
             market: snapshot.market,
             source_tick: snapshot.tick,
             observed_at,
+            relationships: MacroEventRelationships::default(),
             graph_ref: macro_event_graph_ref(snapshot.market, &event.event_id),
             event,
         })
         .collect())
+}
+
+fn populate_operational_relationships(snapshot: &mut OperationalSnapshot) {
+    for symbol in &mut snapshot.symbols {
+        symbol.relationships.cases = snapshot
+            .cases
+            .iter()
+            .filter(|item| item.symbol.eq_ignore_ascii_case(&symbol.symbol))
+            .map(|item| case_self_ref(snapshot.market, item))
+            .collect();
+        symbol.relationships.recommendations = snapshot
+            .recommendations
+            .iter()
+            .filter(|item| item.symbol.eq_ignore_ascii_case(&symbol.symbol))
+            .map(|item| recommendation_self_ref(snapshot.market, item))
+            .collect();
+        symbol.relationships.macro_events = snapshot
+            .macro_events
+            .iter()
+            .filter(|item| {
+                item.event
+                    .impact
+                    .affected_symbols
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(&symbol.symbol))
+            })
+            .map(|item| macro_event_self_ref(snapshot.market, item))
+            .collect();
+    }
+
+    let symbol_refs = snapshot
+        .symbols
+        .iter()
+        .map(|item| (item.symbol.to_ascii_lowercase(), OperationalObjectRef {
+            id: item.id.0.clone(),
+            kind: OperationalObjectKind::SymbolState,
+            endpoint: object_endpoint(snapshot.market, &format!("symbols/{}", item.symbol)),
+            label: Some(item.symbol.clone()),
+        }))
+        .collect::<std::collections::HashMap<_, _>>();
+    let case_refs = snapshot
+        .cases
+        .iter()
+        .map(|item| (item.symbol.to_ascii_lowercase(), case_self_ref(snapshot.market, item)))
+        .collect::<Vec<_>>();
+    let recommendation_refs = snapshot
+        .recommendations
+        .iter()
+        .map(|item| {
+            (
+                item.symbol.to_ascii_lowercase(),
+                recommendation_self_ref(snapshot.market, item),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    for event in &mut snapshot.macro_events {
+        event.relationships.symbols = event
+            .event
+            .impact
+            .affected_symbols
+            .iter()
+            .filter_map(|symbol| symbol_refs.get(&symbol.to_ascii_lowercase()).cloned())
+            .collect();
+        event.relationships.cases = case_refs
+            .iter()
+            .filter(|(symbol, _)| {
+                event.event
+                    .impact
+                    .affected_symbols
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(symbol))
+            })
+            .map(|(_, item)| item.clone())
+            .collect();
+        event.relationships.recommendations = recommendation_refs
+            .iter()
+            .filter(|(symbol, _)| {
+                event.event
+                    .impact
+                    .affected_symbols
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(symbol))
+            })
+            .map(|(_, item)| item.clone())
+            .collect();
+    }
 }
 
 pub fn build_operational_snapshot(
@@ -491,7 +580,7 @@ pub fn build_operational_snapshot(
         knowledge_links: combined_knowledge_links(snapshot, recommendations),
     };
 
-    Ok(OperationalSnapshot {
+    let mut operational = OperationalSnapshot {
         version: 1,
         market: snapshot.market,
         source_tick: snapshot.tick,
@@ -521,7 +610,9 @@ pub fn build_operational_snapshot(
         workflows,
         sidecars,
         events: snapshot.events.clone(),
-    })
+    };
+    populate_operational_relationships(&mut operational);
+    Ok(operational)
 }
 
 pub fn rebuild_operational_case_graph(
@@ -649,4 +740,5 @@ pub fn rebuild_operational_case_graph(
         &snapshot.cases,
         &snapshot.recommendations,
     );
+    populate_operational_relationships(snapshot);
 }

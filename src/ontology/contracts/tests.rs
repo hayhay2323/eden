@@ -289,6 +289,11 @@
         );
         assert_eq!(operational.workflows[0].case_refs.len(), 1);
         assert_eq!(operational.workflows[0].relationships.cases.len(), 1);
+        let neighborhood = operational
+            .neighborhood(OperationalObjectKind::Case, "setup:700.HK")
+            .expect("case neighborhood");
+        assert_eq!(neighborhood.relationships.len(), 3);
+        assert_eq!(neighborhood.relationships[0].name, "symbol");
     }
 
     #[test]

@@ -12,8 +12,9 @@ use crate::cases;
 use crate::cases::enrich_case_summaries;
 use crate::ontology::{
     build_operational_snapshot, load_operational_snapshot, CaseContract, MacroEventContract,
-    MarketSessionContract, OperationalSnapshot, RecommendationContract, SymbolStateContract,
-    ThreadContract, WorkflowContract,
+    MarketSessionContract, OperationalNeighborhood, OperationalObjectKind,
+    OperationalSnapshot, RecommendationContract, SymbolStateContract, ThreadContract,
+    WorkflowContract,
 };
 use crate::ontology::world::BackwardInvestigation;
 
@@ -363,6 +364,23 @@ pub(super) async fn get_thread_contract(
         .cloned()
         .ok_or_else(|| ApiError::not_found(format!("thread contract `{thread_id}` not found")))?;
     Ok(Json(item))
+}
+
+pub(super) async fn get_operational_neighborhood(
+    #[cfg(feature = "persistence")] State(state): State<ApiState>,
+    Path((market, kind, id)): Path<(String, String, String)>,
+) -> Result<Json<OperationalNeighborhood>, ApiError> {
+    let market = parse_case_market(&market)?;
+    let kind = OperationalObjectKind::parse(&kind)
+        .ok_or_else(|| ApiError::bad_request(format!("unsupported object kind `{kind}`")))?;
+    #[cfg(feature = "persistence")]
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
+    #[cfg(not(feature = "persistence"))]
+    let snapshot = load_contract_snapshot(market).await?;
+    let neighborhood = snapshot
+        .neighborhood(kind, &id)
+        .ok_or_else(|| ApiError::not_found(format!("object neighborhood `{kind:?}:{id}` not found")))?;
+    Ok(Json(neighborhood))
 }
 
 pub(super) async fn get_sector_flow_sidecars(
