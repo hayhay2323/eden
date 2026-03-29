@@ -18,6 +18,71 @@ fn graph_node_endpoint(market: LiveMarket, node_id: &str) -> String {
     format!("/api/ontology/{}/graph/node/{node_id}", market_slug(market))
 }
 
+pub(crate) fn object_endpoint(market: LiveMarket, path: &str) -> String {
+    format!("/api/ontology/{}/{}", market_slug(market), path)
+}
+
+pub(crate) fn symbol_contract_id(market: LiveMarket, source_tick: u64, symbol: &str) -> String {
+    format!(
+        "symbol_state:{}:{}:{}",
+        market_slug(market),
+        normalized_symbol_id(symbol),
+        source_tick
+    )
+}
+
+pub(crate) fn symbol_object_ref(
+    market: LiveMarket,
+    source_tick: u64,
+    symbol: &str,
+) -> OperationalObjectRef {
+    OperationalObjectRef {
+        id: symbol_contract_id(market, source_tick, symbol),
+        kind: OperationalObjectKind::SymbolState,
+        endpoint: object_endpoint(market, &format!("symbols/{symbol}")),
+        label: Some(symbol.into()),
+    }
+}
+
+pub(crate) fn case_object_ref(
+    market: LiveMarket,
+    case_id: &str,
+    label: Option<String>,
+) -> OperationalObjectRef {
+    OperationalObjectRef {
+        id: case_id.into(),
+        kind: OperationalObjectKind::Case,
+        endpoint: object_endpoint(market, &format!("cases/{case_id}")),
+        label,
+    }
+}
+
+pub(crate) fn recommendation_object_ref(
+    market: LiveMarket,
+    recommendation_id: &str,
+    label: Option<String>,
+) -> OperationalObjectRef {
+    OperationalObjectRef {
+        id: recommendation_id.into(),
+        kind: OperationalObjectKind::Recommendation,
+        endpoint: object_endpoint(market, &format!("recommendations/{recommendation_id}")),
+        label,
+    }
+}
+
+pub(crate) fn workflow_object_ref(
+    market: LiveMarket,
+    workflow_id: &str,
+    label: Option<String>,
+) -> OperationalObjectRef {
+    OperationalObjectRef {
+        id: workflow_id.into(),
+        kind: OperationalObjectKind::Workflow,
+        endpoint: object_endpoint(market, &format!("workflows/{workflow_id}")),
+        label,
+    }
+}
+
 fn symbol_graph_ref(market: LiveMarket, symbol: &str) -> OperationalGraphRef {
     let node_id = crate::ontology::symbol_node_id(symbol);
     OperationalGraphRef {
@@ -163,6 +228,21 @@ pub fn build_market_session_contract(
         wake_reasons: snapshot.wake.reasons.clone(),
         suggested_tools: snapshot.wake.suggested_tools.clone(),
         market_summary: narration.and_then(|item| item.market_summary_5m.clone()),
+        focus_symbol_refs: session
+            .map(|item| {
+                item.focus_symbols
+                    .iter()
+                    .map(|symbol| symbol_object_ref(snapshot.market, snapshot.tick, symbol))
+                    .collect()
+            })
+            .unwrap_or_else(|| {
+                snapshot
+                    .wake
+                    .focus_symbols
+                    .iter()
+                    .map(|symbol| symbol_object_ref(snapshot.market, snapshot.tick, symbol))
+                    .collect()
+            }),
     })
 }
 
@@ -259,6 +339,22 @@ pub fn build_operational_snapshot(
                 .filter(|(_, case_id, _, _)| case_id.as_deref() == Some(item.case_id.as_str()))
                 .map(|(rec_id, _, _, _)| rec_id.clone())
                 .collect(),
+            symbol_ref: symbol_object_ref(item.market, snapshot.tick, &item.symbol),
+            workflow_ref: item
+                .workflow_id
+                .as_deref()
+                .map(|workflow_id| workflow_object_ref(item.market, workflow_id, None)),
+            recommendation_refs: recommendation_links
+                .iter()
+                .filter(|(_, case_id, _, _)| case_id.as_deref() == Some(item.case_id.as_str()))
+                .map(|(rec_id, _, _, _)| {
+                    recommendation_object_ref(
+                        item.market,
+                        rec_id,
+                        Some(format!("{} {}", item.symbol, item.recommended_action)),
+                    )
+                })
+                .collect(),
             graph_ref: setup_graph_ref(item.market, &item.setup_id),
             history_refs: case_history_refs(
                 item.market,
@@ -286,6 +382,17 @@ pub fn build_operational_snapshot(
                 related_case_id: linkage.and_then(|(_, case_id, _, _)| case_id.clone()),
                 related_setup_id: linkage.and_then(|(_, _, setup_id, _)| setup_id.clone()),
                 related_workflow_id: linkage.and_then(|(_, _, _, workflow_id)| workflow_id.clone()),
+                symbol_ref: symbol_object_ref(snapshot.market, snapshot.tick, &item.symbol),
+                case_ref: linkage.and_then(|(_, case_id, _, _)| {
+                    case_id.as_ref().map(|case_id| {
+                        case_object_ref(snapshot.market, case_id, item.title.clone())
+                    })
+                }),
+                workflow_ref: linkage.and_then(|(_, _, _, workflow_id)| {
+                    workflow_id
+                        .as_ref()
+                        .map(|workflow_id| workflow_object_ref(snapshot.market, workflow_id, None))
+                }),
                 graph_ref: decision_graph_ref(snapshot.market, &item.recommendation_id),
                 history_refs: recommendation_history_refs(
                     snapshot.market,
@@ -414,6 +521,22 @@ pub fn rebuild_operational_case_graph(
                 .filter(|(_, case_id, _, _)| case_id.as_deref() == Some(item.case_id.as_str()))
                 .map(|(rec_id, _, _, _)| rec_id.clone())
                 .collect(),
+            symbol_ref: symbol_object_ref(item.market, snapshot.source_tick, &item.symbol),
+            workflow_ref: item
+                .workflow_id
+                .as_deref()
+                .map(|workflow_id| workflow_object_ref(item.market, workflow_id, None)),
+            recommendation_refs: recommendation_links
+                .iter()
+                .filter(|(_, case_id, _, _)| case_id.as_deref() == Some(item.case_id.as_str()))
+                .map(|(rec_id, _, _, _)| {
+                    recommendation_object_ref(
+                        item.market,
+                        rec_id,
+                        Some(format!("{} {}", item.symbol, item.recommended_action)),
+                    )
+                })
+                .collect(),
             graph_ref: setup_graph_ref(item.market, &item.setup_id),
             history_refs: case_history_refs(
                 item.market,
@@ -432,6 +555,12 @@ pub fn rebuild_operational_case_graph(
             recommendation.related_case_id = case_id.clone();
             recommendation.related_setup_id = setup_id.clone();
             recommendation.related_workflow_id = workflow_id.clone();
+            recommendation.case_ref = case_id.as_ref().map(|case_id| {
+                case_object_ref(snapshot.market, case_id, recommendation.recommendation.title.clone())
+            });
+            recommendation.workflow_ref = workflow_id.as_ref().map(|workflow_id| {
+                workflow_object_ref(snapshot.market, workflow_id, None)
+            });
             recommendation.history_refs = recommendation_history_refs(
                 snapshot.market,
                 &recommendation.id.0,

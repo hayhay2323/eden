@@ -210,9 +210,16 @@ pub(crate) fn build_workflow_contracts(
             synthetic: case.workflow_id.is_none(),
             case_ids: Vec::new(),
             recommendation_ids: Vec::new(),
+            case_refs: Vec::new(),
+            recommendation_refs: Vec::new(),
             history_refs: workflow_history_refs(market, &workflow_key),
         });
         entry.case_ids.push(case.id.0.clone());
+        entry.case_refs.push(case_object_ref(
+            market,
+            &case.id.0,
+            Some(case.title.clone()),
+        ));
     }
 
     for recommendation in recommendations {
@@ -235,9 +242,16 @@ pub(crate) fn build_workflow_contracts(
                     synthetic: true,
                     case_ids: Vec::new(),
                     recommendation_ids: Vec::new(),
+                    case_refs: Vec::new(),
+                    recommendation_refs: Vec::new(),
                     history_refs: workflow_history_refs(market, workflow_id),
                 });
             entry.recommendation_ids.push(recommendation.id.0.clone());
+            entry.recommendation_refs.push(recommendation_object_ref(
+                market,
+                &recommendation.id.0,
+                recommendation.recommendation.title.clone(),
+            ));
         }
     }
 

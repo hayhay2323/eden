@@ -45,6 +45,27 @@ pub struct OperationalGraphRef {
     pub endpoint: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationalObjectKind {
+    MarketSession,
+    SymbolState,
+    Case,
+    Recommendation,
+    MacroEvent,
+    Thread,
+    Workflow,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationalObjectRef {
+    pub id: String,
+    pub kind: OperationalObjectKind,
+    pub endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CaseHistoryRefs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -97,6 +118,8 @@ pub struct MarketSessionContract {
     pub suggested_tools: Vec<AgentSuggestedToolCall>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub market_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub focus_symbol_refs: Vec<OperationalObjectRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +179,11 @@ pub struct CaseContract {
     pub alpha_horizon: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recommendation_ids: Vec<String>,
+    pub symbol_ref: OperationalObjectRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_ref: Option<OperationalObjectRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recommendation_refs: Vec<OperationalObjectRef>,
     pub graph_ref: OperationalGraphRef,
     #[serde(default)]
     pub history_refs: CaseHistoryRefs,
@@ -175,6 +203,11 @@ pub struct RecommendationContract {
     pub related_setup_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_workflow_id: Option<String>,
+    pub symbol_ref: OperationalObjectRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_ref: Option<OperationalObjectRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_ref: Option<OperationalObjectRef>,
     pub graph_ref: OperationalGraphRef,
     pub recommendation: AgentRecommendation,
     #[serde(default)]
@@ -225,6 +258,10 @@ pub struct WorkflowContract {
     pub case_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recommendation_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub case_refs: Vec<OperationalObjectRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recommendation_refs: Vec<OperationalObjectRef>,
     #[serde(default)]
     pub history_refs: WorkflowHistoryRefs,
 }
