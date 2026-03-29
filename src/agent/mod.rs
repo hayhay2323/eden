@@ -74,8 +74,9 @@ use context::{
 use macro_events::{
     build_decision_knowledge_links, build_macro_event_candidates,
     build_macro_event_knowledge_links, build_world_monitor_macro_event_candidates,
-    knowledge_link_matches_filters, merge_macro_event_candidates, promote_macro_events,
+    merge_macro_event_candidates, promote_macro_events,
 };
+pub(crate) use macro_events::knowledge_link_matches_filters;
 pub use recommendations::build_recommendations;
 pub use tools::{execute_tool, tool_catalog};
 pub(crate) use tools::sort_suggested_tool_calls;

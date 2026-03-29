@@ -50,10 +50,11 @@ pub fn system_prompt() -> String {
         "1. Treat `watchlist` and `recommendations` as derived analyst ranking views, not canonical state.",
         "2. Start from `recommendations` or `watchlist` unless a single symbol is already clearly dominant.",
         "3. Use `notices` or `transitions_since` next if you need the freshest operational change vector.",
-        "4. Use `market_session`, `symbol_contract`, `world_state`, `backward_investigation`, and `sector_flow` for object/query drill-down.",
-        "5. Use `depth_change` or `broker_movement` only if the action still depends on confirmation.",
-        "6. Stop once you can answer: what changed, why it matters, what to watch next, and what not to do.",
-        "7. Prefer `feed` and `object_query` tools over `compat_query` tools when both can answer the question.",
+        "4. Use `market_session`, `symbol_contract`, `world_state`, `backward_investigation`, `sector_flow`, and `macro_event_contracts` for object/query drill-down.",
+        "5. Use `graph_knowledge_links` or `graph_macro_event_candidates` when you need graph-level context rather than a derived analyst view.",
+        "6. Use `depth_change` or `broker_movement` only if the action still depends on confirmation.",
+        "7. Stop once you can answer: what changed, why it matters, what to watch next, and what not to do.",
+        "8. Prefer `feed`, `object_query`, and `graph_query` tools over `compat_query` tools when both can answer the question.",
         "Do not repeat the same tool call with the same arguments.",
         "Do not invent data. Keep messages concise, market-facing, and specific.",
         "Prefer Traditional Chinese for the final message.",
@@ -147,7 +148,12 @@ pub fn initial_user_prompt(
                     "symbol_contract",
                     "world_state",
                     "backward_investigation",
-                    "sector_flow"
+                    "sector_flow",
+                    "macro_event_contracts"
+                ],
+                "graph_tools": [
+                    "graph_knowledge_links",
+                    "graph_macro_event_candidates"
                 ],
                 "microstructure_confirmation_tools": [
                     "depth_change",
@@ -167,6 +173,9 @@ pub fn initial_user_prompt(
                 "world_state",
                 "backward_investigation",
                 "sector_flow",
+                "macro_event_contracts",
+                "graph_knowledge_links",
+                "graph_macro_event_candidates",
                 "depth_change",
                 "broker_movement"
             ],

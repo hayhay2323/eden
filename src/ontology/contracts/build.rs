@@ -133,6 +133,24 @@ pub fn build_symbol_state_contract(
     })
 }
 
+pub fn build_macro_event_contracts(
+    snapshot: &AgentSnapshot,
+) -> Result<Vec<MacroEventContract>, String> {
+    let observed_at = parse_timestamp(&snapshot.timestamp)?;
+    Ok(snapshot
+        .macro_events
+        .iter()
+        .cloned()
+        .map(|event| MacroEventContract {
+            id: MacroEventContractId(event.event_id.clone()),
+            market: snapshot.market,
+            source_tick: snapshot.tick,
+            observed_at,
+            event,
+        })
+        .collect())
+}
+
 pub fn build_operational_snapshot(
     live_snapshot: &LiveSnapshot,
     snapshot: &AgentSnapshot,
@@ -222,18 +240,7 @@ pub fn build_operational_snapshot(
         })
         .collect::<Vec<_>>();
 
-    let macro_events = snapshot
-        .macro_events
-        .iter()
-        .cloned()
-        .map(|event| MacroEventContract {
-            id: MacroEventContractId(event.event_id.clone()),
-            market: snapshot.market,
-            source_tick: snapshot.tick,
-            observed_at,
-            event,
-        })
-        .collect::<Vec<_>>();
+    let macro_events = build_macro_event_contracts(snapshot)?;
 
     let threads = session
         .active_threads

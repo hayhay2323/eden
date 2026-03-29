@@ -257,6 +257,16 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             }],
         },
         AgentToolSpec {
+            name: "macro_event_contracts".into(),
+            category: AgentToolCategory::ObjectQuery,
+            route: "/api/ontology/:market/macro-events".into(),
+            method: "GET".into(),
+            description: "Returns canonical macro-event object contracts.".into(),
+            deprecated: false,
+            replacement: None,
+            args: vec![],
+        },
+        AgentToolSpec {
             name: "symbol_state".into(),
             category: AgentToolCategory::CompatQuery,
             route: "/api/agent/:market/symbol/:symbol".into(),
@@ -403,7 +413,38 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
                 "Returns promoted-from-news/event candidates before final macro-event confirmation."
                     .into(),
             deprecated: true,
-            replacement: Some("macro_events".into()),
+            replacement: Some("graph_macro_event_candidates".into()),
+            args: vec![
+                AgentToolArgSpec {
+                    name: "since_tick".into(),
+                    required: false,
+                    description: "Only return candidates newer than this tick.".into(),
+                },
+                AgentToolArgSpec {
+                    name: "limit".into(),
+                    required: false,
+                    description: "Maximum candidates to return.".into(),
+                },
+                AgentToolArgSpec {
+                    name: "symbol".into(),
+                    required: false,
+                    description: "Optional impacted symbol filter.".into(),
+                },
+                AgentToolArgSpec {
+                    name: "sector".into(),
+                    required: false,
+                    description: "Optional impacted sector filter.".into(),
+                },
+            ],
+        },
+        AgentToolSpec {
+            name: "graph_macro_event_candidates".into(),
+            category: AgentToolCategory::GraphQuery,
+            route: "/api/ontology/:market/macro-event-candidates".into(),
+            method: "GET".into(),
+            description: "Returns graph-oriented macro-event candidates before promotion.".into(),
+            deprecated: false,
+            replacement: None,
             args: vec![
                 AgentToolArgSpec {
                     name: "since_tick".into(),
@@ -436,7 +477,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
                 "Returns confirmed macro events and their routed market/sector/symbol impact."
                     .into(),
             deprecated: true,
-            replacement: Some("knowledge_links".into()),
+            replacement: Some("macro_event_contracts".into()),
             args: vec![
                 AgentToolArgSpec {
                     name: "since_tick".into(),
@@ -461,6 +502,34 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             ],
         },
         AgentToolSpec {
+            name: "graph_knowledge_links".into(),
+            category: AgentToolCategory::GraphQuery,
+            route: "/api/ontology/:market/knowledge-links".into(),
+            method: "GET".into(),
+            description:
+                "Returns graph-oriented knowledge links filtered on the current ontology snapshot."
+                    .into(),
+            deprecated: false,
+            replacement: None,
+            args: vec![
+                AgentToolArgSpec {
+                    name: "symbol".into(),
+                    required: false,
+                    description: "Optional symbol filter.".into(),
+                },
+                AgentToolArgSpec {
+                    name: "sector".into(),
+                    required: false,
+                    description: "Optional sector filter.".into(),
+                },
+                AgentToolArgSpec {
+                    name: "limit".into(),
+                    required: false,
+                    description: "Maximum links to return.".into(),
+                },
+            ],
+        },
+        AgentToolSpec {
             name: "knowledge_links".into(),
             category: AgentToolCategory::GraphQuery,
             route: "/api/agent/:market/query?tool=knowledge_links".into(),
@@ -468,8 +537,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             description:
                 "Returns explicit event-to-market/sector/symbol/decision knowledge-graph links."
                     .into(),
-            deprecated: false,
-            replacement: None,
+            deprecated: true,
+            replacement: Some("graph_knowledge_links".into()),
             args: vec![
                 AgentToolArgSpec {
                     name: "symbol".into(),
@@ -525,21 +594,24 @@ fn preferred_tool_rank(tool_name: &str) -> usize {
         "world_state" => 6,
         "backward_investigation" => 7,
         "sector_flow" => 8,
-        "depth_change" => 9,
-        "broker_movement" => 10,
-        "knowledge_links" => 11,
-        "symbol_state" => 12,
-        "invalidation_status" => 13,
-        "active_structures" => 14,
-        "structure_state" => 15,
-        "threads" => 16,
-        "turns" => 17,
-        "wake" => 18,
-        "session" => 19,
-        "alert_scoreboard" => 20,
-        "eod_review" => 21,
-        "macro_event_candidates" => 22,
-        "macro_events" => 23,
+        "macro_event_contracts" => 9,
+        "graph_knowledge_links" => 10,
+        "graph_macro_event_candidates" => 11,
+        "depth_change" => 12,
+        "broker_movement" => 13,
+        "knowledge_links" => 14,
+        "symbol_state" => 15,
+        "invalidation_status" => 16,
+        "active_structures" => 17,
+        "structure_state" => 18,
+        "threads" => 19,
+        "turns" => 20,
+        "wake" => 21,
+        "session" => 22,
+        "alert_scoreboard" => 23,
+        "eod_review" => 24,
+        "macro_event_candidates" => 25,
+        "macro_events" => 26,
         _ => 100,
     }
 }
@@ -561,11 +633,13 @@ fn tool_catalog_category(tool_name: &str) -> Option<AgentToolCategory> {
         | "eod_review" | "threads" | "turns" => Some(AgentToolCategory::DerivedView),
         "notices" | "transitions_since" => Some(AgentToolCategory::Feed),
         "market_session" | "symbol_contract" | "world_state" | "backward_investigation"
-        | "sector_flow" => {
+        | "sector_flow" | "macro_event_contracts" => {
             Some(AgentToolCategory::ObjectQuery)
         }
         "depth_change" | "broker_movement" => Some(AgentToolCategory::Microstructure),
-        "knowledge_links" => Some(AgentToolCategory::GraphQuery),
+        "knowledge_links" | "graph_knowledge_links" | "graph_macro_event_candidates" => {
+            Some(AgentToolCategory::GraphQuery)
+        }
         "active_structures" | "structure_state" | "symbol_state" | "invalidation_status"
         | "macro_event_candidates" | "macro_events" => Some(AgentToolCategory::CompatQuery),
         _ => None,
@@ -720,7 +794,7 @@ pub fn execute_tool(
             notices.truncate(limit);
             Ok(AgentToolOutput::Notices(notices))
         }
-        "macro_event_candidates" => {
+        "macro_event_candidates" | "graph_macro_event_candidates" => {
             let mut items = snapshot.macro_event_candidates.clone();
             if let Some(since_tick) = since_tick {
                 items.retain(|item| item.tick > since_tick);
@@ -744,6 +818,9 @@ pub fn execute_tool(
             items.truncate(limit);
             Ok(AgentToolOutput::MacroEventCandidates(items))
         }
+        "macro_event_contracts" => Ok(AgentToolOutput::MacroEventContracts(
+            crate::ontology::build_macro_event_contracts(snapshot)?,
+        )),
         "macro_events" => {
             let mut items = snapshot.macro_events.clone();
             if let Some(since_tick) = since_tick {
@@ -768,7 +845,7 @@ pub fn execute_tool(
             items.truncate(limit);
             Ok(AgentToolOutput::MacroEvents(items))
         }
-        "knowledge_links" => {
+        "knowledge_links" | "graph_knowledge_links" => {
             let recommendations = build_recommendations(snapshot, session);
             let mut links = snapshot.knowledge_links.clone();
             links.extend(recommendations.knowledge_links);

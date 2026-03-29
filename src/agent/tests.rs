@@ -297,6 +297,21 @@ fn tool_catalog_includes_core_queries() {
             && !item.deprecated
     }));
     assert!(catalog.iter().any(|item| {
+        item.name == "macro_event_contracts"
+            && item.category == AgentToolCategory::ObjectQuery
+            && !item.deprecated
+    }));
+    assert!(catalog.iter().any(|item| {
+        item.name == "graph_knowledge_links"
+            && item.category == AgentToolCategory::GraphQuery
+            && !item.deprecated
+    }));
+    assert!(catalog.iter().any(|item| {
+        item.name == "graph_macro_event_candidates"
+            && item.category == AgentToolCategory::GraphQuery
+            && !item.deprecated
+    }));
+    assert!(catalog.iter().any(|item| {
         item.name == "notices"
             && item.category == AgentToolCategory::Feed
             && item.route == "/api/feed/:market/notices"
@@ -310,6 +325,16 @@ fn tool_catalog_includes_core_queries() {
         item.name == "symbol_state"
             && item.deprecated
             && item.replacement.as_deref() == Some("symbol_contract")
+    }));
+    assert!(catalog.iter().any(|item| {
+        item.name == "macro_events"
+            && item.deprecated
+            && item.replacement.as_deref() == Some("macro_event_contracts")
+    }));
+    assert!(catalog.iter().any(|item| {
+        item.name == "knowledge_links"
+            && item.deprecated
+            && item.replacement.as_deref() == Some("graph_knowledge_links")
     }));
     let names = catalog.iter().map(|item| item.name.as_str()).collect::<Vec<_>>();
     assert!(names.iter().position(|item| *item == "recommendations")
@@ -537,6 +562,97 @@ fn execute_tool_reads_market_session_contract() {
             assert_eq!(item.focus_symbols, vec!["700.HK".to_string()]);
         }
         other => panic!("expected market session contract, got {other:?}"),
+    }
+}
+
+#[test]
+fn execute_tool_reads_macro_event_contracts() {
+    let snapshot = AgentSnapshot {
+        tick: 1,
+        timestamp: "2026-03-23T00:00:00Z".into(),
+        market: LiveMarket::Hk,
+        market_regime: LiveMarketRegime {
+            bias: "neutral".into(),
+            confidence: Decimal::ZERO,
+            breadth_up: Decimal::ZERO,
+            breadth_down: Decimal::ZERO,
+            average_return: Decimal::ZERO,
+            directional_consensus: None,
+            pre_market_sentiment: None,
+        },
+        stress: LiveStressSnapshot {
+            composite_stress: Decimal::ZERO,
+            sector_synchrony: None,
+            pressure_consensus: None,
+            momentum_consensus: None,
+            pressure_dispersion: None,
+            volume_anomaly: None,
+        },
+        wake: AgentWakeState {
+            should_speak: false,
+            priority: Decimal::ZERO,
+            headline: None,
+            summary: vec![],
+            focus_symbols: vec![],
+            reasons: vec![],
+            suggested_tools: vec![],
+        },
+        world_state: None,
+        backward_reasoning: None,
+        notices: vec![],
+        active_structures: vec![],
+        recent_transitions: vec![],
+        sector_flows: vec![],
+        symbols: vec![],
+        events: vec![],
+        cross_market_signals: vec![],
+        context_priors: vec![],
+        macro_event_candidates: vec![],
+        macro_events: vec![AgentMacroEvent {
+            event_id: "macro:1".into(),
+            tick: 1,
+            market: LiveMarket::Hk,
+            event_type: "policy".into(),
+            authority_level: "confirmed".into(),
+            headline: "Policy update".into(),
+            summary: "Policy update".into(),
+            confidence: dec!(0.8),
+            confirmation_state: "confirmed".into(),
+            impact: AgentEventImpact {
+                primary_scope: "market".into(),
+                secondary_scopes: vec![],
+                affected_markets: vec!["hk".into()],
+                affected_sectors: vec![],
+                affected_symbols: vec![],
+                preferred_expression: "index".into(),
+                requires_market_confirmation: false,
+                decisive_factors: vec![],
+            },
+            supporting_notice_ids: vec![],
+            promotion_reasons: vec![],
+        }],
+        knowledge_links: vec![],
+    };
+
+    let output = execute_tool(
+        &snapshot,
+        None,
+        &AgentToolRequest {
+            tool: "macro_event_contracts".into(),
+            symbol: None,
+            sector: None,
+            since_tick: None,
+            limit: None,
+        },
+    )
+    .expect("macro event contracts");
+
+    match output {
+        AgentToolOutput::MacroEventContracts(items) => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].event.event_id, "macro:1");
+        }
+        other => panic!("expected macro event contracts, got {other:?}"),
     }
 }
 

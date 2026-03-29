@@ -56,7 +56,10 @@ use super::super::ontology_history_api::{
     get_case_outcome_history, get_case_reasoning_history, get_case_workflow_history,
     get_recommendation_journal_history, get_workflow_event_history,
 };
-use super::super::ontology_query_api::get_ontology_world;
+use super::super::ontology_query_api::{
+    get_ontology_knowledge_links, get_ontology_macro_event_candidates,
+    get_ontology_macro_event_contracts_view, get_ontology_world,
+};
 use super::super::ontology_query_surface::stream_ontology_world;
 use super::auth::{audit_request, build_cors_layer, require_api_key};
 use super::health::{get_live_snapshot, get_polymarket, get_us_live_snapshot, health, health_report};
@@ -146,6 +149,18 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
             get(get_market_session_contract),
         )
         .route("/ontology/:market/world", get(get_ontology_world))
+        .route(
+            "/ontology/:market/macro-event-candidates",
+            get(get_ontology_macro_event_candidates),
+        )
+        .route(
+            "/ontology/:market/knowledge-links",
+            get(get_ontology_knowledge_links),
+        )
+        .route(
+            "/ontology/:market/macro-events/view",
+            get(get_ontology_macro_event_contracts_view),
+        )
         .route("/ontology/:market/symbols", get(get_symbol_state_contracts))
         .route("/ontology/:market/symbols/:symbol", get(get_symbol_state_contract))
         .route("/ontology/:market/cases", get(get_case_contracts))

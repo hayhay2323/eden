@@ -130,6 +130,7 @@ pub struct AgentToolRequest {
 pub enum AgentToolOutput {
     Wake(AgentWakeState),
     MarketSessionContract(crate::ontology::MarketSessionContract),
+    MacroEventContracts(Vec<crate::ontology::MacroEventContract>),
     Tools(Vec<AgentToolSpec>),
     Session(AgentSession),
     SymbolContract(crate::ontology::SymbolStateContract),
@@ -168,6 +169,10 @@ impl AgentToolOutput {
                 .clone()
                 .or_else(|| session.market_summary.clone())
                 .or_else(|| session.focus_symbols.first().cloned()),
+            Self::MacroEventContracts(items) => items
+                .first()
+                .map(|item| item.event.headline.clone())
+                .or_else(|| Some("macro events".into())),
             Self::Tools(_) => None,
             Self::Session(session) => session
                 .recent_turns
