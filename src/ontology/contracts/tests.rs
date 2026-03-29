@@ -298,6 +298,14 @@
             .expect("case neighborhood");
         assert_eq!(neighborhood.relationships.len(), 3);
         assert_eq!(neighborhood.relationships[0].name, "symbol");
+        let navigation = operational
+            .navigation(OperationalObjectKind::Case, "setup:700.HK")
+            .expect("case navigation");
+        assert_eq!(navigation.relationships.len(), neighborhood.relationships.len());
+        assert_eq!(
+            navigation.self_ref.as_ref().map(|item| item.id.as_str()),
+            Some("setup:700.HK")
+        );
     }
 
     #[test]

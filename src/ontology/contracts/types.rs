@@ -510,6 +510,33 @@ impl OperationalSnapshot {
         self.sidecars.world_state.as_ref()
     }
 
+    pub fn navigation(
+        &self,
+        kind: OperationalObjectKind,
+        id: &str,
+    ) -> Option<&OperationalNavigation> {
+        match kind {
+            OperationalObjectKind::MarketSession => self
+                .market_session
+                .id
+                .0
+                .eq_ignore_ascii_case(id)
+                .then_some(&self.market_session.navigation),
+            OperationalObjectKind::SymbolState => self
+                .symbols
+                .iter()
+                .find(|item| item.id.0.eq_ignore_ascii_case(id) || item.symbol.eq_ignore_ascii_case(id))
+                .map(|item| &item.navigation),
+            OperationalObjectKind::Case => self.case(id).map(|item| &item.navigation),
+            OperationalObjectKind::Recommendation => {
+                self.recommendation(id).map(|item| &item.navigation)
+            }
+            OperationalObjectKind::MacroEvent => self.macro_event(id).map(|item| &item.navigation),
+            OperationalObjectKind::Thread => self.thread(id).map(|item| &item.navigation),
+            OperationalObjectKind::Workflow => self.workflow(id).map(|item| &item.navigation),
+        }
+    }
+
     pub fn resolve_object_ref(&self, object_ref: &OperationalObjectRef) -> Option<OperationalObjectRef> {
         match object_ref.kind {
             OperationalObjectKind::MarketSession => Some(self.market_session_ref()),
@@ -581,150 +608,25 @@ impl OperationalSnapshot {
         kind: OperationalObjectKind,
         id: &str,
     ) -> Option<OperationalNeighborhood> {
-        match kind {
-            OperationalObjectKind::MarketSession => Some(OperationalNeighborhood {
-                root: self.market_session_ref(),
-                relationships: vec![OperationalRelationshipGroup {
-                    name: "focus_symbols".into(),
-                    refs: self.market_session.relationships.focus_symbols.clone(),
-                }],
-                graph_ref: None,
-                history_refs: vec![],
-            }),
-            OperationalObjectKind::SymbolState => {
-                let item = self
-                    .symbols
-                    .iter()
-                    .find(|item| item.id.0.eq_ignore_ascii_case(id) || item.symbol.eq_ignore_ascii_case(id))?;
-                Some(OperationalNeighborhood {
-                    root: OperationalObjectRef {
-                        id: item.id.0.clone(),
-                        kind,
-                        endpoint: format!("/api/ontology/{}/symbols/{}", market_slug(self.market), item.symbol),
-                        label: Some(item.symbol.clone()),
-                    },
-                    relationships: vec![
-                        OperationalRelationshipGroup {
-                            name: "cases".into(),
-                            refs: item.relationships.cases.clone(),
-                        },
-                        OperationalRelationshipGroup {
-                            name: "recommendations".into(),
-                            refs: item.relationships.recommendations.clone(),
-                        },
-                        OperationalRelationshipGroup {
-                            name: "macro_events".into(),
-                            refs: item.relationships.macro_events.clone(),
-                        },
-                    ],
-                    graph_ref: Some(item.graph_ref.clone()),
-                    history_refs: vec![],
+        let navigation = self.navigation(kind, id)?.clone();
+        let root = navigation
+            .self_ref
+            .clone()
+            .or_else(|| {
+                self.resolve_object_ref(&OperationalObjectRef {
+                    id: id.into(),
+                    kind,
+                    endpoint: String::new(),
+                    label: None,
                 })
-            }
-            OperationalObjectKind::Case => {
-                let item = self.case(id)?;
-                Some(OperationalNeighborhood {
-                    root: case_self_ref(self.market, item),
-                    relationships: vec![
-                        OperationalRelationshipGroup {
-                            name: "symbol".into(),
-                            refs: vec![item.relationships.symbol.clone()],
-                        },
-                        OperationalRelationshipGroup {
-                            name: "workflow".into(),
-                            refs: item
-                                .relationships
-                                .workflow
-                                .clone()
-                                .into_iter()
-                                .collect(),
-                        },
-                        OperationalRelationshipGroup {
-                            name: "recommendations".into(),
-                            refs: item.relationships.recommendations.clone(),
-                        },
-                    ],
-                    graph_ref: Some(item.graph_ref.clone()),
-                    history_refs: collect_case_history_refs(item),
-                })
-            }
-            OperationalObjectKind::Recommendation => {
-                let item = self.recommendation(id)?;
-                Some(OperationalNeighborhood {
-                    root: recommendation_self_ref(self.market, item),
-                    relationships: vec![
-                        OperationalRelationshipGroup {
-                            name: "symbol".into(),
-                            refs: vec![item.relationships.symbol.clone()],
-                        },
-                        OperationalRelationshipGroup {
-                            name: "case".into(),
-                            refs: item.relationships.case.clone().into_iter().collect(),
-                        },
-                        OperationalRelationshipGroup {
-                            name: "workflow".into(),
-                            refs: item.relationships.workflow.clone().into_iter().collect(),
-                        },
-                    ],
-                    graph_ref: Some(item.graph_ref.clone()),
-                    history_refs: collect_recommendation_history_refs(item),
-                })
-            }
-            OperationalObjectKind::MacroEvent => {
-                let item = self.macro_event(id)?;
-                Some(OperationalNeighborhood {
-                    root: macro_event_self_ref(self.market, item),
-                    relationships: vec![
-                        OperationalRelationshipGroup {
-                            name: "symbols".into(),
-                            refs: item.relationships.symbols.clone(),
-                        },
-                        OperationalRelationshipGroup {
-                            name: "cases".into(),
-                            refs: item.relationships.cases.clone(),
-                        },
-                        OperationalRelationshipGroup {
-                            name: "recommendations".into(),
-                            refs: item.relationships.recommendations.clone(),
-                        },
-                    ],
-                    graph_ref: Some(item.graph_ref.clone()),
-                    history_refs: vec![],
-                })
-            }
-            OperationalObjectKind::Thread => {
-                let item = self.thread(id)?;
-                Some(OperationalNeighborhood {
-                    root: OperationalObjectRef {
-                        id: item.id.0.clone(),
-                        kind,
-                        endpoint: format!("/api/ontology/{}/threads/{}", market_slug(self.market), item.id.0),
-                        label: item.thread.title.clone().or_else(|| Some(item.thread.symbol.clone())),
-                    },
-                    relationships: vec![],
-                    graph_ref: None,
-                    history_refs: vec![],
-                })
-            }
-            OperationalObjectKind::Workflow => {
-                let item = self.workflow(id)?;
-                Some(OperationalNeighborhood {
-                    root: workflow_self_ref(self.market, item),
-                    relationships: vec![
-                        OperationalRelationshipGroup {
-                            name: "cases".into(),
-                            refs: item.relationships.cases.clone(),
-                        },
-                        OperationalRelationshipGroup {
-                            name: "recommendations".into(),
-                            refs: item.relationships.recommendations.clone(),
-                        },
-                    ],
-                    graph_ref: None,
-                    history_refs: collect_workflow_history_refs(item),
-                })
-            }
-        }
+            })?;
+
+        Some(OperationalNeighborhood {
+            root,
+            relationships: navigation.relationships,
+            graph_ref: navigation.graph,
+            history_refs: navigation.history,
+        })
     }
 }
 
