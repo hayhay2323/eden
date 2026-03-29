@@ -219,6 +219,7 @@ impl BrainGraph {
         }
 
         // 4. Add institution→stock edges from InstitutionActivity
+        let knowledge = store.knowledge.read().unwrap();
         for act in &links.institution_activities {
             if let (Some(&inst_idx), Some(&stock_idx)) = (
                 institution_nodes.get(&act.institution_id),
@@ -227,6 +228,14 @@ impl BrainGraph {
                 let bid = Decimal::from(act.bid_positions.len() as i64);
                 let ask = Decimal::from(act.ask_positions.len() as i64);
                 let direction = normalized_ratio(bid, ask);
+                let history_bonus = knowledge.institution_history_bonus(
+                    &act.institution_id,
+                    &act.symbol,
+                );
+                let base_confidence = direction.abs();
+                let adjusted_confidence = crate::math::clamp_unit_interval(
+                    base_confidence + history_bonus,
+                );
                 graph.add_edge(
                     inst_idx,
                     stock_idx,
@@ -236,7 +245,7 @@ impl BrainGraph {
                         timestamp: links.timestamp,
                         provenance: computed_edge_provenance(
                             links.timestamp,
-                            direction.abs(),
+                            adjusted_confidence,
                             [
                                 format!("institution_activity:{}", act.symbol),
                                 format!("institution:{}", act.institution_id),
@@ -246,6 +255,7 @@ impl BrainGraph {
                 );
             }
         }
+        drop(knowledge);
 
         // 5. Add stock↔stock edges (cosine similarity, filtered by median)
         let stock_syms: Vec<Symbol> = stock_nodes.keys().cloned().collect();
