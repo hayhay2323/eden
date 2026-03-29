@@ -333,7 +333,10 @@
                 reasons: vec![],
                 suggested_tools: vec![],
             },
-            world_state: None,
+            world_state: Some(WorldStateSnapshot {
+                timestamp: OffsetDateTime::UNIX_EPOCH,
+                entities: vec![],
+            }),
             backward_reasoning: Some(BackwardReasoningSnapshot {
                 timestamp: OffsetDateTime::UNIX_EPOCH,
                 investigations: vec![BackwardInvestigation {
@@ -381,9 +384,41 @@
             events: vec![],
             cross_market_signals: vec![],
             context_priors: vec![],
-            macro_event_candidates: vec![],
+            macro_event_candidates: vec![crate::ontology::AgentMacroEventCandidate {
+                candidate_id: "candidate:1".into(),
+                tick: 9,
+                market: LiveMarket::Hk,
+                source_kind: "news".into(),
+                source_name: "wire".into(),
+                event_type: "policy".into(),
+                authority_level: "rumor".into(),
+                headline: "Policy rumor".into(),
+                summary: "Policy rumor".into(),
+                confidence: Decimal::ZERO,
+                novelty_score: Decimal::ZERO,
+                jurisdictions: vec![],
+                entities: vec![],
+                impact: crate::ontology::AgentEventImpact {
+                    primary_scope: "market".into(),
+                    secondary_scopes: vec![],
+                    affected_markets: vec!["hk".into()],
+                    affected_sectors: vec![],
+                    affected_symbols: vec!["700.HK".into()],
+                    preferred_expression: "index".into(),
+                    requires_market_confirmation: true,
+                    decisive_factors: vec![],
+                },
+            }],
             macro_events: vec![],
-            knowledge_links: vec![],
+            knowledge_links: vec![crate::ontology::AgentKnowledgeLink {
+                link_id: "link:1".into(),
+                relation: crate::ontology::KnowledgeRelation::ImpactsSymbol,
+                source: crate::ontology::macro_event_knowledge_node_ref("macro:1", "headline"),
+                target: crate::ontology::symbol_knowledge_node_ref("700.HK"),
+                confidence: Decimal::ZERO,
+                attributes: crate::ontology::KnowledgeLinkAttributes::Generic,
+                rationale: None,
+            }],
         };
         let session = AgentSession {
             tick: 9,
@@ -413,4 +448,7 @@
 
         assert!(operational.sector_flow("technology").is_some());
         assert!(operational.backward_investigation("700.hk").is_some());
+        assert!(operational.world_state().is_some());
+        assert_eq!(operational.sidecars.macro_event_candidates.len(), 1);
+        assert_eq!(operational.sidecars.knowledge_links.len(), 1);
     }

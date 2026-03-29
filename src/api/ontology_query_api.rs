@@ -1,45 +1,59 @@
 use axum::extract::{Path, Query};
+#[cfg(feature = "persistence")]
+use axum::extract::State;
 use axum::Json;
 
-use crate::agent;
-use crate::ontology::{
-    build_macro_event_contracts, world::WorldStateSnapshot, AgentKnowledgeLink,
-    AgentMacroEventCandidate, MacroEventContract,
-};
+use crate::ontology::{world::WorldStateSnapshot, AgentKnowledgeLink, AgentMacroEventCandidate};
 
 use super::agent_api::AgentFeedQuery;
 use super::core::{bounded, normalized_query_value, parse_case_market};
 use super::constants::{DEFAULT_LIMIT, MAX_LIMIT};
+#[cfg(feature = "persistence")]
+use super::foundation::ApiState;
 use super::foundation::ApiError;
+use super::ontology_api::load_contract_snapshot;
+#[cfg(feature = "persistence")]
+use super::ontology_api::load_enriched_contract_snapshot;
 
 pub(in crate::api) async fn load_world_state_for_market(
     raw_market: &str,
 ) -> Result<WorldStateSnapshot, ApiError> {
     let market = parse_case_market(raw_market)?;
-    let snapshot = agent::load_snapshot(market)
-        .await
-        .map_err(|error| ApiError::internal(format!("failed to load agent snapshot: {error}")))?;
+    let snapshot = load_contract_snapshot(market).await?;
     snapshot
-        .world_state
+        .world_state()
+        .cloned()
         .ok_or_else(|| ApiError::not_found("world state not available for this market"))
 }
 
 pub(super) async fn get_ontology_world(
+    #[cfg(feature = "persistence")] State(state): State<ApiState>,
     Path(market): Path<String>,
 ) -> Result<Json<WorldStateSnapshot>, ApiError> {
-    Ok(Json(load_world_state_for_market(&market).await?))
+    let market = parse_case_market(&market)?;
+    #[cfg(feature = "persistence")]
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
+    #[cfg(not(feature = "persistence"))]
+    let snapshot = load_contract_snapshot(market).await?;
+    snapshot
+        .world_state()
+        .cloned()
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("world state not available for this market"))
 }
 
 pub(super) async fn get_ontology_macro_event_candidates(
+    #[cfg(feature = "persistence")] State(state): State<ApiState>,
     Path(market): Path<String>,
     Query(query): Query<AgentFeedQuery>,
 ) -> Result<Json<Vec<AgentMacroEventCandidate>>, ApiError> {
     let market = parse_case_market(&market)?;
     let limit = bounded(query.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?;
-    let snapshot = agent::load_snapshot(market)
-        .await
-        .map_err(|error| ApiError::internal(format!("failed to load agent snapshot: {error}")))?;
-    let mut items = snapshot.macro_event_candidates.clone();
+    #[cfg(feature = "persistence")]
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
+    #[cfg(not(feature = "persistence"))]
+    let snapshot = load_contract_snapshot(market).await?;
+    let mut items = snapshot.sidecars.macro_event_candidates;
     if let Some(since_tick) = query.since_tick {
         items.retain(|item| item.tick > since_tick);
     }
@@ -63,31 +77,18 @@ pub(super) async fn get_ontology_macro_event_candidates(
     Ok(Json(items))
 }
 
-pub(super) async fn get_ontology_macro_event_contracts_view(
-    Path(market): Path<String>,
-) -> Result<Json<Vec<MacroEventContract>>, ApiError> {
-    let market = parse_case_market(&market)?;
-    let snapshot = agent::load_snapshot(market)
-        .await
-        .map_err(|error| ApiError::internal(format!("failed to load agent snapshot: {error}")))?;
-    Ok(Json(
-        build_macro_event_contracts(&snapshot).map_err(ApiError::internal)?,
-    ))
-}
-
 pub(super) async fn get_ontology_knowledge_links(
+    #[cfg(feature = "persistence")] State(state): State<ApiState>,
     Path(market): Path<String>,
     Query(query): Query<AgentFeedQuery>,
 ) -> Result<Json<Vec<AgentKnowledgeLink>>, ApiError> {
     let market = parse_case_market(&market)?;
     let limit = bounded(query.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?;
-    let snapshot = agent::load_snapshot(market)
-        .await
-        .map_err(|error| ApiError::internal(format!("failed to load agent snapshot: {error}")))?;
-    let session = agent::load_session(market).await.ok();
-    let recommendations = agent::build_recommendations(&snapshot, session.as_ref());
-    let mut links = snapshot.knowledge_links.clone();
-    links.extend(recommendations.knowledge_links);
+    #[cfg(feature = "persistence")]
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
+    #[cfg(not(feature = "persistence"))]
+    let snapshot = load_contract_snapshot(market).await?;
+    let mut links = snapshot.sidecars.knowledge_links;
     if let Some(symbol) = normalized_query_value(query.symbol.as_deref()) {
         links.retain(|item| crate::agent::knowledge_link_matches_filters(item, Some(symbol), None));
     }

@@ -1,5 +1,19 @@
 use super::*;
 
+fn combined_knowledge_links(
+    snapshot: &AgentSnapshot,
+    recommendations: &AgentRecommendations,
+) -> Vec<AgentKnowledgeLink> {
+    let mut seen = std::collections::HashSet::new();
+    snapshot
+        .knowledge_links
+        .iter()
+        .cloned()
+        .chain(recommendations.knowledge_links.iter().cloned())
+        .filter(|item| seen.insert(item.link_id.to_ascii_lowercase()))
+        .collect()
+}
+
 pub(crate) fn operational_history_ref(
     key: impl Into<String>,
     endpoint: impl Into<String>,
@@ -273,6 +287,9 @@ pub fn build_operational_snapshot(
             .as_ref()
             .map(|item| item.investigations.clone())
             .unwrap_or_default(),
+        world_state: snapshot.world_state.clone(),
+        macro_event_candidates: snapshot.macro_event_candidates.clone(),
+        knowledge_links: combined_knowledge_links(snapshot, recommendations),
     };
 
     Ok(OperationalSnapshot {

@@ -58,7 +58,7 @@ use super::super::ontology_history_api::{
 };
 use super::super::ontology_query_api::{
     get_ontology_knowledge_links, get_ontology_macro_event_candidates,
-    get_ontology_macro_event_contracts_view, get_ontology_world,
+    get_ontology_world,
 };
 use super::super::ontology_query_surface::stream_ontology_world;
 use super::auth::{audit_request, build_cors_layer, require_api_key};
@@ -156,10 +156,6 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
         .route(
             "/ontology/:market/knowledge-links",
             get(get_ontology_knowledge_links),
-        )
-        .route(
-            "/ontology/:market/macro-events/view",
-            get(get_ontology_macro_event_contracts_view),
         )
         .route("/ontology/:market/symbols", get(get_symbol_state_contracts))
         .route("/ontology/:market/symbols/:symbol", get(get_symbol_state_contract))

@@ -224,6 +224,12 @@ pub struct OperationalSidecars {
     pub sector_flows: Vec<AgentSectorFlow>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub backward_investigations: Vec<BackwardInvestigation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub world_state: Option<WorldStateSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub macro_event_candidates: Vec<AgentMacroEventCandidate>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub knowledge_links: Vec<AgentKnowledgeLink>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -318,6 +324,10 @@ impl OperationalSnapshot {
                 }
                 _ => false,
             })
+    }
+
+    pub fn world_state(&self) -> Option<&WorldStateSnapshot> {
+        self.sidecars.world_state.as_ref()
     }
 }
 
