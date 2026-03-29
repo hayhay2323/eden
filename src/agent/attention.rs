@@ -374,6 +374,12 @@ pub(crate) fn build_wake_state(
     let mut suggested_tools = Vec::new();
     if should_speak {
         suggested_tools.push(AgentSuggestedToolCall {
+            tool: "market_session".into(),
+            args: json!({}),
+            reason: "Start from the canonical market session object before derived analyst views."
+                .into(),
+        });
+        suggested_tools.push(AgentSuggestedToolCall {
             tool: "watchlist".into(),
             args: json!({ "limit": 5 }),
             reason: "Start with the ranked watchlist instead of flattening every transition."
