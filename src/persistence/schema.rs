@@ -1,0 +1,750 @@
+/// SurrealDB schema migration definitions for Eden.
+///
+/// Keep migrations append-only. New schema changes should add a new migration
+/// instead of rewriting older migration steps.
+pub const SCHEMA_VERSION_TABLE: &str = r#"
+DEFINE TABLE IF NOT EXISTS schema_migration_state SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS version ON schema_migration_state TYPE int;
+DEFINE FIELD IF NOT EXISTS name ON schema_migration_state TYPE string;
+DEFINE FIELD IF NOT EXISTS updated_at ON schema_migration_state TYPE string;
+"#;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SchemaMigration {
+    pub version: u32,
+    pub name: &'static str,
+    pub statements: &'static str,
+}
+
+const MIGRATION_001: &str = r#"
+-- Tick records: one per pipeline cycle
+DEFINE TABLE tick_record SCHEMAFULL;
+DEFINE FIELD tick_number ON tick_record TYPE int;
+DEFINE FIELD timestamp ON tick_record TYPE datetime;
+DEFINE FIELD signals ON tick_record TYPE object;
+DEFINE FIELD observations ON tick_record TYPE array;
+DEFINE FIELD events ON tick_record TYPE array;
+DEFINE FIELD derived_signals ON tick_record TYPE array;
+DEFINE FIELD action_workflows ON tick_record TYPE array;
+DEFINE FIELD polymarket_priors ON tick_record TYPE array;
+DEFINE FIELD hypotheses ON tick_record TYPE array;
+DEFINE FIELD propagation_paths ON tick_record TYPE array;
+DEFINE FIELD tactical_setups ON tick_record TYPE array;
+DEFINE FIELD hypothesis_tracks ON tick_record TYPE array;
+DEFINE FIELD case_clusters ON tick_record TYPE array;
+DEFINE FIELD world_state ON tick_record TYPE object;
+DEFINE FIELD backward_reasoning ON tick_record TYPE object;
+DEFINE INDEX idx_tick_number ON tick_record FIELDS tick_number UNIQUE;
+DEFINE INDEX idx_timestamp ON tick_record FIELDS timestamp;
+
+-- US tick records: one per US pipeline cycle
+DEFINE TABLE us_tick_record SCHEMAFULL;
+DEFINE FIELD tick_number ON us_tick_record TYPE int;
+DEFINE FIELD timestamp ON us_tick_record TYPE datetime;
+DEFINE FIELD signals ON us_tick_record TYPE object;
+DEFINE FIELD cross_market_signals ON us_tick_record TYPE array;
+DEFINE FIELD events ON us_tick_record TYPE array;
+DEFINE FIELD derived_signals ON us_tick_record TYPE array;
+DEFINE FIELD hypotheses ON us_tick_record TYPE array;
+DEFINE FIELD tactical_setups ON us_tick_record TYPE array;
+DEFINE FIELD market_regime ON us_tick_record TYPE string;
+DEFINE INDEX idx_us_tick_number ON us_tick_record FIELDS tick_number UNIQUE;
+DEFINE INDEX idx_us_tick_timestamp ON us_tick_record FIELDS timestamp;
+
+-- Institution state: tracks institution behavior over time
+DEFINE TABLE institution_state SCHEMAFULL;
+DEFINE FIELD institution_id ON institution_state TYPE int;
+DEFINE FIELD timestamp ON institution_state TYPE datetime;
+DEFINE FIELD symbols ON institution_state TYPE array;
+DEFINE FIELD ask_symbols ON institution_state TYPE array;
+DEFINE FIELD bid_symbols ON institution_state TYPE array;
+DEFINE FIELD seat_count ON institution_state TYPE int;
+DEFINE INDEX idx_inst_time ON institution_state FIELDS institution_id, timestamp;
+
+-- Daily summary: aggregated per symbol per day
+DEFINE TABLE daily_summary SCHEMAFULL;
+DEFINE FIELD symbol ON daily_summary TYPE string;
+DEFINE FIELD date ON daily_summary TYPE string;
+DEFINE FIELD tick_count ON daily_summary TYPE int;
+DEFINE FIELD avg_composite ON daily_summary TYPE string;
+DEFINE FIELD max_composite ON daily_summary TYPE string;
+DEFINE FIELD min_composite ON daily_summary TYPE string;
+DEFINE FIELD avg_inst_alignment ON daily_summary TYPE string;
+DEFINE INDEX idx_sym_date ON daily_summary FIELDS symbol, date UNIQUE;
+
+-- Action workflow: type-safe suggested -> confirm -> execute -> monitor -> review flow
+DEFINE TABLE action_workflow SCHEMAFULL;
+DEFINE FIELD workflow_id ON action_workflow TYPE string;
+DEFINE FIELD title ON action_workflow TYPE string;
+DEFINE FIELD payload ON action_workflow TYPE object;
+DEFINE FIELD current_stage ON action_workflow TYPE string;
+DEFINE FIELD recorded_at ON action_workflow TYPE datetime;
+DEFINE FIELD actor ON action_workflow TYPE option<string>;
+DEFINE FIELD owner ON action_workflow TYPE option<string>;
+DEFINE FIELD reviewer ON action_workflow TYPE option<string>;
+DEFINE FIELD queue_pin ON action_workflow TYPE option<string>;
+DEFINE FIELD note ON action_workflow TYPE option<string>;
+DEFINE INDEX idx_action_workflow_id ON action_workflow FIELDS workflow_id UNIQUE;
+
+DEFINE TABLE action_workflow_event SCHEMAFULL;
+DEFINE FIELD event_id ON action_workflow_event TYPE string;
+DEFINE FIELD workflow_id ON action_workflow_event TYPE string;
+DEFINE FIELD title ON action_workflow_event TYPE string;
+DEFINE FIELD payload ON action_workflow_event TYPE object;
+DEFINE FIELD from_stage ON action_workflow_event TYPE option<string>;
+DEFINE FIELD to_stage ON action_workflow_event TYPE string;
+DEFINE FIELD recorded_at ON action_workflow_event TYPE datetime;
+DEFINE FIELD actor ON action_workflow_event TYPE option<string>;
+DEFINE FIELD owner ON action_workflow_event TYPE option<string>;
+DEFINE FIELD reviewer ON action_workflow_event TYPE option<string>;
+DEFINE FIELD queue_pin ON action_workflow_event TYPE option<string>;
+DEFINE FIELD note ON action_workflow_event TYPE option<string>;
+DEFINE INDEX idx_action_workflow_event_id ON action_workflow_event FIELDS event_id UNIQUE;
+DEFINE INDEX idx_action_workflow_event_time ON action_workflow_event FIELDS workflow_id, recorded_at;
+
+-- Tactical setup: latest known ranked case view
+DEFINE TABLE tactical_setup SCHEMAFULL;
+DEFINE FIELD setup_id ON tactical_setup TYPE string;
+DEFINE FIELD hypothesis_id ON tactical_setup TYPE string;
+DEFINE FIELD runner_up_hypothesis_id ON tactical_setup TYPE option<string>;
+DEFINE FIELD scope_key ON tactical_setup TYPE string;
+DEFINE FIELD title ON tactical_setup TYPE string;
+DEFINE FIELD action ON tactical_setup TYPE string;
+DEFINE FIELD time_horizon ON tactical_setup TYPE string;
+DEFINE FIELD confidence ON tactical_setup TYPE string;
+DEFINE FIELD confidence_gap ON tactical_setup TYPE string;
+DEFINE FIELD heuristic_edge ON tactical_setup TYPE string;
+DEFINE FIELD workflow_id ON tactical_setup TYPE option<string>;
+DEFINE FIELD entry_rationale ON tactical_setup TYPE string;
+DEFINE FIELD risk_notes ON tactical_setup TYPE array;
+DEFINE FIELD based_on ON tactical_setup TYPE array;
+DEFINE FIELD blocked_by ON tactical_setup TYPE array;
+DEFINE FIELD promoted_by ON tactical_setup TYPE array;
+DEFINE FIELD falsified_by ON tactical_setup TYPE array;
+DEFINE FIELD recorded_at ON tactical_setup TYPE datetime;
+DEFINE INDEX idx_tactical_setup_id ON tactical_setup FIELDS setup_id UNIQUE;
+DEFINE INDEX idx_tactical_setup_rank ON tactical_setup FIELDS action, recorded_at;
+
+-- Reasoning assessment: durable semantics profile per case observation or workflow update
+DEFINE TABLE case_reasoning_assessment SCHEMAFULL;
+DEFINE FIELD assessment_id ON case_reasoning_assessment TYPE string;
+DEFINE FIELD setup_id ON case_reasoning_assessment TYPE string;
+DEFINE FIELD workflow_id ON case_reasoning_assessment TYPE option<string>;
+DEFINE FIELD market ON case_reasoning_assessment TYPE string;
+DEFINE FIELD symbol ON case_reasoning_assessment TYPE string;
+DEFINE FIELD title ON case_reasoning_assessment TYPE string;
+DEFINE FIELD sector ON case_reasoning_assessment TYPE option<string>;
+DEFINE FIELD recommended_action ON case_reasoning_assessment TYPE string;
+DEFINE FIELD workflow_state ON case_reasoning_assessment TYPE string;
+DEFINE FIELD market_regime_bias ON case_reasoning_assessment TYPE option<string>;
+DEFINE FIELD market_regime_confidence ON case_reasoning_assessment TYPE option<string>;
+DEFINE FIELD market_breadth_delta ON case_reasoning_assessment TYPE option<string>;
+DEFINE FIELD market_average_return ON case_reasoning_assessment TYPE option<string>;
+DEFINE FIELD market_directional_consensus ON case_reasoning_assessment TYPE option<string>;
+DEFINE FIELD source ON case_reasoning_assessment TYPE string;
+DEFINE FIELD recorded_at ON case_reasoning_assessment TYPE datetime;
+DEFINE FIELD owner ON case_reasoning_assessment TYPE option<string>;
+DEFINE FIELD reviewer ON case_reasoning_assessment TYPE option<string>;
+DEFINE FIELD actor ON case_reasoning_assessment TYPE option<string>;
+DEFINE FIELD note ON case_reasoning_assessment TYPE option<string>;
+DEFINE FIELD law_kinds ON case_reasoning_assessment TYPE array;
+DEFINE FIELD predicate_kinds ON case_reasoning_assessment TYPE array;
+DEFINE FIELD composite_state_kinds ON case_reasoning_assessment TYPE array;
+DEFINE FIELD primary_mechanism_kind ON case_reasoning_assessment TYPE option<string>;
+DEFINE FIELD primary_mechanism_score ON case_reasoning_assessment TYPE option<string>;
+DEFINE FIELD competing_mechanism_kinds ON case_reasoning_assessment TYPE array;
+DEFINE FIELD invalidation_rules ON case_reasoning_assessment TYPE array;
+DEFINE FIELD reasoning_profile ON case_reasoning_assessment TYPE object;
+DEFINE INDEX idx_case_reasoning_assessment_id ON case_reasoning_assessment FIELDS assessment_id UNIQUE;
+DEFINE INDEX idx_case_reasoning_assessment_time ON case_reasoning_assessment FIELDS setup_id, recorded_at;
+DEFINE INDEX idx_case_reasoning_assessment_mechanism ON case_reasoning_assessment FIELDS primary_mechanism_kind, recorded_at;
+
+-- Case realized outcome: latest resolved per-case outcome snapshot
+DEFINE TABLE case_realized_outcome SCHEMAFULL;
+DEFINE FIELD setup_id ON case_realized_outcome TYPE string;
+DEFINE FIELD workflow_id ON case_realized_outcome TYPE option<string>;
+DEFINE FIELD market ON case_realized_outcome TYPE string;
+DEFINE FIELD symbol ON case_realized_outcome TYPE option<string>;
+DEFINE FIELD family ON case_realized_outcome TYPE string;
+DEFINE FIELD session ON case_realized_outcome TYPE string;
+DEFINE FIELD market_regime ON case_realized_outcome TYPE string;
+DEFINE FIELD entry_tick ON case_realized_outcome TYPE int;
+DEFINE FIELD entry_timestamp ON case_realized_outcome TYPE datetime;
+DEFINE FIELD resolved_tick ON case_realized_outcome TYPE int;
+DEFINE FIELD resolved_at ON case_realized_outcome TYPE datetime;
+DEFINE FIELD direction ON case_realized_outcome TYPE int;
+DEFINE FIELD return_pct ON case_realized_outcome TYPE string;
+DEFINE FIELD net_return ON case_realized_outcome TYPE string;
+DEFINE FIELD max_favorable_excursion ON case_realized_outcome TYPE string;
+DEFINE FIELD max_adverse_excursion ON case_realized_outcome TYPE string;
+DEFINE FIELD followed_through ON case_realized_outcome TYPE bool;
+DEFINE FIELD invalidated ON case_realized_outcome TYPE bool;
+DEFINE FIELD structure_retained ON case_realized_outcome TYPE bool;
+DEFINE FIELD convergence_score ON case_realized_outcome TYPE string;
+DEFINE INDEX idx_case_realized_outcome_id ON case_realized_outcome FIELDS setup_id UNIQUE;
+DEFINE INDEX idx_case_realized_outcome_market ON case_realized_outcome FIELDS market, resolved_at;
+
+-- Hypothesis track: latest cross-tick view of a tactical case
+DEFINE TABLE hypothesis_track SCHEMAFULL;
+DEFINE FIELD track_id ON hypothesis_track TYPE string;
+DEFINE FIELD setup_id ON hypothesis_track TYPE string;
+DEFINE FIELD hypothesis_id ON hypothesis_track TYPE string;
+DEFINE FIELD runner_up_hypothesis_id ON hypothesis_track TYPE option<string>;
+DEFINE FIELD scope_key ON hypothesis_track TYPE string;
+DEFINE FIELD title ON hypothesis_track TYPE string;
+DEFINE FIELD action ON hypothesis_track TYPE string;
+DEFINE FIELD status ON hypothesis_track TYPE string;
+DEFINE FIELD age_ticks ON hypothesis_track TYPE int;
+DEFINE FIELD status_streak ON hypothesis_track TYPE int;
+DEFINE FIELD confidence ON hypothesis_track TYPE string;
+DEFINE FIELD previous_confidence ON hypothesis_track TYPE option<string>;
+DEFINE FIELD confidence_change ON hypothesis_track TYPE string;
+DEFINE FIELD confidence_gap ON hypothesis_track TYPE string;
+DEFINE FIELD previous_confidence_gap ON hypothesis_track TYPE option<string>;
+DEFINE FIELD confidence_gap_change ON hypothesis_track TYPE string;
+DEFINE FIELD heuristic_edge ON hypothesis_track TYPE string;
+DEFINE FIELD policy_reason ON hypothesis_track TYPE string;
+DEFINE FIELD transition_reason ON hypothesis_track TYPE option<string>;
+DEFINE FIELD first_seen_at ON hypothesis_track TYPE datetime;
+DEFINE FIELD last_updated_at ON hypothesis_track TYPE datetime;
+DEFINE FIELD invalidated_at ON hypothesis_track TYPE option<datetime>;
+DEFINE INDEX idx_hypothesis_track_id ON hypothesis_track FIELDS track_id UNIQUE;
+DEFINE INDEX idx_hypothesis_track_status ON hypothesis_track FIELDS status, last_updated_at;
+
+-- Lineage evaluation snapshot: persisted leaderboard view for historical review
+DEFINE TABLE lineage_snapshot SCHEMAFULL;
+DEFINE FIELD snapshot_id ON lineage_snapshot TYPE string;
+DEFINE FIELD tick_number ON lineage_snapshot TYPE int;
+DEFINE FIELD recorded_at ON lineage_snapshot TYPE datetime;
+DEFINE FIELD window_size ON lineage_snapshot TYPE int;
+DEFINE FIELD stats ON lineage_snapshot TYPE object;
+DEFINE INDEX idx_lineage_snapshot_id ON lineage_snapshot FIELDS snapshot_id UNIQUE;
+DEFINE INDEX idx_lineage_snapshot_time ON lineage_snapshot FIELDS recorded_at, tick_number;
+
+-- Flattened lineage metric rows for faster filtered queries and dashboards
+DEFINE TABLE lineage_metric_row SCHEMAFULL;
+DEFINE FIELD row_id ON lineage_metric_row TYPE string;
+DEFINE FIELD snapshot_id ON lineage_metric_row TYPE string;
+DEFINE FIELD tick_number ON lineage_metric_row TYPE int;
+DEFINE FIELD recorded_at ON lineage_metric_row TYPE datetime;
+DEFINE FIELD window_size ON lineage_metric_row TYPE int;
+DEFINE FIELD bucket ON lineage_metric_row TYPE string;
+DEFINE FIELD rank ON lineage_metric_row TYPE int;
+DEFINE FIELD label ON lineage_metric_row TYPE string;
+DEFINE FIELD family ON lineage_metric_row TYPE option<string>;
+DEFINE FIELD session ON lineage_metric_row TYPE option<string>;
+DEFINE FIELD market_regime ON lineage_metric_row TYPE option<string>;
+DEFINE FIELD total ON lineage_metric_row TYPE int;
+DEFINE FIELD resolved ON lineage_metric_row TYPE int;
+DEFINE FIELD hits ON lineage_metric_row TYPE int;
+DEFINE FIELD hit_rate ON lineage_metric_row TYPE string;
+DEFINE FIELD mean_return ON lineage_metric_row TYPE string;
+DEFINE FIELD mean_net_return ON lineage_metric_row TYPE string;
+DEFINE FIELD follow_expectancy ON lineage_metric_row TYPE string;
+DEFINE FIELD fade_expectancy ON lineage_metric_row TYPE string;
+DEFINE FIELD wait_expectancy ON lineage_metric_row TYPE string;
+DEFINE FIELD mean_mfe ON lineage_metric_row TYPE string;
+DEFINE FIELD mean_mae ON lineage_metric_row TYPE string;
+DEFINE FIELD follow_through_rate ON lineage_metric_row TYPE string;
+DEFINE FIELD invalidation_rate ON lineage_metric_row TYPE string;
+DEFINE FIELD structure_retention_rate ON lineage_metric_row TYPE string;
+DEFINE FIELD mean_convergence_score ON lineage_metric_row TYPE string;
+DEFINE FIELD mean_external_delta ON lineage_metric_row TYPE string;
+DEFINE FIELD external_follow_through_rate ON lineage_metric_row TYPE string;
+DEFINE INDEX idx_lineage_metric_row_id ON lineage_metric_row FIELDS row_id UNIQUE;
+DEFINE INDEX idx_lineage_metric_row_lookup ON lineage_metric_row FIELDS bucket, label, family, session, market_regime, tick_number;
+
+-- US lineage snapshots
+DEFINE TABLE us_lineage_snapshot SCHEMAFULL;
+DEFINE FIELD snapshot_id ON us_lineage_snapshot TYPE string;
+DEFINE FIELD tick_number ON us_lineage_snapshot TYPE int;
+DEFINE FIELD recorded_at ON us_lineage_snapshot TYPE datetime;
+DEFINE FIELD window_size ON us_lineage_snapshot TYPE int;
+DEFINE FIELD resolution_lag ON us_lineage_snapshot TYPE int;
+DEFINE FIELD stats ON us_lineage_snapshot TYPE object;
+DEFINE INDEX idx_us_lineage_snapshot_id ON us_lineage_snapshot FIELDS snapshot_id UNIQUE;
+DEFINE INDEX idx_us_lineage_snapshot_time ON us_lineage_snapshot FIELDS recorded_at, tick_number;
+
+-- Flattened US lineage rows
+DEFINE TABLE us_lineage_metric_row SCHEMAFULL;
+DEFINE FIELD row_id ON us_lineage_metric_row TYPE string;
+DEFINE FIELD snapshot_id ON us_lineage_metric_row TYPE string;
+DEFINE FIELD tick_number ON us_lineage_metric_row TYPE int;
+DEFINE FIELD recorded_at ON us_lineage_metric_row TYPE datetime;
+DEFINE FIELD window_size ON us_lineage_metric_row TYPE int;
+DEFINE FIELD resolution_lag ON us_lineage_metric_row TYPE int;
+DEFINE FIELD bucket ON us_lineage_metric_row TYPE string;
+DEFINE FIELD rank ON us_lineage_metric_row TYPE int;
+DEFINE FIELD template ON us_lineage_metric_row TYPE string;
+DEFINE FIELD session ON us_lineage_metric_row TYPE option<string>;
+DEFINE FIELD market_regime ON us_lineage_metric_row TYPE option<string>;
+DEFINE FIELD total ON us_lineage_metric_row TYPE int;
+DEFINE FIELD resolved ON us_lineage_metric_row TYPE int;
+DEFINE FIELD hits ON us_lineage_metric_row TYPE int;
+DEFINE FIELD hit_rate ON us_lineage_metric_row TYPE string;
+DEFINE FIELD mean_return ON us_lineage_metric_row TYPE string;
+DEFINE FIELD follow_expectancy ON us_lineage_metric_row TYPE string;
+DEFINE FIELD fade_expectancy ON us_lineage_metric_row TYPE string;
+DEFINE FIELD wait_expectancy ON us_lineage_metric_row TYPE string;
+DEFINE INDEX idx_us_lineage_metric_row_id ON us_lineage_metric_row FIELDS row_id UNIQUE;
+DEFINE INDEX idx_us_lineage_metric_row_lookup ON us_lineage_metric_row FIELDS bucket, template, session, market_regime, tick_number;
+"#;
+
+const MIGRATION_002: &str = r#"
+DEFINE FIELD graph_edge_transitions ON tick_record TYPE array;
+"#;
+
+const MIGRATION_003: &str = r#"
+DEFINE FIELD OVERWRITE timestamp ON tick_record TYPE string;
+DEFINE FIELD OVERWRITE timestamp ON us_tick_record TYPE string;
+DEFINE FIELD OVERWRITE timestamp ON institution_state TYPE string;
+DEFINE FIELD OVERWRITE recorded_at ON action_workflow TYPE string;
+DEFINE FIELD OVERWRITE recorded_at ON action_workflow_event TYPE string;
+DEFINE FIELD OVERWRITE recorded_at ON tactical_setup TYPE string;
+DEFINE FIELD OVERWRITE recorded_at ON case_reasoning_assessment TYPE string;
+DEFINE FIELD OVERWRITE entry_timestamp ON case_realized_outcome TYPE string;
+DEFINE FIELD OVERWRITE resolved_at ON case_realized_outcome TYPE string;
+DEFINE FIELD OVERWRITE first_seen_at ON hypothesis_track TYPE string;
+DEFINE FIELD OVERWRITE last_updated_at ON hypothesis_track TYPE string;
+DEFINE FIELD OVERWRITE invalidated_at ON hypothesis_track TYPE option<string>;
+DEFINE FIELD OVERWRITE recorded_at ON lineage_snapshot TYPE string;
+DEFINE FIELD OVERWRITE recorded_at ON lineage_metric_row TYPE string;
+DEFINE FIELD OVERWRITE recorded_at ON us_lineage_snapshot TYPE string;
+DEFINE FIELD OVERWRITE recorded_at ON us_lineage_metric_row TYPE string;
+"#;
+
+const MIGRATION_004: &str = r#"
+DEFINE TABLE macro_event_history SCHEMAFULL;
+DEFINE FIELD record_id ON macro_event_history TYPE string;
+DEFINE FIELD event_id ON macro_event_history TYPE string;
+DEFINE FIELD tick_number ON macro_event_history TYPE int;
+DEFINE FIELD market ON macro_event_history TYPE string;
+DEFINE FIELD recorded_at ON macro_event_history TYPE string;
+DEFINE FIELD event_type ON macro_event_history TYPE string;
+DEFINE FIELD authority_level ON macro_event_history TYPE string;
+DEFINE FIELD headline ON macro_event_history TYPE string;
+DEFINE FIELD summary ON macro_event_history TYPE string;
+DEFINE FIELD confidence ON macro_event_history TYPE string;
+DEFINE FIELD confirmation_state ON macro_event_history TYPE string;
+DEFINE FIELD primary_scope ON macro_event_history TYPE string;
+DEFINE FIELD affected_markets ON macro_event_history TYPE array;
+DEFINE FIELD affected_sectors ON macro_event_history TYPE array;
+DEFINE FIELD affected_symbols ON macro_event_history TYPE array;
+DEFINE FIELD preferred_expression ON macro_event_history TYPE string;
+DEFINE FIELD requires_market_confirmation ON macro_event_history TYPE bool;
+DEFINE FIELD decisive_factors ON macro_event_history TYPE array;
+DEFINE FIELD supporting_notice_ids ON macro_event_history TYPE array;
+DEFINE FIELD promotion_reasons ON macro_event_history TYPE array;
+DEFINE INDEX idx_macro_event_history_id ON macro_event_history FIELDS record_id UNIQUE;
+DEFINE INDEX idx_macro_event_history_market_tick ON macro_event_history FIELDS market, tick_number;
+DEFINE INDEX idx_macro_event_history_event ON macro_event_history FIELDS event_id, tick_number;
+
+DEFINE TABLE knowledge_link_history SCHEMAFULL;
+DEFINE FIELD record_id ON knowledge_link_history TYPE string;
+DEFINE FIELD link_id ON knowledge_link_history TYPE string;
+DEFINE FIELD tick_number ON knowledge_link_history TYPE int;
+DEFINE FIELD market ON knowledge_link_history TYPE string;
+DEFINE FIELD recorded_at ON knowledge_link_history TYPE string;
+DEFINE FIELD relation ON knowledge_link_history TYPE string;
+DEFINE FIELD source_node_kind ON knowledge_link_history TYPE string;
+DEFINE FIELD source_node_id ON knowledge_link_history TYPE string;
+DEFINE FIELD source_label ON knowledge_link_history TYPE string;
+DEFINE FIELD target_node_kind ON knowledge_link_history TYPE string;
+DEFINE FIELD target_node_id ON knowledge_link_history TYPE string;
+DEFINE FIELD target_label ON knowledge_link_history TYPE string;
+DEFINE FIELD confidence ON knowledge_link_history TYPE string;
+DEFINE FIELD rationale ON knowledge_link_history TYPE option<string>;
+DEFINE INDEX idx_knowledge_link_history_id ON knowledge_link_history FIELDS record_id UNIQUE;
+DEFINE INDEX idx_knowledge_link_history_market_tick ON knowledge_link_history FIELDS market, tick_number;
+DEFINE INDEX idx_knowledge_link_history_source ON knowledge_link_history FIELDS source_node_id, tick_number;
+DEFINE INDEX idx_knowledge_link_history_target ON knowledge_link_history FIELDS target_node_id, tick_number;
+"#;
+
+const MIGRATION_005: &str = r#"
+DEFINE TABLE macro_event_state SCHEMAFULL;
+DEFINE FIELD state_id ON macro_event_state TYPE string;
+DEFINE FIELD event_id ON macro_event_state TYPE string;
+DEFINE FIELD market ON macro_event_state TYPE string;
+DEFINE FIELD latest_tick_number ON macro_event_state TYPE int;
+DEFINE FIELD last_seen_at ON macro_event_state TYPE string;
+DEFINE FIELD event_type ON macro_event_state TYPE string;
+DEFINE FIELD authority_level ON macro_event_state TYPE string;
+DEFINE FIELD headline ON macro_event_state TYPE string;
+DEFINE FIELD summary ON macro_event_state TYPE string;
+DEFINE FIELD confidence ON macro_event_state TYPE string;
+DEFINE FIELD confirmation_state ON macro_event_state TYPE string;
+DEFINE FIELD primary_scope ON macro_event_state TYPE string;
+DEFINE FIELD affected_markets ON macro_event_state TYPE array;
+DEFINE FIELD affected_sectors ON macro_event_state TYPE array;
+DEFINE FIELD affected_symbols ON macro_event_state TYPE array;
+DEFINE FIELD preferred_expression ON macro_event_state TYPE string;
+DEFINE FIELD requires_market_confirmation ON macro_event_state TYPE bool;
+DEFINE FIELD decisive_factors ON macro_event_state TYPE array;
+DEFINE FIELD supporting_notice_ids ON macro_event_state TYPE array;
+DEFINE FIELD promotion_reasons ON macro_event_state TYPE array;
+DEFINE INDEX idx_macro_event_state_id ON macro_event_state FIELDS state_id UNIQUE;
+DEFINE INDEX idx_macro_event_state_market_tick ON macro_event_state FIELDS market, latest_tick_number;
+
+DEFINE TABLE knowledge_link_state SCHEMAFULL;
+DEFINE FIELD state_id ON knowledge_link_state TYPE string;
+DEFINE FIELD link_id ON knowledge_link_state TYPE string;
+DEFINE FIELD market ON knowledge_link_state TYPE string;
+DEFINE FIELD latest_tick_number ON knowledge_link_state TYPE int;
+DEFINE FIELD last_seen_at ON knowledge_link_state TYPE string;
+DEFINE FIELD relation ON knowledge_link_state TYPE string;
+DEFINE FIELD source_node_kind ON knowledge_link_state TYPE string;
+DEFINE FIELD source_node_id ON knowledge_link_state TYPE string;
+DEFINE FIELD source_label ON knowledge_link_state TYPE string;
+DEFINE FIELD target_node_kind ON knowledge_link_state TYPE string;
+DEFINE FIELD target_node_id ON knowledge_link_state TYPE string;
+DEFINE FIELD target_label ON knowledge_link_state TYPE string;
+DEFINE FIELD confidence ON knowledge_link_state TYPE string;
+DEFINE FIELD rationale ON knowledge_link_state TYPE option<string>;
+DEFINE INDEX idx_knowledge_link_state_id ON knowledge_link_state FIELDS state_id UNIQUE;
+DEFINE INDEX idx_knowledge_link_state_market_tick ON knowledge_link_state FIELDS market, latest_tick_number;
+DEFINE INDEX idx_knowledge_link_state_source ON knowledge_link_state FIELDS source_node_id, latest_tick_number;
+DEFINE INDEX idx_knowledge_link_state_target ON knowledge_link_state FIELDS target_node_id, latest_tick_number;
+"#;
+
+const MIGRATION_006: &str = r#"
+DEFINE TABLE knowledge_node_history SCHEMAFULL;
+DEFINE FIELD record_id ON knowledge_node_history TYPE string;
+DEFINE FIELD node_id ON knowledge_node_history TYPE string;
+DEFINE FIELD node_kind ON knowledge_node_history TYPE string;
+DEFINE FIELD label ON knowledge_node_history TYPE string;
+DEFINE FIELD market ON knowledge_node_history TYPE string;
+DEFINE FIELD tick_number ON knowledge_node_history TYPE int;
+DEFINE FIELD recorded_at ON knowledge_node_history TYPE string;
+DEFINE FIELD attributes ON knowledge_node_history TYPE object;
+DEFINE INDEX idx_knowledge_node_history_id ON knowledge_node_history FIELDS record_id UNIQUE;
+DEFINE INDEX idx_knowledge_node_history_node ON knowledge_node_history FIELDS node_id, tick_number;
+DEFINE INDEX idx_knowledge_node_history_market_tick ON knowledge_node_history FIELDS market, tick_number;
+
+DEFINE TABLE knowledge_node_state SCHEMAFULL;
+DEFINE FIELD state_id ON knowledge_node_state TYPE string;
+DEFINE FIELD node_id ON knowledge_node_state TYPE string;
+DEFINE FIELD node_kind ON knowledge_node_state TYPE string;
+DEFINE FIELD label ON knowledge_node_state TYPE string;
+DEFINE FIELD market ON knowledge_node_state TYPE string;
+DEFINE FIELD latest_tick_number ON knowledge_node_state TYPE int;
+DEFINE FIELD last_seen_at ON knowledge_node_state TYPE string;
+DEFINE FIELD attributes ON knowledge_node_state TYPE object;
+DEFINE INDEX idx_knowledge_node_state_id ON knowledge_node_state FIELDS state_id UNIQUE;
+DEFINE INDEX idx_knowledge_node_state_node ON knowledge_node_state FIELDS node_id UNIQUE;
+DEFINE INDEX idx_knowledge_node_state_market_tick ON knowledge_node_state FIELDS market, latest_tick_number;
+"#;
+
+const MIGRATION_007: &str = r#"
+DEFINE FIELD attributes ON knowledge_link_history TYPE object;
+DEFINE FIELD attributes ON knowledge_link_state TYPE object;
+"#;
+
+/// Backfill any pre-migration-003 records that still have native datetime values
+/// in fields that were changed to string. SurrealDB's `string::concat` on a
+/// datetime value produces its RFC-3339 representation, so we cast via
+/// `<string>field` which is a no-op on values already stored as strings.
+const MIGRATION_008: &str = r#"
+UPDATE tick_record SET timestamp = <string>timestamp WHERE type::is::datetime(timestamp);
+UPDATE us_tick_record SET timestamp = <string>timestamp WHERE type::is::datetime(timestamp);
+UPDATE institution_state SET timestamp = <string>timestamp WHERE type::is::datetime(timestamp);
+UPDATE action_workflow SET recorded_at = <string>recorded_at WHERE type::is::datetime(recorded_at);
+UPDATE action_workflow_event SET recorded_at = <string>recorded_at WHERE type::is::datetime(recorded_at);
+UPDATE tactical_setup SET recorded_at = <string>recorded_at WHERE type::is::datetime(recorded_at);
+UPDATE case_reasoning_assessment SET recorded_at = <string>recorded_at WHERE type::is::datetime(recorded_at);
+UPDATE case_realized_outcome SET entry_timestamp = <string>entry_timestamp WHERE type::is::datetime(entry_timestamp);
+UPDATE case_realized_outcome SET resolved_at = <string>resolved_at WHERE type::is::datetime(resolved_at);
+UPDATE hypothesis_track SET first_seen_at = <string>first_seen_at WHERE type::is::datetime(first_seen_at);
+UPDATE hypothesis_track SET last_updated_at = <string>last_updated_at WHERE type::is::datetime(last_updated_at);
+UPDATE hypothesis_track SET invalidated_at = <string>invalidated_at WHERE type::is::datetime(invalidated_at);
+UPDATE lineage_snapshot SET recorded_at = <string>recorded_at WHERE type::is::datetime(recorded_at);
+UPDATE lineage_metric_row SET recorded_at = <string>recorded_at WHERE type::is::datetime(recorded_at);
+UPDATE us_lineage_snapshot SET recorded_at = <string>recorded_at WHERE type::is::datetime(recorded_at);
+UPDATE us_lineage_metric_row SET recorded_at = <string>recorded_at WHERE type::is::datetime(recorded_at);
+"#;
+
+const MIGRATION_009: &str = r#"
+-- Tick archive: full-fidelity market data snapshot per tick
+DEFINE TABLE tick_archive SCHEMALESS;
+DEFINE INDEX idx_tick_archive_tick ON tick_archive FIELDS tick_number UNIQUE;
+"#;
+
+const MIGRATION_010: &str = r#"
+DEFINE TABLE knowledge_event_history SCHEMAFULL;
+DEFINE FIELD record_id ON knowledge_event_history TYPE string;
+DEFINE FIELD event_id ON knowledge_event_history TYPE string;
+DEFINE FIELD tick_number ON knowledge_event_history TYPE int;
+DEFINE FIELD market ON knowledge_event_history TYPE string;
+DEFINE FIELD recorded_at ON knowledge_event_history TYPE string;
+DEFINE FIELD kind ON knowledge_event_history TYPE string;
+DEFINE FIELD subject_node_kind ON knowledge_event_history TYPE string;
+DEFINE FIELD subject_node_id ON knowledge_event_history TYPE string;
+DEFINE FIELD subject_label ON knowledge_event_history TYPE string;
+DEFINE FIELD object_node_kind ON knowledge_event_history TYPE option<string>;
+DEFINE FIELD object_node_id ON knowledge_event_history TYPE option<string>;
+DEFINE FIELD object_label ON knowledge_event_history TYPE option<string>;
+DEFINE FIELD confidence ON knowledge_event_history TYPE string;
+DEFINE FIELD evidence ON knowledge_event_history TYPE array;
+DEFINE FIELD attributes ON knowledge_event_history TYPE object;
+DEFINE FIELD rationale ON knowledge_event_history TYPE option<string>;
+DEFINE INDEX idx_knowledge_event_history_id ON knowledge_event_history FIELDS record_id UNIQUE;
+DEFINE INDEX idx_knowledge_event_history_subject ON knowledge_event_history FIELDS subject_node_id, tick_number;
+DEFINE INDEX idx_knowledge_event_history_object ON knowledge_event_history FIELDS object_node_id, tick_number;
+DEFINE INDEX idx_knowledge_event_history_kind ON knowledge_event_history FIELDS kind, tick_number;
+
+DEFINE TABLE knowledge_event_state SCHEMAFULL;
+DEFINE FIELD state_id ON knowledge_event_state TYPE string;
+DEFINE FIELD event_id ON knowledge_event_state TYPE string;
+DEFINE FIELD market ON knowledge_event_state TYPE string;
+DEFINE FIELD latest_tick_number ON knowledge_event_state TYPE int;
+DEFINE FIELD last_seen_at ON knowledge_event_state TYPE string;
+DEFINE FIELD kind ON knowledge_event_state TYPE string;
+DEFINE FIELD subject_node_kind ON knowledge_event_state TYPE string;
+DEFINE FIELD subject_node_id ON knowledge_event_state TYPE string;
+DEFINE FIELD subject_label ON knowledge_event_state TYPE string;
+DEFINE FIELD object_node_kind ON knowledge_event_state TYPE option<string>;
+DEFINE FIELD object_node_id ON knowledge_event_state TYPE option<string>;
+DEFINE FIELD object_label ON knowledge_event_state TYPE option<string>;
+DEFINE FIELD confidence ON knowledge_event_state TYPE string;
+DEFINE FIELD evidence ON knowledge_event_state TYPE array;
+DEFINE FIELD attributes ON knowledge_event_state TYPE object;
+DEFINE FIELD rationale ON knowledge_event_state TYPE option<string>;
+DEFINE INDEX idx_knowledge_event_state_id ON knowledge_event_state FIELDS state_id UNIQUE;
+DEFINE INDEX idx_knowledge_event_state_subject ON knowledge_event_state FIELDS subject_node_id, latest_tick_number;
+DEFINE INDEX idx_knowledge_event_state_object ON knowledge_event_state FIELDS object_node_id, latest_tick_number;
+DEFINE INDEX idx_knowledge_event_state_kind ON knowledge_event_state FIELDS kind, latest_tick_number;
+"#;
+
+const MIGRATION_011: &str = r#"
+DEFINE FIELD OVERWRITE confidence ON macro_event_history TYPE decimal;
+DEFINE FIELD OVERWRITE confidence ON knowledge_link_history TYPE decimal;
+DEFINE FIELD OVERWRITE confidence ON macro_event_state TYPE decimal;
+DEFINE FIELD OVERWRITE confidence ON knowledge_link_state TYPE decimal;
+DEFINE FIELD OVERWRITE confidence ON knowledge_event_history TYPE decimal;
+DEFINE FIELD OVERWRITE confidence ON knowledge_event_state TYPE decimal;
+
+UPDATE macro_event_history SET confidence = <decimal>confidence WHERE type::is::string(confidence);
+UPDATE knowledge_link_history SET confidence = <decimal>confidence WHERE type::is::string(confidence);
+UPDATE macro_event_state SET confidence = <decimal>confidence WHERE type::is::string(confidence);
+UPDATE knowledge_link_state SET confidence = <decimal>confidence WHERE type::is::string(confidence);
+UPDATE knowledge_event_history SET confidence = <decimal>confidence WHERE type::is::string(confidence);
+UPDATE knowledge_event_state SET confidence = <decimal>confidence WHERE type::is::string(confidence);
+"#;
+
+const MIGRATION_012: &str = r#"
+DEFINE FIELD OVERWRITE confidence ON tactical_setup TYPE decimal;
+DEFINE FIELD OVERWRITE confidence_gap ON tactical_setup TYPE decimal;
+DEFINE FIELD OVERWRITE heuristic_edge ON tactical_setup TYPE decimal;
+DEFINE FIELD OVERWRITE convergence_score ON tactical_setup TYPE option<decimal>;
+
+DEFINE FIELD OVERWRITE confidence ON hypothesis_track TYPE decimal;
+DEFINE FIELD OVERWRITE previous_confidence ON hypothesis_track TYPE option<decimal>;
+DEFINE FIELD OVERWRITE confidence_change ON hypothesis_track TYPE decimal;
+DEFINE FIELD OVERWRITE confidence_gap ON hypothesis_track TYPE decimal;
+DEFINE FIELD OVERWRITE previous_confidence_gap ON hypothesis_track TYPE option<decimal>;
+DEFINE FIELD OVERWRITE confidence_gap_change ON hypothesis_track TYPE decimal;
+DEFINE FIELD OVERWRITE heuristic_edge ON hypothesis_track TYPE decimal;
+
+DEFINE FIELD OVERWRITE market_regime_confidence ON case_reasoning_assessment TYPE option<decimal>;
+DEFINE FIELD OVERWRITE market_breadth_delta ON case_reasoning_assessment TYPE option<decimal>;
+DEFINE FIELD OVERWRITE market_average_return ON case_reasoning_assessment TYPE option<decimal>;
+DEFINE FIELD OVERWRITE market_directional_consensus ON case_reasoning_assessment TYPE option<decimal>;
+DEFINE FIELD OVERWRITE primary_mechanism_score ON case_reasoning_assessment TYPE option<decimal>;
+
+UPDATE tactical_setup SET confidence = <decimal>confidence WHERE type::is::string(confidence);
+UPDATE tactical_setup SET confidence_gap = <decimal>confidence_gap WHERE type::is::string(confidence_gap);
+UPDATE tactical_setup SET heuristic_edge = <decimal>heuristic_edge WHERE type::is::string(heuristic_edge);
+UPDATE tactical_setup SET convergence_score = <decimal>convergence_score WHERE type::is::string(convergence_score);
+
+UPDATE hypothesis_track SET confidence = <decimal>confidence WHERE type::is::string(confidence);
+UPDATE hypothesis_track SET previous_confidence = <decimal>previous_confidence WHERE type::is::string(previous_confidence);
+UPDATE hypothesis_track SET confidence_change = <decimal>confidence_change WHERE type::is::string(confidence_change);
+UPDATE hypothesis_track SET confidence_gap = <decimal>confidence_gap WHERE type::is::string(confidence_gap);
+UPDATE hypothesis_track SET previous_confidence_gap = <decimal>previous_confidence_gap WHERE type::is::string(previous_confidence_gap);
+UPDATE hypothesis_track SET confidence_gap_change = <decimal>confidence_gap_change WHERE type::is::string(confidence_gap_change);
+UPDATE hypothesis_track SET heuristic_edge = <decimal>heuristic_edge WHERE type::is::string(heuristic_edge);
+
+UPDATE case_reasoning_assessment SET market_regime_confidence = <decimal>market_regime_confidence WHERE type::is::string(market_regime_confidence);
+UPDATE case_reasoning_assessment SET market_breadth_delta = <decimal>market_breadth_delta WHERE type::is::string(market_breadth_delta);
+UPDATE case_reasoning_assessment SET market_average_return = <decimal>market_average_return WHERE type::is::string(market_average_return);
+UPDATE case_reasoning_assessment SET market_directional_consensus = <decimal>market_directional_consensus WHERE type::is::string(market_directional_consensus);
+UPDATE case_reasoning_assessment SET primary_mechanism_score = <decimal>primary_mechanism_score WHERE type::is::string(primary_mechanism_score);
+"#;
+
+const MIGRATION_013: &str = r#"
+DEFINE FIELD OVERWRITE return_pct ON case_realized_outcome TYPE decimal;
+DEFINE FIELD OVERWRITE net_return ON case_realized_outcome TYPE decimal;
+DEFINE FIELD OVERWRITE max_favorable_excursion ON case_realized_outcome TYPE decimal;
+DEFINE FIELD OVERWRITE max_adverse_excursion ON case_realized_outcome TYPE decimal;
+DEFINE FIELD OVERWRITE convergence_score ON case_realized_outcome TYPE decimal;
+
+DEFINE FIELD OVERWRITE hit_rate ON lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE mean_return ON lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE mean_net_return ON lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE follow_expectancy ON lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE fade_expectancy ON lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE wait_expectancy ON lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE mean_mfe ON lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE mean_mae ON lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE follow_through_rate ON lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE invalidation_rate ON lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE structure_retention_rate ON lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE mean_convergence_score ON lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE mean_external_delta ON lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE external_follow_through_rate ON lineage_metric_row TYPE decimal;
+
+DEFINE FIELD OVERWRITE hit_rate ON us_lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE mean_return ON us_lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE follow_expectancy ON us_lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE fade_expectancy ON us_lineage_metric_row TYPE decimal;
+DEFINE FIELD OVERWRITE wait_expectancy ON us_lineage_metric_row TYPE decimal;
+
+UPDATE case_realized_outcome SET return_pct = <decimal>return_pct WHERE type::is::string(return_pct);
+UPDATE case_realized_outcome SET net_return = <decimal>net_return WHERE type::is::string(net_return);
+UPDATE case_realized_outcome SET max_favorable_excursion = <decimal>max_favorable_excursion WHERE type::is::string(max_favorable_excursion);
+UPDATE case_realized_outcome SET max_adverse_excursion = <decimal>max_adverse_excursion WHERE type::is::string(max_adverse_excursion);
+UPDATE case_realized_outcome SET convergence_score = <decimal>convergence_score WHERE type::is::string(convergence_score);
+
+UPDATE lineage_metric_row SET hit_rate = <decimal>hit_rate WHERE type::is::string(hit_rate);
+UPDATE lineage_metric_row SET mean_return = <decimal>mean_return WHERE type::is::string(mean_return);
+UPDATE lineage_metric_row SET mean_net_return = <decimal>mean_net_return WHERE type::is::string(mean_net_return);
+UPDATE lineage_metric_row SET follow_expectancy = <decimal>follow_expectancy WHERE type::is::string(follow_expectancy);
+UPDATE lineage_metric_row SET fade_expectancy = <decimal>fade_expectancy WHERE type::is::string(fade_expectancy);
+UPDATE lineage_metric_row SET wait_expectancy = <decimal>wait_expectancy WHERE type::is::string(wait_expectancy);
+UPDATE lineage_metric_row SET mean_mfe = <decimal>mean_mfe WHERE type::is::string(mean_mfe);
+UPDATE lineage_metric_row SET mean_mae = <decimal>mean_mae WHERE type::is::string(mean_mae);
+UPDATE lineage_metric_row SET follow_through_rate = <decimal>follow_through_rate WHERE type::is::string(follow_through_rate);
+UPDATE lineage_metric_row SET invalidation_rate = <decimal>invalidation_rate WHERE type::is::string(invalidation_rate);
+UPDATE lineage_metric_row SET structure_retention_rate = <decimal>structure_retention_rate WHERE type::is::string(structure_retention_rate);
+UPDATE lineage_metric_row SET mean_convergence_score = <decimal>mean_convergence_score WHERE type::is::string(mean_convergence_score);
+UPDATE lineage_metric_row SET mean_external_delta = <decimal>mean_external_delta WHERE type::is::string(mean_external_delta);
+UPDATE lineage_metric_row SET external_follow_through_rate = <decimal>external_follow_through_rate WHERE type::is::string(external_follow_through_rate);
+
+UPDATE us_lineage_metric_row SET hit_rate = <decimal>hit_rate WHERE type::is::string(hit_rate);
+UPDATE us_lineage_metric_row SET mean_return = <decimal>mean_return WHERE type::is::string(mean_return);
+UPDATE us_lineage_metric_row SET follow_expectancy = <decimal>follow_expectancy WHERE type::is::string(follow_expectancy);
+UPDATE us_lineage_metric_row SET fade_expectancy = <decimal>fade_expectancy WHERE type::is::string(fade_expectancy);
+UPDATE us_lineage_metric_row SET wait_expectancy = <decimal>wait_expectancy WHERE type::is::string(wait_expectancy);
+"#;
+
+pub const LATEST_SCHEMA_VERSION: u32 = 13;
+
+const MIGRATIONS: [SchemaMigration; 13] = [
+    SchemaMigration {
+        version: 1,
+        name: "bootstrap_core_schema",
+        statements: MIGRATION_001,
+    },
+    SchemaMigration {
+        version: 2,
+        name: "tick_record_graph_edge_transitions",
+        statements: MIGRATION_002,
+    },
+    SchemaMigration {
+        version: 3,
+        name: "persist_time_fields_as_rfc3339_strings",
+        statements: MIGRATION_003,
+    },
+    SchemaMigration {
+        version: 4,
+        name: "agent_macro_event_and_knowledge_link_history",
+        statements: MIGRATION_004,
+    },
+    SchemaMigration {
+        version: 5,
+        name: "agent_macro_event_and_knowledge_link_state",
+        statements: MIGRATION_005,
+    },
+    SchemaMigration {
+        version: 6,
+        name: "generic_knowledge_node_history_and_state",
+        statements: MIGRATION_006,
+    },
+    SchemaMigration {
+        version: 7,
+        name: "knowledge_link_relation_attributes",
+        statements: MIGRATION_007,
+    },
+    SchemaMigration {
+        version: 8,
+        name: "backfill_datetime_to_string",
+        statements: MIGRATION_008,
+    },
+    SchemaMigration {
+        version: 9,
+        name: "tick_archive_table",
+        statements: MIGRATION_009,
+    },
+    SchemaMigration {
+        version: 10,
+        name: "knowledge_event_history_and_state",
+        statements: MIGRATION_010,
+    },
+    SchemaMigration {
+        version: 11,
+        name: "knowledge_graph_confidence_as_decimal",
+        statements: MIGRATION_011,
+    },
+    SchemaMigration {
+        version: 12,
+        name: "workflow_and_assessment_numeric_fields_as_decimal",
+        statements: MIGRATION_012,
+    },
+    SchemaMigration {
+        version: 13,
+        name: "lineage_and_outcome_numeric_fields_as_decimal",
+        statements: MIGRATION_013,
+    },
+];
+
+pub fn migrations() -> &'static [SchemaMigration] {
+    &MIGRATIONS
+}
+
+pub fn pending_migrations(current_version: Option<u32>) -> &'static [SchemaMigration] {
+    let start = match current_version {
+        Some(version) => MIGRATIONS
+            .iter()
+            .position(|migration| migration.version > version)
+            .unwrap_or(MIGRATIONS.len()),
+        None => 0,
+    };
+    &MIGRATIONS[start..]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_migrations_from_none_returns_all_steps() {
+        let pending = pending_migrations(None);
+        assert_eq!(pending.len(), 13);
+        assert_eq!(pending[0].version, 1);
+        assert_eq!(pending[1].version, 2);
+        assert_eq!(pending[2].version, 3);
+        assert_eq!(pending[3].version, 4);
+        assert_eq!(pending[4].version, 5);
+        assert_eq!(pending[5].version, 6);
+        assert_eq!(pending[6].version, 7);
+        assert_eq!(pending[7].version, 8);
+        assert_eq!(pending[8].version, 9);
+        assert_eq!(pending[9].version, 10);
+        assert_eq!(pending[10].version, 11);
+        assert_eq!(pending[11].version, 12);
+        assert_eq!(pending[12].version, 13);
+    }
+
+    #[test]
+    fn pending_migrations_skip_applied_versions() {
+        let pending = pending_migrations(Some(7));
+        assert_eq!(pending.len(), 6);
+        assert_eq!(pending[0].version, 8);
+        assert_eq!(pending[1].version, 9);
+        assert_eq!(pending[2].version, 10);
+        assert_eq!(pending[3].version, 11);
+        assert_eq!(pending[4].version, 12);
+        assert_eq!(pending[5].version, 13);
+
+        assert!(pending_migrations(Some(LATEST_SCHEMA_VERSION)).is_empty());
+    }
+}

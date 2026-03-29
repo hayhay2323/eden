@@ -1,0 +1,30 @@
+use crate::external::polymarket::{
+    fetch_polymarket_snapshot, load_polymarket_configs, PolymarketMarketConfig, PolymarketSnapshot,
+};
+#[cfg(feature = "persistence")]
+use crate::persistence::lineage_metric_row::{row_matches_filters, snapshot_records_from_rows};
+#[cfg(feature = "persistence")]
+use crate::persistence::lineage_snapshot::LineageSnapshotRecord;
+#[cfg(feature = "persistence")]
+use crate::persistence::store::EdenStore;
+#[cfg(feature = "persistence")]
+use crate::persistence::tactical_setup::TacticalSetupRecord;
+#[cfg(feature = "persistence")]
+use crate::temporal::buffer::TickHistory;
+#[cfg(feature = "persistence")]
+use crate::temporal::causality::{compute_causal_timelines, CausalFlipEvent, CausalTimeline, CausalTimelinePoint};
+use crate::temporal::lineage::{LineageAlignmentFilter, LineageFilters, LineageSortKey};
+use rust_decimal::Decimal;
+
+#[cfg(feature = "persistence")]
+type AppError = Box<dyn std::error::Error + Send + Sync>;
+
+#[path = "cli/parser.rs"]
+mod parser;
+#[path = "cli/query.rs"]
+mod query;
+#[path = "cli/render.rs"]
+mod render;
+
+pub use parser::{parse_cli_command, CliCommand, LineageViewOptions};
+pub use query::run_cli_query;
