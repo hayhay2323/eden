@@ -55,6 +55,42 @@ impl AccumulatedKnowledge {
             feedback.conditioned_adjustments.clone();
     }
 
+    pub fn accumulate_institutional_memory(
+        &mut self,
+        tick_number: u64,
+        brain: &crate::graph::graph::BrainGraph,
+    ) {
+        use crate::graph::graph::{EdgeKind, NodeKind};
+        use petgraph::visit::EdgeRef;
+
+        for (&inst_id, &inst_idx) in &brain.institution_nodes {
+            for edge in brain.graph.edges(inst_idx) {
+                if let EdgeKind::InstitutionToStock(e) = edge.weight() {
+                    let target = edge.target();
+                    if let NodeKind::Stock(stock_node) = &brain.graph[target] {
+                        let key = (inst_id, stock_node.symbol.clone());
+                        let profile = self.institutional_memory.entry(key).or_insert(
+                            InstitutionSymbolProfile {
+                                observation_count: 0,
+                                directional_hit_count: 0,
+                                avg_presence_ticks: Decimal::ZERO,
+                                last_seen_tick: tick_number,
+                                directional_bias: Decimal::ZERO,
+                            },
+                        );
+                        profile.observation_count += 1;
+                        profile.last_seen_tick = tick_number;
+                        // Running average of directional bias
+                        let n = Decimal::from(profile.observation_count);
+                        profile.directional_bias =
+                            profile.directional_bias * (n - Decimal::ONE) / n
+                                + e.direction / n;
+                    }
+                }
+            }
+        }
+    }
+
     pub fn institution_history_bonus(
         &self,
         institution_id: &InstitutionId,
@@ -181,6 +217,79 @@ mod tests {
             &Symbol("FAKE.HK".into()),
         );
         assert_eq!(bonus, Decimal::ZERO);
+    }
+
+    #[test]
+    fn accumulate_institutional_memory_from_edges() {
+        use crate::graph::graph::{BrainGraph, InstitutionToStock, EdgeKind, NodeKind, StockNode, InstitutionNode};
+        use crate::action::narrative::Regime;
+        use crate::pipeline::dimensions::SymbolDimensions;
+        use crate::ontology::domain::{ProvenanceMetadata, ProvenanceSource};
+        use petgraph::graph::DiGraph;
+        use time::OffsetDateTime;
+
+        let mut graph = DiGraph::new();
+        let stock_idx = graph.add_node(NodeKind::Stock(StockNode {
+            symbol: Symbol("700.HK".into()),
+            regime: Regime::CoherentBullish,
+            coherence: dec!(0.5),
+            mean_direction: dec!(0.3),
+            dimensions: SymbolDimensions::default(),
+        }));
+        let inst_idx = graph.add_node(NodeKind::Institution(InstitutionNode {
+            institution_id: InstitutionId(100),
+            stock_count: 2,
+            bid_stock_count: 1,
+            ask_stock_count: 1,
+            net_direction: dec!(0.5),
+        }));
+        graph.add_edge(
+            inst_idx,
+            stock_idx,
+            EdgeKind::InstitutionToStock(InstitutionToStock {
+                direction: dec!(0.6),
+                seat_count: 3,
+                timestamp: OffsetDateTime::UNIX_EPOCH,
+                provenance: ProvenanceMetadata {
+                    source: ProvenanceSource::Computed,
+                    observed_at: OffsetDateTime::UNIX_EPOCH,
+                    received_at: Some(OffsetDateTime::UNIX_EPOCH),
+                    confidence: Some(dec!(0.8)),
+                    trace_id: None,
+                    inputs: vec![],
+                    note: None,
+                },
+            }),
+        );
+
+        let mut stock_nodes = std::collections::HashMap::new();
+        stock_nodes.insert(Symbol("700.HK".into()), stock_idx);
+        let mut institution_nodes = std::collections::HashMap::new();
+        institution_nodes.insert(InstitutionId(100), inst_idx);
+
+        let brain = BrainGraph {
+            timestamp: OffsetDateTime::UNIX_EPOCH,
+            graph,
+            market_temperature: None,
+            stock_nodes,
+            institution_nodes,
+            sector_nodes: std::collections::HashMap::new(),
+        };
+
+        let mut k = AccumulatedKnowledge::empty();
+        k.accumulate_institutional_memory(1, &brain);
+
+        let key = (InstitutionId(100), Symbol("700.HK".into()));
+        let profile = k.institutional_memory.get(&key).unwrap();
+        assert_eq!(profile.observation_count, 1);
+        assert_eq!(profile.last_seen_tick, 1);
+        assert!(profile.directional_bias > Decimal::ZERO);
+
+        // Second accumulation should increment
+        k.accumulate_institutional_memory(2, &brain);
+        let profile = k.institutional_memory.get(&key).unwrap();
+        assert_eq!(profile.observation_count, 2);
+        assert_eq!(profile.last_seen_tick, 2);
     }
 
     #[test]
