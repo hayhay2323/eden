@@ -18,6 +18,23 @@ fn graph_node_endpoint(market: LiveMarket, node_id: &str) -> String {
     format!("/api/ontology/{}/graph/node/{node_id}", market_slug(market))
 }
 
+fn neighborhood_endpoint(
+    market: LiveMarket,
+    kind: OperationalObjectKind,
+    id: &str,
+) -> String {
+    let kind = match kind {
+        OperationalObjectKind::MarketSession => "market_session",
+        OperationalObjectKind::SymbolState => "symbol_state",
+        OperationalObjectKind::Case => "case",
+        OperationalObjectKind::Recommendation => "recommendation",
+        OperationalObjectKind::MacroEvent => "macro_event",
+        OperationalObjectKind::Thread => "thread",
+        OperationalObjectKind::Workflow => "workflow",
+    };
+    format!("/api/ontology/{}/neighborhood/{kind}/{id}", market_slug(market))
+}
+
 pub(crate) fn object_endpoint(market: LiveMarket, path: &str) -> String {
     format!("/api/ontology/{}/{}", market_slug(market), path)
 }
@@ -228,6 +245,7 @@ pub fn build_market_session_contract(
         wake_reasons: snapshot.wake.reasons.clone(),
         suggested_tools: snapshot.wake.suggested_tools.clone(),
         market_summary: narration.and_then(|item| item.market_summary_5m.clone()),
+        navigation: OperationalNavigation::default(),
         relationships: MarketSessionRelationships {
             focus_symbols: session
                 .map(|item| {
@@ -280,6 +298,7 @@ pub fn build_symbol_state_contract(
         observed_at,
         symbol: state.symbol.clone(),
         sector: state.sector.clone(),
+        navigation: OperationalNavigation::default(),
         relationships: SymbolStateRelationships::default(),
         graph_ref: symbol_graph_ref(snapshot.market, &state.symbol),
         state: state.clone(),
@@ -299,6 +318,7 @@ pub fn build_macro_event_contracts(
             market: snapshot.market,
             source_tick: snapshot.tick,
             observed_at,
+            navigation: OperationalNavigation::default(),
             relationships: MacroEventRelationships::default(),
             graph_ref: macro_event_graph_ref(snapshot.market, &event.event_id),
             event,
@@ -393,6 +413,178 @@ fn populate_operational_relationships(snapshot: &mut OperationalSnapshot) {
     }
 }
 
+fn populate_operational_navigation(snapshot: &mut OperationalSnapshot) {
+    snapshot.market_session.navigation = OperationalNavigation {
+        self_ref: Some(snapshot.market_session_ref()),
+        graph: None,
+        history: vec![],
+        relationships: vec![OperationalRelationshipGroup {
+            name: "focus_symbols".into(),
+            refs: snapshot.market_session.relationships.focus_symbols.clone(),
+        }],
+        neighborhood_endpoint: Some(neighborhood_endpoint(
+            snapshot.market,
+            OperationalObjectKind::MarketSession,
+            &snapshot.market_session.id.0,
+        )),
+    };
+
+    for symbol in &mut snapshot.symbols {
+        symbol.navigation = OperationalNavigation {
+            self_ref: Some(OperationalObjectRef {
+                id: symbol.id.0.clone(),
+                kind: OperationalObjectKind::SymbolState,
+                endpoint: object_endpoint(snapshot.market, &format!("symbols/{}", symbol.symbol)),
+                label: Some(symbol.symbol.clone()),
+            }),
+            graph: Some(symbol.graph_ref.clone()),
+            history: vec![],
+            relationships: vec![
+                OperationalRelationshipGroup {
+                    name: "cases".into(),
+                    refs: symbol.relationships.cases.clone(),
+                },
+                OperationalRelationshipGroup {
+                    name: "recommendations".into(),
+                    refs: symbol.relationships.recommendations.clone(),
+                },
+                OperationalRelationshipGroup {
+                    name: "macro_events".into(),
+                    refs: symbol.relationships.macro_events.clone(),
+                },
+            ],
+            neighborhood_endpoint: Some(neighborhood_endpoint(
+                snapshot.market,
+                OperationalObjectKind::SymbolState,
+                &symbol.id.0,
+            )),
+        };
+    }
+
+    for case in &mut snapshot.cases {
+        case.navigation = OperationalNavigation {
+            self_ref: Some(case_self_ref(snapshot.market, case)),
+            graph: Some(case.graph_ref.clone()),
+            history: collect_case_history_refs(case),
+            relationships: vec![
+                OperationalRelationshipGroup {
+                    name: "symbol".into(),
+                    refs: vec![case.relationships.symbol.clone()],
+                },
+                OperationalRelationshipGroup {
+                    name: "workflow".into(),
+                    refs: case.relationships.workflow.clone().into_iter().collect(),
+                },
+                OperationalRelationshipGroup {
+                    name: "recommendations".into(),
+                    refs: case.relationships.recommendations.clone(),
+                },
+            ],
+            neighborhood_endpoint: Some(neighborhood_endpoint(
+                snapshot.market,
+                OperationalObjectKind::Case,
+                &case.id.0,
+            )),
+        };
+    }
+
+    for recommendation in &mut snapshot.recommendations {
+        recommendation.navigation = OperationalNavigation {
+            self_ref: Some(recommendation_self_ref(snapshot.market, recommendation)),
+            graph: Some(recommendation.graph_ref.clone()),
+            history: collect_recommendation_history_refs(recommendation),
+            relationships: vec![
+                OperationalRelationshipGroup {
+                    name: "symbol".into(),
+                    refs: vec![recommendation.relationships.symbol.clone()],
+                },
+                OperationalRelationshipGroup {
+                    name: "case".into(),
+                    refs: recommendation.relationships.case.clone().into_iter().collect(),
+                },
+                OperationalRelationshipGroup {
+                    name: "workflow".into(),
+                    refs: recommendation.relationships.workflow.clone().into_iter().collect(),
+                },
+            ],
+            neighborhood_endpoint: Some(neighborhood_endpoint(
+                snapshot.market,
+                OperationalObjectKind::Recommendation,
+                &recommendation.id.0,
+            )),
+        };
+    }
+
+    for macro_event in &mut snapshot.macro_events {
+        macro_event.navigation = OperationalNavigation {
+            self_ref: Some(macro_event_self_ref(snapshot.market, macro_event)),
+            graph: Some(macro_event.graph_ref.clone()),
+            history: vec![],
+            relationships: vec![
+                OperationalRelationshipGroup {
+                    name: "symbols".into(),
+                    refs: macro_event.relationships.symbols.clone(),
+                },
+                OperationalRelationshipGroup {
+                    name: "cases".into(),
+                    refs: macro_event.relationships.cases.clone(),
+                },
+                OperationalRelationshipGroup {
+                    name: "recommendations".into(),
+                    refs: macro_event.relationships.recommendations.clone(),
+                },
+            ],
+            neighborhood_endpoint: Some(neighborhood_endpoint(
+                snapshot.market,
+                OperationalObjectKind::MacroEvent,
+                &macro_event.id.0,
+            )),
+        };
+    }
+
+    for thread in &mut snapshot.threads {
+        thread.navigation = OperationalNavigation {
+            self_ref: Some(OperationalObjectRef {
+                id: thread.id.0.clone(),
+                kind: OperationalObjectKind::Thread,
+                endpoint: object_endpoint(snapshot.market, &format!("threads/{}", thread.id.0)),
+                label: thread.thread.title.clone().or_else(|| Some(thread.thread.symbol.clone())),
+            }),
+            graph: None,
+            history: vec![],
+            relationships: vec![],
+            neighborhood_endpoint: Some(neighborhood_endpoint(
+                snapshot.market,
+                OperationalObjectKind::Thread,
+                &thread.id.0,
+            )),
+        };
+    }
+
+    for workflow in &mut snapshot.workflows {
+        workflow.navigation = OperationalNavigation {
+            self_ref: Some(workflow_self_ref(snapshot.market, workflow)),
+            graph: None,
+            history: collect_workflow_history_refs(workflow),
+            relationships: vec![
+                OperationalRelationshipGroup {
+                    name: "cases".into(),
+                    refs: workflow.relationships.cases.clone(),
+                },
+                OperationalRelationshipGroup {
+                    name: "recommendations".into(),
+                    refs: workflow.relationships.recommendations.clone(),
+                },
+            ],
+            neighborhood_endpoint: Some(neighborhood_endpoint(
+                snapshot.market,
+                OperationalObjectKind::Workflow,
+                &workflow.id.0,
+            )),
+        };
+    }
+}
+
 pub fn build_operational_snapshot(
     live_snapshot: &LiveSnapshot,
     snapshot: &AgentSnapshot,
@@ -445,6 +637,7 @@ pub fn build_operational_snapshot(
                 .filter(|(_, case_id, _, _)| case_id.as_deref() == Some(item.case_id.as_str()))
                 .map(|(rec_id, _, _, _)| rec_id.clone())
                 .collect(),
+            navigation: OperationalNavigation::default(),
             relationships: CaseRelationships {
                 symbol: symbol_object_ref(item.market, snapshot.tick, &item.symbol),
                 workflow: item
@@ -506,6 +699,7 @@ pub fn build_operational_snapshot(
                 related_case_id: linkage.and_then(|(_, case_id, _, _)| case_id.clone()),
                 related_setup_id: linkage.and_then(|(_, _, setup_id, _)| setup_id.clone()),
                 related_workflow_id: linkage.and_then(|(_, _, _, workflow_id)| workflow_id.clone()),
+                navigation: OperationalNavigation::default(),
                 relationships: RecommendationRelationships {
                     symbol: symbol_object_ref(snapshot.market, snapshot.tick, &item.symbol),
                     case: linkage.and_then(|(_, case_id, _, _)| {
@@ -557,6 +751,7 @@ pub fn build_operational_snapshot(
             market: snapshot.market,
             source_tick: snapshot.tick,
             observed_at,
+            navigation: OperationalNavigation::default(),
             thread,
         })
         .collect::<Vec<_>>();
@@ -612,6 +807,7 @@ pub fn build_operational_snapshot(
         events: snapshot.events.clone(),
     };
     populate_operational_relationships(&mut operational);
+    populate_operational_navigation(&mut operational);
     Ok(operational)
 }
 
@@ -660,6 +856,7 @@ pub fn rebuild_operational_case_graph(
                 .filter(|(_, case_id, _, _)| case_id.as_deref() == Some(item.case_id.as_str()))
                 .map(|(rec_id, _, _, _)| rec_id.clone())
                 .collect(),
+            navigation: OperationalNavigation::default(),
             relationships: CaseRelationships {
                 symbol: symbol_object_ref(item.market, snapshot.source_tick, &item.symbol),
                 workflow: item
@@ -741,4 +938,5 @@ pub fn rebuild_operational_case_graph(
         &snapshot.recommendations,
     );
     populate_operational_relationships(snapshot);
+    populate_operational_navigation(snapshot);
 }

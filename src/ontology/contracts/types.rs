@@ -177,6 +177,20 @@ pub struct OperationalNeighborhood {
     pub history_refs: Vec<OperationalHistoryRef>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OperationalNavigation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_ref: Option<OperationalObjectRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<OperationalGraphRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<OperationalHistoryRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relationships: Vec<OperationalRelationshipGroup>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neighborhood_endpoint: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketSessionContract {
     pub id: MarketSessionId,
@@ -204,6 +218,8 @@ pub struct MarketSessionContract {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub market_summary: Option<String>,
     #[serde(default)]
+    pub navigation: OperationalNavigation,
+    #[serde(default)]
     pub relationships: MarketSessionRelationships,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub focus_symbol_refs: Vec<OperationalObjectRef>,
@@ -219,6 +235,8 @@ pub struct SymbolStateContract {
     pub symbol: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sector: Option<String>,
+    #[serde(default)]
+    pub navigation: OperationalNavigation,
     #[serde(default)]
     pub relationships: SymbolStateRelationships,
     pub graph_ref: OperationalGraphRef,
@@ -268,6 +286,8 @@ pub struct CaseContract {
     pub alpha_horizon: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recommendation_ids: Vec<String>,
+    #[serde(default)]
+    pub navigation: OperationalNavigation,
     pub relationships: CaseRelationships,
     pub symbol_ref: OperationalObjectRef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -293,6 +313,8 @@ pub struct RecommendationContract {
     pub related_setup_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_workflow_id: Option<String>,
+    #[serde(default)]
+    pub navigation: OperationalNavigation,
     pub relationships: RecommendationRelationships,
     pub symbol_ref: OperationalObjectRef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -313,6 +335,8 @@ pub struct MacroEventContract {
     #[serde(with = "rfc3339")]
     pub observed_at: OffsetDateTime,
     #[serde(default)]
+    pub navigation: OperationalNavigation,
+    #[serde(default)]
     pub relationships: MacroEventRelationships,
     pub graph_ref: OperationalGraphRef,
     pub event: AgentMacroEvent,
@@ -325,6 +349,8 @@ pub struct ThreadContract {
     pub source_tick: u64,
     #[serde(with = "rfc3339")]
     pub observed_at: OffsetDateTime,
+    #[serde(default)]
+    pub navigation: OperationalNavigation,
     pub thread: AgentThread,
 }
 
@@ -351,6 +377,8 @@ pub struct WorkflowContract {
     pub case_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recommendation_ids: Vec<String>,
+    #[serde(default)]
+    pub navigation: OperationalNavigation,
     #[serde(default)]
     pub relationships: WorkflowRelationships,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -750,7 +778,7 @@ pub(crate) fn workflow_self_ref(market: LiveMarket, item: &WorkflowContract) -> 
     }
 }
 
-fn collect_case_history_refs(item: &CaseContract) -> Vec<OperationalHistoryRef> {
+pub(crate) fn collect_case_history_refs(item: &CaseContract) -> Vec<OperationalHistoryRef> {
     item.history_refs
         .workflow
         .clone()
@@ -760,7 +788,9 @@ fn collect_case_history_refs(item: &CaseContract) -> Vec<OperationalHistoryRef> 
         .collect()
 }
 
-fn collect_recommendation_history_refs(item: &RecommendationContract) -> Vec<OperationalHistoryRef> {
+pub(crate) fn collect_recommendation_history_refs(
+    item: &RecommendationContract,
+) -> Vec<OperationalHistoryRef> {
     item.history_refs
         .journal
         .clone()
@@ -770,7 +800,7 @@ fn collect_recommendation_history_refs(item: &RecommendationContract) -> Vec<Ope
         .collect()
 }
 
-fn collect_workflow_history_refs(item: &WorkflowContract) -> Vec<OperationalHistoryRef> {
+pub(crate) fn collect_workflow_history_refs(item: &WorkflowContract) -> Vec<OperationalHistoryRef> {
     item.history_refs.events.clone().into_iter().collect()
 }
 
