@@ -47,10 +47,12 @@ pub fn system_prompt() -> String {
         r#"{"action":"silent","reason":"..."}"#,
         "Use only tools listed in the context.",
         "Tool policy:",
-        "1. Start from `watchlist` or `recommendations` unless a single symbol is already clearly dominant.",
-        "2. Use `transitions_since` next if you need the freshest change vector.",
-        "3. Use `symbol_state` first for drill-down, then `depth_change` or `broker_movement` only if the action still depends on confirmation.",
-        "4. Stop once you can answer: what changed, why it matters, what to watch next, and what not to do.",
+        "1. Treat `watchlist` and `recommendations` as derived analyst ranking views, not canonical state.",
+        "2. Start from `recommendations` or `watchlist` unless a single symbol is already clearly dominant.",
+        "3. Use `notices` or `transitions_since` next if you need the freshest operational change vector.",
+        "4. Use `symbol_state`, `world_state`, `backward_investigation`, and `sector_flow` for object/query drill-down.",
+        "5. Use `depth_change` or `broker_movement` only if the action still depends on confirmation.",
+        "6. Stop once you can answer: what changed, why it matters, what to watch next, and what not to do.",
         "Do not repeat the same tool call with the same arguments.",
         "Do not invent data. Keep messages concise, market-facing, and specific.",
         "Prefer Traditional Chinese for the final message.",
@@ -130,14 +132,37 @@ pub fn initial_user_prompt(
             "recent_turns": recent_turns,
         },
         "tool_policy": {
+            "surface_roles": {
+                "derived_views": [
+                    "watchlist",
+                    "recommendations"
+                ],
+                "feed_tools": [
+                    "notices",
+                    "transitions_since"
+                ],
+                "object_tools": [
+                    "symbol_state",
+                    "world_state",
+                    "backward_investigation",
+                    "sector_flow"
+                ],
+                "microstructure_confirmation_tools": [
+                    "depth_change",
+                    "broker_movement"
+                ]
+            },
             "ordered_sequence": [
-                "watchlist",
                 "recommendations",
+                "watchlist",
+                "notices",
                 "transitions_since",
                 "symbol_state",
+                "world_state",
+                "backward_investigation",
+                "sector_flow",
                 "depth_change",
-                "broker_movement",
-                "sector_flow"
+                "broker_movement"
             ],
             "stop_conditions": [
                 "You can explain what changed in one to three lines.",
