@@ -10,6 +10,7 @@ mod feed_api;
 mod feed_surface;
 mod lineage_api;
 mod ontology_api;
+mod ontology_graph_api;
 mod ontology_history_api;
 mod ontology_history_enrichment;
 mod ontology_history_support;
