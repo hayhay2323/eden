@@ -332,6 +332,11 @@ fn tool_catalog_includes_core_queries() {
             && item.replacement.as_deref() == Some("macro_event_contracts")
     }));
     assert!(catalog.iter().any(|item| {
+        item.name == "macro_event_candidates"
+            && item.deprecated
+            && item.replacement.as_deref() == Some("graph_macro_event_candidates")
+    }));
+    assert!(catalog.iter().any(|item| {
         item.name == "knowledge_links"
             && item.deprecated
             && item.replacement.as_deref() == Some("graph_knowledge_links")
@@ -653,6 +658,176 @@ fn execute_tool_reads_macro_event_contracts() {
             assert_eq!(items[0].event.event_id, "macro:1");
         }
         other => panic!("expected macro event contracts, got {other:?}"),
+    }
+}
+
+#[test]
+fn execute_tool_reads_graph_macro_event_candidates() {
+    let snapshot = AgentSnapshot {
+        tick: 1,
+        timestamp: "2026-03-23T00:00:00Z".into(),
+        market: LiveMarket::Hk,
+        market_regime: LiveMarketRegime {
+            bias: "neutral".into(),
+            confidence: Decimal::ZERO,
+            breadth_up: Decimal::ZERO,
+            breadth_down: Decimal::ZERO,
+            average_return: Decimal::ZERO,
+            directional_consensus: None,
+            pre_market_sentiment: None,
+        },
+        stress: LiveStressSnapshot {
+            composite_stress: Decimal::ZERO,
+            sector_synchrony: None,
+            pressure_consensus: None,
+            momentum_consensus: None,
+            pressure_dispersion: None,
+            volume_anomaly: None,
+        },
+        wake: AgentWakeState {
+            should_speak: false,
+            priority: Decimal::ZERO,
+            headline: None,
+            summary: vec![],
+            focus_symbols: vec![],
+            reasons: vec![],
+            suggested_tools: vec![],
+        },
+        world_state: None,
+        backward_reasoning: None,
+        notices: vec![],
+        active_structures: vec![],
+        recent_transitions: vec![],
+        sector_flows: vec![],
+        symbols: vec![],
+        events: vec![],
+        cross_market_signals: vec![],
+        context_priors: vec![],
+        macro_event_candidates: vec![AgentMacroEventCandidate {
+            candidate_id: "candidate:1".into(),
+            tick: 1,
+            market: LiveMarket::Hk,
+            source_kind: "news".into(),
+            source_name: "wire".into(),
+            event_type: "policy".into(),
+            authority_level: "rumor".into(),
+            headline: "Policy rumor".into(),
+            summary: "Policy rumor".into(),
+            confidence: dec!(0.6),
+            novelty_score: dec!(0.4),
+            jurisdictions: vec![],
+            entities: vec![],
+            impact: AgentEventImpact {
+                primary_scope: "market".into(),
+                secondary_scopes: vec![],
+                affected_markets: vec!["hk".into()],
+                affected_sectors: vec![],
+                affected_symbols: vec![],
+                preferred_expression: "index".into(),
+                requires_market_confirmation: true,
+                decisive_factors: vec![],
+            },
+        }],
+        macro_events: vec![],
+        knowledge_links: vec![],
+    };
+
+    let output = execute_tool(
+        &snapshot,
+        None,
+        &AgentToolRequest {
+            tool: "graph_macro_event_candidates".into(),
+            symbol: None,
+            sector: None,
+            since_tick: None,
+            limit: None,
+        },
+    )
+    .expect("graph macro event candidates");
+
+    match output {
+        AgentToolOutput::MacroEventCandidates(items) => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].candidate_id, "candidate:1");
+        }
+        other => panic!("expected macro event candidates, got {other:?}"),
+    }
+}
+
+#[test]
+fn execute_tool_reads_graph_knowledge_links() {
+    let snapshot = AgentSnapshot {
+        tick: 1,
+        timestamp: "2026-03-23T00:00:00Z".into(),
+        market: LiveMarket::Hk,
+        market_regime: LiveMarketRegime {
+            bias: "neutral".into(),
+            confidence: Decimal::ZERO,
+            breadth_up: Decimal::ZERO,
+            breadth_down: Decimal::ZERO,
+            average_return: Decimal::ZERO,
+            directional_consensus: None,
+            pre_market_sentiment: None,
+        },
+        stress: LiveStressSnapshot {
+            composite_stress: Decimal::ZERO,
+            sector_synchrony: None,
+            pressure_consensus: None,
+            momentum_consensus: None,
+            pressure_dispersion: None,
+            volume_anomaly: None,
+        },
+        wake: AgentWakeState {
+            should_speak: false,
+            priority: Decimal::ZERO,
+            headline: None,
+            summary: vec![],
+            focus_symbols: vec![],
+            reasons: vec![],
+            suggested_tools: vec![],
+        },
+        world_state: None,
+        backward_reasoning: None,
+        notices: vec![],
+        active_structures: vec![],
+        recent_transitions: vec![],
+        sector_flows: vec![],
+        symbols: vec![],
+        events: vec![],
+        cross_market_signals: vec![],
+        context_priors: vec![],
+        macro_event_candidates: vec![],
+        macro_events: vec![],
+        knowledge_links: vec![AgentKnowledgeLink {
+            link_id: "link:1".into(),
+            relation: crate::ontology::KnowledgeRelation::ImpactsSymbol,
+            source: crate::ontology::macro_event_knowledge_node_ref("macro:1", "headline"),
+            target: crate::ontology::symbol_knowledge_node_ref("700.HK"),
+            confidence: Decimal::ZERO,
+            attributes: crate::ontology::KnowledgeLinkAttributes::Generic,
+            rationale: None,
+        }],
+    };
+
+    let output = execute_tool(
+        &snapshot,
+        None,
+        &AgentToolRequest {
+            tool: "graph_knowledge_links".into(),
+            symbol: None,
+            sector: None,
+            since_tick: None,
+            limit: None,
+        },
+    )
+    .expect("graph knowledge links");
+
+    match output {
+        AgentToolOutput::KnowledgeLinks(items) => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].link_id, "link:1");
+        }
+        other => panic!("expected knowledge links, got {other:?}"),
     }
 }
 
