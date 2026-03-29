@@ -296,6 +296,87 @@ fn tool_catalog_includes_core_queries() {
             && item.category == AgentToolCategory::ObjectQuery
             && item.route == "/api/ontology/:market/world"
     }));
+    let names = catalog.iter().map(|item| item.name.as_str()).collect::<Vec<_>>();
+    assert!(names.iter().position(|item| *item == "recommendations")
+        < names.iter().position(|item| *item == "active_structures"));
+}
+
+#[test]
+fn wake_suggested_tools_prefer_primary_surfaces_before_compat_queries() {
+    let symbols = vec![AgentSymbolState {
+        symbol: "9988.HK".into(),
+        sector: Some("Technology".into()),
+        structure: None,
+        signal: Some(signal_state(dec!(0.6), dec!(0.5))),
+        depth: Some(AgentDepthState {
+            imbalance: dec!(0.5),
+            imbalance_change: dec!(0.2),
+            bid_best_ratio: dec!(0.5),
+            bid_best_ratio_change: Decimal::ZERO,
+            ask_best_ratio: dec!(0.5),
+            ask_best_ratio_change: Decimal::ZERO,
+            bid_top3_ratio: dec!(0.5),
+            bid_top3_ratio_change: Decimal::ZERO,
+            ask_top3_ratio: dec!(0.5),
+            ask_top3_ratio_change: Decimal::ZERO,
+            spread: None,
+            spread_change: None,
+            bid_total_volume: 10,
+            ask_total_volume: 10,
+            bid_total_volume_change: 10_000,
+            ask_total_volume_change: 0,
+            summary: "depth moved".into(),
+        }),
+        brokers: Some(AgentBrokerState {
+            current: vec![],
+            entered: vec!["Broker A".into()],
+            exited: vec![],
+            switched_to_bid: vec![],
+            switched_to_ask: vec![],
+        }),
+        invalidation: None,
+        pressure: None,
+        active_position: None,
+        latest_events: vec![],
+    }];
+    let wake = build_wake_state(
+        10,
+        &[],
+        &[AgentTransition {
+            from_tick: 9,
+            to_tick: 10,
+            symbol: "9988.HK".into(),
+            sector: Some("Technology".into()),
+            setup_id: Some("setup-1".into()),
+            title: "Alibaba".into(),
+            from_state: Some("review:stable".into()),
+            to_state: "enter:weakening".into(),
+            confidence: dec!(0.8),
+            summary: "Alibaba transition".into(),
+            transition_reason: Some("rotation".into()),
+        }],
+        &symbols,
+        &[AgentSectorFlow {
+            sector: "Technology".into(),
+            member_count: 3,
+            average_composite: dec!(0.7),
+            average_capital_flow: dec!(0.4),
+            leaders: vec!["9988.HK".into()],
+            exceptions: vec!["1810.HK".into()],
+            summary: "tech divergence".into(),
+        }],
+        &[],
+    );
+
+    let names = wake
+        .suggested_tools
+        .iter()
+        .map(|item| item.tool.as_str())
+        .collect::<Vec<_>>();
+    assert!(names.iter().position(|item| *item == "transitions_since")
+        < names.iter().position(|item| *item == "symbol_state"));
+    assert!(names.iter().position(|item| *item == "sector_flow")
+        < names.iter().position(|item| *item == "depth_change"));
 }
 
 #[test]

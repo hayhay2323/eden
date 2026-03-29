@@ -1,7 +1,7 @@
 use super::*;
 
 pub fn tool_catalog() -> Vec<AgentToolSpec> {
-    vec![
+    let mut tools = vec![
         AgentToolSpec {
             name: "wake".into(),
             category: AgentToolCategory::DerivedView,
@@ -420,7 +420,85 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
                 },
             ],
         },
-    ]
+    ];
+    sort_tool_specs(&mut tools);
+    tools
+}
+
+pub(crate) fn sort_suggested_tool_calls(calls: &mut Vec<AgentSuggestedToolCall>) {
+    calls.sort_by(|left, right| {
+        suggested_tool_sort_key(&left.tool)
+            .cmp(&suggested_tool_sort_key(&right.tool))
+            .then_with(|| left.tool.cmp(&right.tool))
+    });
+}
+
+fn sort_tool_specs(tools: &mut [AgentToolSpec]) {
+    tools.sort_by(|left, right| {
+        suggested_tool_sort_key(&left.name)
+            .cmp(&suggested_tool_sort_key(&right.name))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+}
+
+fn suggested_tool_sort_key(tool_name: &str) -> (usize, usize) {
+    let category = tool_catalog_category(tool_name).unwrap_or(AgentToolCategory::CompatQuery);
+    (preferred_tool_rank(tool_name), tool_category_rank(category))
+}
+
+fn preferred_tool_rank(tool_name: &str) -> usize {
+    match tool_name {
+        "recommendations" => 0,
+        "watchlist" => 1,
+        "notices" => 2,
+        "transitions_since" => 3,
+        "symbol_state" => 4,
+        "world_state" => 5,
+        "backward_investigation" => 6,
+        "sector_flow" => 7,
+        "depth_change" => 8,
+        "broker_movement" => 9,
+        "invalidation_status" => 10,
+        "active_structures" => 11,
+        "structure_state" => 12,
+        "threads" => 13,
+        "turns" => 14,
+        "wake" => 15,
+        "session" => 16,
+        "alert_scoreboard" => 17,
+        "eod_review" => 18,
+        "macro_event_candidates" => 19,
+        "macro_events" => 20,
+        "knowledge_links" => 21,
+        _ => 100,
+    }
+}
+
+fn tool_category_rank(category: AgentToolCategory) -> usize {
+    match category {
+        AgentToolCategory::DerivedView => 0,
+        AgentToolCategory::Feed => 1,
+        AgentToolCategory::ObjectQuery => 2,
+        AgentToolCategory::Microstructure => 3,
+        AgentToolCategory::GraphQuery => 4,
+        AgentToolCategory::CompatQuery => 5,
+    }
+}
+
+fn tool_catalog_category(tool_name: &str) -> Option<AgentToolCategory> {
+    match tool_name {
+        "wake" | "session" | "watchlist" | "recommendations" | "alert_scoreboard"
+        | "eod_review" | "threads" | "turns" => Some(AgentToolCategory::DerivedView),
+        "notices" | "transitions_since" => Some(AgentToolCategory::Feed),
+        "world_state" | "backward_investigation" | "sector_flow" => {
+            Some(AgentToolCategory::ObjectQuery)
+        }
+        "depth_change" | "broker_movement" => Some(AgentToolCategory::Microstructure),
+        "knowledge_links" => Some(AgentToolCategory::GraphQuery),
+        "active_structures" | "structure_state" | "symbol_state" | "invalidation_status"
+        | "macro_event_candidates" | "macro_events" => Some(AgentToolCategory::CompatQuery),
+        _ => None,
+    }
 }
 
 pub fn execute_tool(

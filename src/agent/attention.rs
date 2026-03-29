@@ -432,6 +432,7 @@ pub(crate) fn build_wake_state(
             reason: "Inspect the broader sector context behind the divergence.".into(),
         });
     }
+    sort_suggested_tool_calls(&mut suggested_tools);
     suggested_tools.truncate(6);
 
     AgentWakeState {

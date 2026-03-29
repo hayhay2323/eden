@@ -78,6 +78,7 @@ use macro_events::{
 };
 pub use recommendations::build_recommendations;
 pub use tools::{execute_tool, tool_catalog};
+pub(crate) use tools::sort_suggested_tool_calls;
 use builders::alpha_horizon_label;
 pub use builders::{build_hk_agent_snapshot, build_us_agent_snapshot};
 pub(crate) use lens::{default_lens_engine, LensBundle, LensContext};
