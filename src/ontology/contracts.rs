@@ -17,7 +17,9 @@ use crate::agent_llm::{
 use crate::cases::{build_case_summaries, CaseMarket, CaseSummary};
 use crate::live_snapshot::{LiveEvent, LiveMarket, LiveMarketRegime, LiveSnapshot, LiveStressSnapshot};
 use crate::action::workflow::{ActionExecutionPolicy, ActionGovernanceContract, ActionGovernanceReasonCode};
-use crate::ontology::{AgentKnowledgeLink, AgentMacroEvent, AgentMacroEventCandidate, Symbol};
+use crate::ontology::{
+    AgentKnowledgeLink, AgentMacroEvent, AgentMacroEventCandidate, KnowledgeNodeKind, Symbol,
+};
 use crate::ontology::world::{BackwardInvestigation, WorldStateSnapshot};
 use rust_decimal::Decimal;
 use std::collections::HashMap;

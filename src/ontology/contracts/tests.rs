@@ -242,6 +242,14 @@
         assert_eq!(operational.workflows.len(), 1);
         assert_eq!(operational.market_session.market_summary.as_deref(), Some("summary"));
         assert_eq!(
+            operational.symbols[0].graph_ref.endpoint.as_str(),
+            "/api/ontology/hk/graph/node/symbol:700.hk"
+        );
+        assert_eq!(
+            operational.cases[0].graph_ref.endpoint.as_str(),
+            "/api/ontology/hk/graph/node/setup:700.HK"
+        );
+        assert_eq!(
             operational.cases[0]
                 .history_refs
                 .reasoning
@@ -451,4 +459,8 @@
         assert!(operational.world_state().is_some());
         assert_eq!(operational.sidecars.macro_event_candidates.len(), 1);
         assert_eq!(operational.sidecars.knowledge_links.len(), 1);
+        assert_eq!(
+            operational.sidecars.knowledge_links[0].link_id.as_str(),
+            "link:1"
+        );
     }

@@ -14,6 +14,46 @@ fn combined_knowledge_links(
         .collect()
 }
 
+fn graph_node_endpoint(market: LiveMarket, node_id: &str) -> String {
+    format!("/api/ontology/{}/graph/node/{node_id}", market_slug(market))
+}
+
+fn symbol_graph_ref(market: LiveMarket, symbol: &str) -> OperationalGraphRef {
+    let node_id = crate::ontology::symbol_node_id(symbol);
+    OperationalGraphRef {
+        node_id: node_id.clone(),
+        node_kind: KnowledgeNodeKind::Symbol,
+        endpoint: graph_node_endpoint(market, &node_id),
+    }
+}
+
+fn setup_graph_ref(market: LiveMarket, setup_id: &str) -> OperationalGraphRef {
+    let node_id = crate::ontology::setup_node_id(setup_id);
+    OperationalGraphRef {
+        node_id: node_id.clone(),
+        node_kind: KnowledgeNodeKind::Setup,
+        endpoint: graph_node_endpoint(market, &node_id),
+    }
+}
+
+fn decision_graph_ref(market: LiveMarket, recommendation_id: &str) -> OperationalGraphRef {
+    let node_id = crate::ontology::decision_node_id(recommendation_id);
+    OperationalGraphRef {
+        node_id: node_id.clone(),
+        node_kind: KnowledgeNodeKind::Decision,
+        endpoint: graph_node_endpoint(market, &node_id),
+    }
+}
+
+fn macro_event_graph_ref(market: LiveMarket, event_id: &str) -> OperationalGraphRef {
+    let node_id = crate::ontology::macro_event_node_id(event_id);
+    OperationalGraphRef {
+        node_id: node_id.clone(),
+        node_kind: KnowledgeNodeKind::MacroEvent,
+        endpoint: graph_node_endpoint(market, &node_id),
+    }
+}
+
 pub(crate) fn operational_history_ref(
     key: impl Into<String>,
     endpoint: impl Into<String>,
@@ -143,6 +183,7 @@ pub fn build_symbol_state_contract(
         observed_at,
         symbol: state.symbol.clone(),
         sector: state.sector.clone(),
+        graph_ref: symbol_graph_ref(snapshot.market, &state.symbol),
         state: state.clone(),
     })
 }
@@ -160,6 +201,7 @@ pub fn build_macro_event_contracts(
             market: snapshot.market,
             source_tick: snapshot.tick,
             observed_at,
+            graph_ref: macro_event_graph_ref(snapshot.market, &event.event_id),
             event,
         })
         .collect())
@@ -217,6 +259,7 @@ pub fn build_operational_snapshot(
                 .filter(|(_, case_id, _, _)| case_id.as_deref() == Some(item.case_id.as_str()))
                 .map(|(rec_id, _, _, _)| rec_id.clone())
                 .collect(),
+            graph_ref: setup_graph_ref(item.market, &item.setup_id),
             history_refs: case_history_refs(
                 item.market,
                 &item.case_id,
@@ -243,6 +286,7 @@ pub fn build_operational_snapshot(
                 related_case_id: linkage.and_then(|(_, case_id, _, _)| case_id.clone()),
                 related_setup_id: linkage.and_then(|(_, _, setup_id, _)| setup_id.clone()),
                 related_workflow_id: linkage.and_then(|(_, _, _, workflow_id)| workflow_id.clone()),
+                graph_ref: decision_graph_ref(snapshot.market, &item.recommendation_id),
                 history_refs: recommendation_history_refs(
                     snapshot.market,
                     &item.recommendation_id,
@@ -370,6 +414,7 @@ pub fn rebuild_operational_case_graph(
                 .filter(|(_, case_id, _, _)| case_id.as_deref() == Some(item.case_id.as_str()))
                 .map(|(rec_id, _, _, _)| rec_id.clone())
                 .collect(),
+            graph_ref: setup_graph_ref(item.market, &item.setup_id),
             history_refs: case_history_refs(
                 item.market,
                 &item.case_id,

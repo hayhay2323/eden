@@ -38,6 +38,13 @@ pub struct OperationalHistoryRef {
     pub latest_at: Option<OffsetDateTime>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationalGraphRef {
+    pub node_id: String,
+    pub node_kind: KnowledgeNodeKind,
+    pub endpoint: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CaseHistoryRefs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -102,6 +109,7 @@ pub struct SymbolStateContract {
     pub symbol: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sector: Option<String>,
+    pub graph_ref: OperationalGraphRef,
     pub state: AgentSymbolState,
 }
 
@@ -148,6 +156,7 @@ pub struct CaseContract {
     pub alpha_horizon: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recommendation_ids: Vec<String>,
+    pub graph_ref: OperationalGraphRef,
     #[serde(default)]
     pub history_refs: CaseHistoryRefs,
 }
@@ -166,6 +175,7 @@ pub struct RecommendationContract {
     pub related_setup_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_workflow_id: Option<String>,
+    pub graph_ref: OperationalGraphRef,
     pub recommendation: AgentRecommendation,
     #[serde(default)]
     pub history_refs: RecommendationHistoryRefs,
@@ -178,6 +188,7 @@ pub struct MacroEventContract {
     pub source_tick: u64,
     #[serde(with = "rfc3339")]
     pub observed_at: OffsetDateTime,
+    pub graph_ref: OperationalGraphRef,
     pub event: AgentMacroEvent,
 }
 
