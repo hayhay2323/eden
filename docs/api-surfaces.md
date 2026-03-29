@@ -53,6 +53,8 @@ Use this as the main application/query surface.
 Examples:
 
 - `/api/ontology/:market/operational-snapshot`
+- `/api/ontology/:market/navigation/:kind/:id`
+- `/api/ontology/:market/neighborhood/:kind/:id`
 - `/api/ontology/:market/market-session`
 - `/api/ontology/:market/symbols`
 - `/api/ontology/:market/cases`
@@ -66,6 +68,7 @@ Rules:
 - This is the preferred surface for new application code.
 - Object contracts live here.
 - History refs and graph/world query paths also belong here.
+- Navigation and neighborhood traversal also belong here.
 
 ## 2. Object Surface
 
