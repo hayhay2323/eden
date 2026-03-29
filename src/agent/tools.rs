@@ -172,7 +172,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "transitions_since".into(),
-            route: "/api/agent/:market/transitions".into(),
+            route: "/api/feed/:market/transitions".into(),
             method: "GET".into(),
             description: "Returns recent structure transitions after an optional tick threshold."
                 .into(),
@@ -266,7 +266,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "world_state".into(),
-            route: "/api/agent/:market/world".into(),
+            route: "/api/ontology/:market/world".into(),
             method: "GET".into(),
             description:
                 "Returns the current world-state canopy/trunk/leaf snapshot when available.".into(),
@@ -274,7 +274,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "backward_investigation".into(),
-            route: "/api/agent/:market/backward/:symbol".into(),
+            route: "/api/ontology/:market/backward/:symbol".into(),
             method: "GET".into(),
             description: "Returns the current backward causal investigation for one symbol when available."
                 .into(),
@@ -286,7 +286,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "notices".into(),
-            route: "/api/agent/:market/notices".into(),
+            route: "/api/feed/:market/notices".into(),
             method: "GET".into(),
             description: "Returns the current notice feed, with optional since_tick and filters."
                 .into(),
