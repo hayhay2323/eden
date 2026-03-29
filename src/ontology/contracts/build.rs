@@ -1,5 +1,82 @@
 use super::*;
 
+pub(crate) fn operational_history_ref(
+    key: impl Into<String>,
+    endpoint: impl Into<String>,
+) -> OperationalHistoryRef {
+    OperationalHistoryRef {
+        key: key.into(),
+        endpoint: endpoint.into(),
+        count: None,
+        latest_at: None,
+    }
+}
+
+pub(crate) fn case_history_refs(
+    market: LiveMarket,
+    case_id: &str,
+    setup_id: &str,
+    workflow_id: Option<&str>,
+) -> CaseHistoryRefs {
+    let market = market_slug(market);
+    CaseHistoryRefs {
+        workflow: workflow_id.map(|workflow_id| {
+            operational_history_ref(
+                workflow_id,
+                format!("/api/ontology/{market}/cases/{case_id}/history/workflow"),
+            )
+        }),
+        reasoning: Some(operational_history_ref(
+            setup_id,
+            format!("/api/ontology/{market}/cases/{case_id}/history/reasoning"),
+        )),
+        outcomes: Some(operational_history_ref(
+            setup_id,
+            format!("/api/ontology/{market}/cases/{case_id}/history/outcomes"),
+        )),
+    }
+}
+
+pub(crate) fn recommendation_history_refs(
+    market: LiveMarket,
+    recommendation_id: &str,
+    related_case_id: Option<&str>,
+    related_workflow_id: Option<&str>,
+) -> RecommendationHistoryRefs {
+    let market = market_slug(market);
+    RecommendationHistoryRefs {
+        journal: Some(operational_history_ref(
+            recommendation_id,
+            format!("/api/ontology/{market}/recommendations/{recommendation_id}/history"),
+        )),
+        workflow: related_workflow_id.map(|workflow_id| {
+            operational_history_ref(
+                workflow_id,
+                format!("/api/ontology/{market}/workflows/{workflow_id}/history"),
+            )
+        }),
+        outcomes: related_case_id.map(|case_id| {
+            operational_history_ref(
+                case_id,
+                format!("/api/ontology/{market}/cases/{case_id}/history/outcomes"),
+            )
+        }),
+    }
+}
+
+pub(crate) fn workflow_history_refs(
+    market: LiveMarket,
+    workflow_id: &str,
+) -> WorkflowHistoryRefs {
+    let market = market_slug(market);
+    WorkflowHistoryRefs {
+        events: Some(operational_history_ref(
+            workflow_id,
+            format!("/api/ontology/{market}/workflows/{workflow_id}/history"),
+        )),
+    }
+}
+
 pub fn build_operational_snapshot(
     live_snapshot: &LiveSnapshot,
     snapshot: &AgentSnapshot,
@@ -83,6 +160,12 @@ pub fn build_operational_snapshot(
                 .filter(|(_, case_id, _, _)| case_id.as_deref() == Some(item.case_id.as_str()))
                 .map(|(rec_id, _, _, _)| rec_id.clone())
                 .collect(),
+            history_refs: case_history_refs(
+                item.market,
+                &item.case_id,
+                &item.setup_id,
+                item.workflow_id.as_deref(),
+            ),
         })
         .collect::<Vec<_>>();
 
@@ -103,6 +186,12 @@ pub fn build_operational_snapshot(
                 related_case_id: linkage.and_then(|(_, case_id, _, _)| case_id.clone()),
                 related_setup_id: linkage.and_then(|(_, _, setup_id, _)| setup_id.clone()),
                 related_workflow_id: linkage.and_then(|(_, _, _, workflow_id)| workflow_id.clone()),
+                history_refs: recommendation_history_refs(
+                    snapshot.market,
+                    &item.recommendation_id,
+                    linkage.and_then(|(_, case_id, _, _)| case_id.as_deref()),
+                    linkage.and_then(|(_, _, _, workflow_id)| workflow_id.as_deref()),
+                ),
                 recommendation: item,
             }
         })
@@ -232,6 +321,12 @@ pub fn rebuild_operational_case_graph(
                 .filter(|(_, case_id, _, _)| case_id.as_deref() == Some(item.case_id.as_str()))
                 .map(|(rec_id, _, _, _)| rec_id.clone())
                 .collect(),
+            history_refs: case_history_refs(
+                item.market,
+                &item.case_id,
+                &item.setup_id,
+                item.workflow_id.as_deref(),
+            ),
         })
         .collect();
 
@@ -243,6 +338,12 @@ pub fn rebuild_operational_case_graph(
             recommendation.related_case_id = case_id.clone();
             recommendation.related_setup_id = setup_id.clone();
             recommendation.related_workflow_id = workflow_id.clone();
+            recommendation.history_refs = recommendation_history_refs(
+                snapshot.market,
+                &recommendation.id.0,
+                case_id.as_deref(),
+                workflow_id.as_deref(),
+            );
         }
     }
 

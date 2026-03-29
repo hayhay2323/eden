@@ -241,6 +241,30 @@
         assert_eq!(operational.threads.len(), 1);
         assert_eq!(operational.workflows.len(), 1);
         assert_eq!(operational.market_session.market_summary.as_deref(), Some("summary"));
+        assert_eq!(
+            operational.cases[0]
+                .history_refs
+                .reasoning
+                .as_ref()
+                .map(|item| item.endpoint.as_str()),
+            Some("/api/ontology/hk/cases/setup:700.HK/history/reasoning")
+        );
+        assert_eq!(
+            operational.cases[0]
+                .history_refs
+                .outcomes
+                .as_ref()
+                .map(|item| item.endpoint.as_str()),
+            Some("/api/ontology/hk/cases/setup:700.HK/history/outcomes")
+        );
+        assert_eq!(
+            operational.workflows[0]
+                .history_refs
+                .events
+                .as_ref()
+                .map(|item| item.endpoint.as_str()),
+            Some("/api/ontology/hk/workflows/workflow:setup:700.HK/history")
+        );
     }
 
     #[test]

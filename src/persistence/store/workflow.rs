@@ -128,6 +128,23 @@ impl EdenStore {
         .await
     }
 
+    pub async fn recent_case_realized_outcomes(
+        &self,
+        setup_id: &str,
+        limit: usize,
+    ) -> Result<Vec<CaseRealizedOutcomeRecord>, StoreError> {
+        fetch_records_by_field_order(
+            &self.db,
+            "case_realized_outcome",
+            "setup_id",
+            setup_id,
+            "resolved_at",
+            false,
+            limit,
+        )
+        .await
+    }
+
     pub async fn write_hypothesis_track(
         &self,
         record: &HypothesisTrackRecord,

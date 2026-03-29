@@ -210,6 +210,7 @@ pub(crate) fn build_workflow_contracts(
             synthetic: case.workflow_id.is_none(),
             case_ids: Vec::new(),
             recommendation_ids: Vec::new(),
+            history_refs: workflow_history_refs(market, &workflow_key),
         });
         entry.case_ids.push(case.id.0.clone());
     }
@@ -234,6 +235,7 @@ pub(crate) fn build_workflow_contracts(
                     synthetic: true,
                     case_ids: Vec::new(),
                     recommendation_ids: Vec::new(),
+                    history_refs: workflow_history_refs(market, workflow_id),
                 });
             entry.recommendation_ids.push(recommendation.id.0.clone());
         }

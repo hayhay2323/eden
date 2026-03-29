@@ -29,6 +29,42 @@ pub struct ThreadContractId(pub String);
 pub struct WorkflowContractId(pub String);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationalHistoryRef {
+    pub key: String,
+    pub endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "rfc3339::option")]
+    pub latest_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CaseHistoryRefs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<OperationalHistoryRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<OperationalHistoryRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcomes: Option<OperationalHistoryRef>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RecommendationHistoryRefs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal: Option<OperationalHistoryRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<OperationalHistoryRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcomes: Option<OperationalHistoryRef>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WorkflowHistoryRefs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events: Option<OperationalHistoryRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketSessionContract {
     pub id: MarketSessionId,
     pub market: LiveMarket,
@@ -112,6 +148,8 @@ pub struct CaseContract {
     pub alpha_horizon: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recommendation_ids: Vec<String>,
+    #[serde(default)]
+    pub history_refs: CaseHistoryRefs,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,6 +167,8 @@ pub struct RecommendationContract {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_workflow_id: Option<String>,
     pub recommendation: AgentRecommendation,
+    #[serde(default)]
+    pub history_refs: RecommendationHistoryRefs,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +214,8 @@ pub struct WorkflowContract {
     pub case_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recommendation_ids: Vec<String>,
+    #[serde(default)]
+    pub history_refs: WorkflowHistoryRefs,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -46,6 +46,10 @@ use super::super::ontology_api::{
     get_sector_flow_sidecars, get_symbol_state_contract, get_symbol_state_contracts,
     get_thread_contract, get_thread_contracts, get_workflow_contract, get_workflow_contracts,
 };
+use super::super::ontology_history_api::{
+    get_case_outcome_history, get_case_reasoning_history, get_case_workflow_history,
+    get_recommendation_journal_history, get_workflow_event_history,
+};
 use super::auth::{audit_request, build_cors_layer, require_api_key};
 use super::health::{get_live_snapshot, get_polymarket, get_us_live_snapshot, health, health_report};
 
@@ -136,12 +140,28 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
         .route("/ontology/:market/cases", get(get_case_contracts))
         .route("/ontology/:market/cases/:case_id", get(get_case_contract))
         .route(
+            "/ontology/:market/cases/:case_id/history/workflow",
+            get(get_case_workflow_history),
+        )
+        .route(
+            "/ontology/:market/cases/:case_id/history/reasoning",
+            get(get_case_reasoning_history),
+        )
+        .route(
+            "/ontology/:market/cases/:case_id/history/outcomes",
+            get(get_case_outcome_history),
+        )
+        .route(
             "/ontology/:market/recommendations",
             get(get_recommendation_contracts),
         )
         .route(
             "/ontology/:market/recommendations/:recommendation_id",
             get(get_recommendation_contract),
+        )
+        .route(
+            "/ontology/:market/recommendations/:recommendation_id/history",
+            get(get_recommendation_journal_history),
         )
         .route(
             "/ontology/:market/macro-events",
@@ -155,6 +175,10 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
         .route("/ontology/:market/threads/:thread_id", get(get_thread_contract))
         .route("/ontology/:market/workflows", get(get_workflow_contracts))
         .route("/ontology/:market/workflows/:workflow_id", get(get_workflow_contract))
+        .route(
+            "/ontology/:market/workflows/:workflow_id/history",
+            get(get_workflow_event_history),
+        )
         .route("/ontology/:market/sector-flows", get(get_sector_flow_sidecars))
         .route(
             "/ontology/:market/backward/:symbol",
