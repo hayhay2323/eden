@@ -287,6 +287,16 @@ fn tool_catalog_includes_core_queries() {
         .iter()
         .any(|item| item.name == "backward_investigation"));
     assert!(catalog.iter().any(|item| {
+        item.name == "market_session"
+            && item.category == AgentToolCategory::ObjectQuery
+            && !item.deprecated
+    }));
+    assert!(catalog.iter().any(|item| {
+        item.name == "symbol_contract"
+            && item.category == AgentToolCategory::ObjectQuery
+            && !item.deprecated
+    }));
+    assert!(catalog.iter().any(|item| {
         item.name == "notices"
             && item.category == AgentToolCategory::Feed
             && item.route == "/api/feed/:market/notices"
@@ -295,6 +305,11 @@ fn tool_catalog_includes_core_queries() {
         item.name == "world_state"
             && item.category == AgentToolCategory::ObjectQuery
             && item.route == "/api/ontology/:market/world"
+    }));
+    assert!(catalog.iter().any(|item| {
+        item.name == "symbol_state"
+            && item.deprecated
+            && item.replacement.as_deref() == Some("symbol_contract")
     }));
     let names = catalog.iter().map(|item| item.name.as_str()).collect::<Vec<_>>();
     assert!(names.iter().position(|item| *item == "recommendations")
@@ -374,9 +389,75 @@ fn wake_suggested_tools_prefer_primary_surfaces_before_compat_queries() {
         .map(|item| item.tool.as_str())
         .collect::<Vec<_>>();
     assert!(names.iter().position(|item| *item == "transitions_since")
-        < names.iter().position(|item| *item == "symbol_state"));
+        < names.iter().position(|item| *item == "symbol_contract"));
     assert!(names.iter().position(|item| *item == "sector_flow")
         < names.iter().position(|item| *item == "depth_change"));
+}
+
+#[test]
+fn execute_tool_reads_symbol_contract() {
+    let snapshot = AgentSnapshot {
+        tick: 1,
+        timestamp: "2026-03-23T00:00:00Z".into(),
+        market: LiveMarket::Hk,
+        market_regime: LiveMarketRegime {
+            bias: "neutral".into(),
+            confidence: Decimal::ZERO,
+            breadth_up: Decimal::ZERO,
+            breadth_down: Decimal::ZERO,
+            average_return: Decimal::ZERO,
+            directional_consensus: None,
+            pre_market_sentiment: None,
+        },
+        stress: LiveStressSnapshot {
+            composite_stress: Decimal::ZERO,
+            sector_synchrony: None,
+            pressure_consensus: None,
+            momentum_consensus: None,
+            pressure_dispersion: None,
+            volume_anomaly: None,
+        },
+        wake: AgentWakeState {
+            should_speak: false,
+            priority: Decimal::ZERO,
+            headline: None,
+            summary: vec![],
+            focus_symbols: vec![],
+            reasons: vec![],
+            suggested_tools: vec![],
+        },
+        world_state: None,
+        backward_reasoning: None,
+        notices: vec![],
+        active_structures: vec![],
+        recent_transitions: vec![],
+        sector_flows: vec![],
+        symbols: vec![symbol_state("700.HK", "Technology", dec!(0.4))],
+        events: vec![],
+        cross_market_signals: vec![],
+        context_priors: vec![],
+        macro_event_candidates: vec![],
+        macro_events: vec![],
+        knowledge_links: vec![],
+    };
+
+    let output = execute_tool(
+        &snapshot,
+        None,
+        &AgentToolRequest {
+            tool: "symbol_contract".into(),
+            symbol: Some("700.HK".into()),
+            sector: None,
+            since_tick: None,
+            limit: None,
+        },
+    )
+    .expect("symbol contract");
+
+    match output {
+        AgentToolOutput::SymbolContract(state) => assert_eq!(state.symbol, "700.HK"),
+        other => panic!("expected symbol contract, got {other:?}"),
+    }
 }
 
 #[test]

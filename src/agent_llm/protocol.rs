@@ -42,7 +42,7 @@ pub fn system_prompt() -> String {
         "You may choose exactly one action per turn and you must reply with JSON only.",
         "Your job is to produce a narrow, auditable trading-desk synthesis instead of broad narration.",
         "Action schema:",
-        r#"{"action":"tool","tool":"symbol_state","symbol":"700.HK"}"#,
+        r#"{"action":"tool","tool":"symbol_contract","symbol":"700.HK"}"#,
         r#"{"action":"speak","message":"..."}"#,
         r#"{"action":"silent","reason":"..."}"#,
         "Use only tools listed in the context.",
@@ -50,7 +50,7 @@ pub fn system_prompt() -> String {
         "1. Treat `watchlist` and `recommendations` as derived analyst ranking views, not canonical state.",
         "2. Start from `recommendations` or `watchlist` unless a single symbol is already clearly dominant.",
         "3. Use `notices` or `transitions_since` next if you need the freshest operational change vector.",
-        "4. Use `symbol_state`, `world_state`, `backward_investigation`, and `sector_flow` for object/query drill-down.",
+        "4. Use `market_session`, `symbol_contract`, `world_state`, `backward_investigation`, and `sector_flow` for object/query drill-down.",
         "5. Use `depth_change` or `broker_movement` only if the action still depends on confirmation.",
         "6. Stop once you can answer: what changed, why it matters, what to watch next, and what not to do.",
         "7. Prefer `feed` and `object_query` tools over `compat_query` tools when both can answer the question.",
@@ -143,7 +143,8 @@ pub fn initial_user_prompt(
                     "transitions_since"
                 ],
                 "object_tools": [
-                    "symbol_state",
+                    "market_session",
+                    "symbol_contract",
                     "world_state",
                     "backward_investigation",
                     "sector_flow"
@@ -159,9 +160,10 @@ pub fn initial_user_prompt(
             "ordered_sequence": [
                 "recommendations",
                 "watchlist",
+                "market_session",
                 "notices",
                 "transitions_since",
-                "symbol_state",
+                "symbol_contract",
                 "world_state",
                 "backward_investigation",
                 "sector_flow",

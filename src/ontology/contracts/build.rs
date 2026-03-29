@@ -77,6 +77,62 @@ pub(crate) fn workflow_history_refs(
     }
 }
 
+pub fn build_market_session_contract(
+    snapshot: &AgentSnapshot,
+    session: Option<&AgentSession>,
+    narration: Option<&AgentNarration>,
+) -> Result<MarketSessionContract, String> {
+    let observed_at = parse_timestamp(&snapshot.timestamp)?;
+    let computed_at = observed_at;
+    Ok(MarketSessionContract {
+        id: MarketSessionId(format!(
+            "market_session:{}:{}",
+            market_slug(snapshot.market),
+            snapshot.tick
+        )),
+        market: snapshot.market,
+        source_tick: snapshot.tick,
+        observed_at,
+        computed_at,
+        market_regime: snapshot.market_regime.clone(),
+        stress: snapshot.stress.clone(),
+        focus_symbols: session
+            .map(|item| item.focus_symbols.clone())
+            .unwrap_or_else(|| snapshot.wake.focus_symbols.clone()),
+        should_speak: session
+            .map(|item| item.should_speak)
+            .unwrap_or(snapshot.wake.should_speak),
+        priority: snapshot.wake.priority,
+        active_thread_count: session.map(|item| item.active_thread_count).unwrap_or(0),
+        wake_headline: snapshot.wake.headline.clone(),
+        wake_summary: snapshot.wake.summary.clone(),
+        wake_reasons: snapshot.wake.reasons.clone(),
+        suggested_tools: snapshot.wake.suggested_tools.clone(),
+        market_summary: narration.and_then(|item| item.market_summary_5m.clone()),
+    })
+}
+
+pub fn build_symbol_state_contract(
+    snapshot: &AgentSnapshot,
+    state: &AgentSymbolState,
+) -> Result<SymbolStateContract, String> {
+    let observed_at = parse_timestamp(&snapshot.timestamp)?;
+    Ok(SymbolStateContract {
+        id: SymbolStateId(format!(
+            "symbol_state:{}:{}:{}",
+            market_slug(snapshot.market),
+            normalized_symbol_id(&state.symbol),
+            snapshot.tick
+        )),
+        market: snapshot.market,
+        source_tick: snapshot.tick,
+        observed_at,
+        symbol: state.symbol.clone(),
+        sector: state.sector.clone(),
+        state: state.clone(),
+    })
+}
+
 pub fn build_operational_snapshot(
     live_snapshot: &LiveSnapshot,
     snapshot: &AgentSnapshot,
@@ -87,44 +143,13 @@ pub fn build_operational_snapshot(
     let observed_at = parse_timestamp(&snapshot.timestamp)?;
     let computed_at = observed_at;
 
-    let market_session = MarketSessionContract {
-        id: MarketSessionId(format!("market_session:{}:{}", market_slug(snapshot.market), snapshot.tick)),
-        market: snapshot.market,
-        source_tick: snapshot.tick,
-        observed_at,
-        computed_at,
-        market_regime: snapshot.market_regime.clone(),
-        stress: snapshot.stress.clone(),
-        focus_symbols: session.focus_symbols.clone(),
-        should_speak: session.should_speak,
-        priority: snapshot.wake.priority,
-        active_thread_count: session.active_thread_count,
-        wake_headline: snapshot.wake.headline.clone(),
-        wake_summary: snapshot.wake.summary.clone(),
-        wake_reasons: snapshot.wake.reasons.clone(),
-        suggested_tools: snapshot.wake.suggested_tools.clone(),
-        market_summary: narration.and_then(|item| item.market_summary_5m.clone()),
-    };
+    let market_session = build_market_session_contract(snapshot, Some(session), narration)?;
 
     let symbols = snapshot
         .symbols
         .iter()
-        .cloned()
-        .map(|state| SymbolStateContract {
-            id: SymbolStateId(format!(
-                "symbol_state:{}:{}:{}",
-                market_slug(snapshot.market),
-                normalized_symbol_id(&state.symbol),
-                snapshot.tick
-            )),
-            market: snapshot.market,
-            source_tick: snapshot.tick,
-            observed_at,
-            symbol: state.symbol.clone(),
-            sector: state.sector.clone(),
-            state,
-        })
-        .collect::<Vec<_>>();
+        .map(|state| build_symbol_state_contract(snapshot, state))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let case_summaries = build_case_summaries(live_snapshot);
     let recommendation_links = link_recommendations_to_cases(&case_summaries, &recommendations.items);

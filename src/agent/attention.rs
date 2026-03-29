@@ -396,7 +396,7 @@ pub(crate) fn build_wake_state(
     }
     for symbol in focus_symbols.iter().take(2) {
         suggested_tools.push(AgentSuggestedToolCall {
-            tool: "symbol_state".into(),
+            tool: "symbol_contract".into(),
             args: json!({ "symbol": symbol }),
             reason: format!("Inspect the full state for {}", symbol),
         });

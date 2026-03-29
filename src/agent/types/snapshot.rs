@@ -97,6 +97,10 @@ pub struct AgentToolSpec {
     pub route: String,
     pub method: String,
     pub description: String,
+    #[serde(default)]
+    pub deprecated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<AgentToolArgSpec>,
 }
@@ -125,8 +129,10 @@ pub struct AgentToolRequest {
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum AgentToolOutput {
     Wake(AgentWakeState),
+    MarketSessionContract(crate::ontology::MarketSessionContract),
     Tools(Vec<AgentToolSpec>),
     Session(AgentSession),
+    SymbolContract(crate::ontology::SymbolStateContract),
     Watchlist(AgentWatchlist),
     Recommendations(AgentRecommendations),
     Scoreboard(AgentAlertScoreboard),
@@ -157,12 +163,30 @@ impl AgentToolOutput {
                 .headline
                 .clone()
                 .or_else(|| wake.summary.first().cloned()),
+            Self::MarketSessionContract(session) => session
+                .wake_headline
+                .clone()
+                .or_else(|| session.market_summary.clone())
+                .or_else(|| session.focus_symbols.first().cloned()),
             Self::Tools(_) => None,
             Self::Session(session) => session
                 .recent_turns
                 .last()
                 .and_then(|turn| turn.headline.clone())
                 .or_else(|| session.focus_symbols.first().cloned()),
+            Self::SymbolContract(item) => item
+                .state
+                .structure
+                .as_ref()
+                .map(|structure| {
+                    format!(
+                        "{} {} conf={:+}",
+                        item.symbol,
+                        structure.action,
+                        structure.confidence.round_dp(3)
+                    )
+                })
+                .or_else(|| Some(item.symbol.clone())),
             Self::Watchlist(watchlist) => watchlist.entries.first().map(|entry| {
                 format!(
                     "{} {} {}",

@@ -3,6 +3,16 @@ use super::*;
 pub fn tool_catalog() -> Vec<AgentToolSpec> {
     let mut tools = vec![
         AgentToolSpec {
+            name: "market_session".into(),
+            category: AgentToolCategory::ObjectQuery,
+            route: "/api/ontology/:market/market-session".into(),
+            method: "GET".into(),
+            description: "Returns the canonical market-session object contract.".into(),
+            deprecated: false,
+            replacement: None,
+            args: vec![],
+        },
+        AgentToolSpec {
             name: "wake".into(),
             category: AgentToolCategory::DerivedView,
             route: "/api/agent/:market/wake".into(),
@@ -10,6 +20,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             description:
                 "Returns the speech gate decision, focus symbols, and suggested next queries."
                     .into(),
+            deprecated: false,
+            replacement: None,
             args: vec![],
         },
         AgentToolSpec {
@@ -19,6 +31,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             method: "GET".into(),
             description: "Returns the current analyst session state with threads and recent turns."
                 .into(),
+            deprecated: false,
+            replacement: Some("market_session".into()),
             args: vec![],
         },
         AgentToolSpec {
@@ -29,6 +43,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             description:
                 "Returns the top symbols to watch right now, ranked by decision relevance."
                     .into(),
+            deprecated: false,
+            replacement: None,
             args: vec![
                 AgentToolArgSpec {
                     name: "symbol".into(),
@@ -55,6 +71,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             description:
                 "Returns standardized action recommendations tied to the current regime."
                     .into(),
+            deprecated: false,
+            replacement: None,
             args: vec![
                 AgentToolArgSpec {
                     name: "symbol".into(),
@@ -80,6 +98,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             method: "GET".into(),
             description:
                 "Returns auditable alerts plus hit-rate and outcome statistics by slice.".into(),
+            deprecated: false,
+            replacement: None,
             args: vec![],
         },
         AgentToolSpec {
@@ -90,6 +110,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             description:
                 "Returns the latest end-of-day style review built from the alert scoreboard."
                     .into(),
+            deprecated: false,
+            replacement: None,
             args: vec![],
         },
         AgentToolSpec {
@@ -99,6 +121,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             method: "GET".into(),
             description: "Returns the current analyst threads, optionally filtered by symbol or sector."
                 .into(),
+            deprecated: false,
+            replacement: None,
             args: vec![
                 AgentToolArgSpec {
                     name: "symbol".into(),
@@ -124,6 +148,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             method: "GET".into(),
             description: "Returns recent analyst turns, optionally filtered by since_tick or symbol."
                 .into(),
+            deprecated: false,
+            replacement: None,
             args: vec![
                 AgentToolArgSpec {
                     name: "since_tick".into(),
@@ -148,6 +174,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             route: "/api/agent/:market/structures".into(),
             method: "GET".into(),
             description: "Lists currently active structures ranked by confidence.".into(),
+            deprecated: true,
+            replacement: Some("recommendations".into()),
             args: vec![
                 AgentToolArgSpec {
                     name: "limit".into(),
@@ -174,6 +202,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             description:
                 "Returns the current structure state for one symbol, including age and leader streak."
                     .into(),
+            deprecated: true,
+            replacement: Some("symbol_contract".into()),
             args: vec![AgentToolArgSpec {
                 name: "symbol".into(),
                 required: true,
@@ -187,6 +217,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             method: "GET".into(),
             description: "Returns recent structure transitions after an optional tick threshold."
                 .into(),
+            deprecated: false,
+            replacement: None,
             args: vec![
                 AgentToolArgSpec {
                     name: "since_tick".into(),
@@ -211,11 +243,27 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             ],
         },
         AgentToolSpec {
+            name: "symbol_contract".into(),
+            category: AgentToolCategory::ObjectQuery,
+            route: "/api/ontology/:market/symbols/:symbol".into(),
+            method: "GET".into(),
+            description: "Returns the canonical symbol-state object contract for one symbol.".into(),
+            deprecated: false,
+            replacement: None,
+            args: vec![AgentToolArgSpec {
+                name: "symbol".into(),
+                required: true,
+                description: "Ticker symbol.".into(),
+            }],
+        },
+        AgentToolSpec {
             name: "symbol_state".into(),
             category: AgentToolCategory::CompatQuery,
             route: "/api/agent/:market/symbol/:symbol".into(),
             method: "GET".into(),
             description: "Returns the full current state for one symbol.".into(),
+            deprecated: true,
+            replacement: Some("symbol_contract".into()),
             args: vec![AgentToolArgSpec {
                 name: "symbol".into(),
                 required: true,
@@ -229,6 +277,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             method: "GET".into(),
             description: "Returns tick-to-tick depth and imbalance changes for one symbol."
                 .into(),
+            deprecated: false,
+            replacement: None,
             args: vec![AgentToolArgSpec {
                 name: "symbol".into(),
                 required: true,
@@ -242,6 +292,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             method: "GET".into(),
             description: "Returns institution entries, exits, and side switches for one symbol."
                 .into(),
+            deprecated: false,
+            replacement: None,
             args: vec![AgentToolArgSpec {
                 name: "symbol".into(),
                 required: true,
@@ -255,6 +307,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             method: "GET".into(),
             description: "Returns invalidation status, rules, and leading falsifier for one symbol."
                 .into(),
+            deprecated: true,
+            replacement: Some("symbol_contract".into()),
             args: vec![AgentToolArgSpec {
                 name: "symbol".into(),
                 required: true,
@@ -267,6 +321,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             route: "/api/ontology/:market/sector-flows".into(),
             method: "GET".into(),
             description: "Returns sector-level flow summaries and exceptions.".into(),
+            deprecated: false,
+            replacement: None,
             args: vec![
                 AgentToolArgSpec {
                     name: "sector".into(),
@@ -287,6 +343,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             method: "GET".into(),
             description:
                 "Returns the current world-state canopy/trunk/leaf snapshot when available.".into(),
+            deprecated: false,
+            replacement: None,
             args: vec![],
         },
         AgentToolSpec {
@@ -296,6 +354,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             method: "GET".into(),
             description: "Returns the current backward causal investigation for one symbol when available."
                 .into(),
+            deprecated: false,
+            replacement: None,
             args: vec![AgentToolArgSpec {
                 name: "symbol".into(),
                 required: true,
@@ -309,6 +369,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             method: "GET".into(),
             description: "Returns the current notice feed, with optional since_tick and filters."
                 .into(),
+            deprecated: false,
+            replacement: None,
             args: vec![
                 AgentToolArgSpec {
                     name: "since_tick".into(),
@@ -340,6 +402,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             description:
                 "Returns promoted-from-news/event candidates before final macro-event confirmation."
                     .into(),
+            deprecated: true,
+            replacement: Some("macro_events".into()),
             args: vec![
                 AgentToolArgSpec {
                     name: "since_tick".into(),
@@ -371,6 +435,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             description:
                 "Returns confirmed macro events and their routed market/sector/symbol impact."
                     .into(),
+            deprecated: true,
+            replacement: Some("knowledge_links".into()),
             args: vec![
                 AgentToolArgSpec {
                     name: "since_tick".into(),
@@ -402,6 +468,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             description:
                 "Returns explicit event-to-market/sector/symbol/decision knowledge-graph links."
                     .into(),
+            deprecated: false,
+            replacement: None,
             args: vec![
                 AgentToolArgSpec {
                     name: "symbol".into(),
@@ -450,26 +518,28 @@ fn preferred_tool_rank(tool_name: &str) -> usize {
     match tool_name {
         "recommendations" => 0,
         "watchlist" => 1,
-        "notices" => 2,
-        "transitions_since" => 3,
-        "symbol_state" => 4,
-        "world_state" => 5,
-        "backward_investigation" => 6,
-        "sector_flow" => 7,
-        "depth_change" => 8,
-        "broker_movement" => 9,
-        "invalidation_status" => 10,
-        "active_structures" => 11,
-        "structure_state" => 12,
-        "threads" => 13,
-        "turns" => 14,
-        "wake" => 15,
-        "session" => 16,
-        "alert_scoreboard" => 17,
-        "eod_review" => 18,
-        "macro_event_candidates" => 19,
-        "macro_events" => 20,
-        "knowledge_links" => 21,
+        "market_session" => 2,
+        "notices" => 3,
+        "transitions_since" => 4,
+        "symbol_contract" => 5,
+        "world_state" => 6,
+        "backward_investigation" => 7,
+        "sector_flow" => 8,
+        "depth_change" => 9,
+        "broker_movement" => 10,
+        "knowledge_links" => 11,
+        "symbol_state" => 12,
+        "invalidation_status" => 13,
+        "active_structures" => 14,
+        "structure_state" => 15,
+        "threads" => 16,
+        "turns" => 17,
+        "wake" => 18,
+        "session" => 19,
+        "alert_scoreboard" => 20,
+        "eod_review" => 21,
+        "macro_event_candidates" => 22,
+        "macro_events" => 23,
         _ => 100,
     }
 }
@@ -490,7 +560,8 @@ fn tool_catalog_category(tool_name: &str) -> Option<AgentToolCategory> {
         "wake" | "session" | "watchlist" | "recommendations" | "alert_scoreboard"
         | "eod_review" | "threads" | "turns" => Some(AgentToolCategory::DerivedView),
         "notices" | "transitions_since" => Some(AgentToolCategory::Feed),
-        "world_state" | "backward_investigation" | "sector_flow" => {
+        "market_session" | "symbol_contract" | "world_state" | "backward_investigation"
+        | "sector_flow" => {
             Some(AgentToolCategory::ObjectQuery)
         }
         "depth_change" | "broker_movement" => Some(AgentToolCategory::Microstructure),
@@ -512,6 +583,9 @@ pub fn execute_tool(
     let limit = request.limit.unwrap_or(120).max(1);
 
     match request.tool.as_str() {
+        "market_session" => Ok(AgentToolOutput::MarketSessionContract(
+            crate::ontology::build_market_session_contract(snapshot, session, None)?,
+        )),
         "wake" => Ok(AgentToolOutput::Wake(snapshot.wake.clone())),
         "tools" => Ok(AgentToolOutput::Tools(tool_catalog())),
         "session" => session
@@ -750,6 +824,16 @@ pub fn execute_tool(
                 .and_then(|item| item.structure.clone())
                 .ok_or_else(|| format!("no active structure found for `{symbol}`"))?;
             Ok(AgentToolOutput::Structure(structure))
+        }
+        "symbol_contract" => {
+            let symbol =
+                symbol.ok_or_else(|| "tool `symbol_contract` requires `symbol`".to_string())?;
+            let state = snapshot
+                .symbol(symbol)
+                .ok_or_else(|| format!("no symbol state found for `{symbol}`"))?;
+            Ok(AgentToolOutput::SymbolContract(
+                crate::ontology::build_symbol_state_contract(snapshot, state)?,
+            ))
         }
         "symbol_state" => {
             let symbol =
