@@ -21,6 +21,8 @@ use super::core::parse_case_market;
 #[cfg(feature = "persistence")]
 use super::foundation::ApiState;
 use super::foundation::ApiError;
+#[cfg(feature = "persistence")]
+use super::ontology_history_enrichment::enrich_history_refs;
 
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct OntologyObjectQuery {
@@ -92,6 +94,7 @@ pub(in crate::api) async fn load_enriched_contract_snapshot(
 ) -> Result<OperationalSnapshot, ApiError> {
     let mut snapshot = load_contract_snapshot(market).await?;
     enrich_with_persistent_workflows(state, market, &mut snapshot).await?;
+    enrich_history_refs(state, market, &mut snapshot).await?;
     Ok(snapshot)
 }
 

@@ -9,6 +9,8 @@ mod foundation;
 mod lineage_api;
 mod ontology_api;
 mod ontology_history_api;
+mod ontology_history_enrichment;
+mod ontology_history_support;
 mod constants;
 mod server;
 #[cfg(test)]
