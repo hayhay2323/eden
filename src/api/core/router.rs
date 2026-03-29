@@ -35,6 +35,7 @@ use super::super::case_api::{
 use super::super::case_workflow_api::{post_case_assign, post_case_queue_pin, post_case_transition};
 use super::super::foundation::{ApiError, ApiState};
 use super::super::feed_api::{get_feed_notices, get_feed_transitions};
+use super::super::feed_surface::{stream_feed_notices, stream_feed_transitions};
 use super::super::lineage_api::{
     get_causal_flips, get_causal_timeline, get_lineage, get_lineage_history, get_lineage_rows,
     get_us_causal_flips, get_us_causal_timeline, get_us_lineage, get_us_lineage_history,
@@ -52,6 +53,7 @@ use super::super::ontology_history_api::{
     get_recommendation_journal_history, get_workflow_event_history,
 };
 use super::super::ontology_query_api::get_ontology_world;
+use super::super::ontology_query_surface::stream_ontology_world;
 use super::auth::{audit_request, build_cors_layer, require_api_key};
 use super::health::{get_live_snapshot, get_polymarket, get_us_live_snapshot, health, health_report};
 
@@ -245,6 +247,9 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
         )
         .route("/stream/agent/:market/threads", get(stream_agent_threads))
         .route("/stream/agent/:market/turns", get(stream_agent_turns))
+        .route("/stream/feed/:market/notices", get(stream_feed_notices))
+        .route("/stream/feed/:market/transitions", get(stream_feed_transitions))
+        .route("/stream/ontology/:market/world", get(stream_ontology_world))
         .route("/cases/:market", get(get_cases))
         .route("/briefing/:market", get(get_case_briefing))
         .route("/review/:market", get(get_case_review))
