@@ -34,6 +34,7 @@ use super::super::case_api::{
 };
 use super::super::case_workflow_api::{post_case_assign, post_case_queue_pin, post_case_transition};
 use super::super::foundation::{ApiError, ApiState};
+use super::super::feed_api::{get_feed_notices, get_feed_transitions};
 use super::super::lineage_api::{
     get_causal_flips, get_causal_timeline, get_lineage, get_lineage_history, get_lineage_rows,
     get_us_causal_flips, get_us_causal_timeline, get_us_lineage, get_us_lineage_history,
@@ -50,6 +51,7 @@ use super::super::ontology_history_api::{
     get_case_outcome_history, get_case_reasoning_history, get_case_workflow_history,
     get_recommendation_journal_history, get_workflow_event_history,
 };
+use super::super::ontology_query_api::get_ontology_world;
 use super::auth::{audit_request, build_cors_layer, require_api_key};
 use super::health::{get_live_snapshot, get_polymarket, get_us_live_snapshot, health, health_report};
 
@@ -113,6 +115,8 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
         .route("/agent/:market/world", get(get_agent_world))
         .route("/agent/:market/notices", get(get_agent_notices))
         .route("/agent/:market/transitions", get(get_agent_transitions))
+        .route("/feed/:market/notices", get(get_feed_notices))
+        .route("/feed/:market/transitions", get(get_feed_transitions))
         .route("/agent/:market/structures", get(get_agent_structures))
         .route(
             "/agent/:market/structures/:symbol",
@@ -135,6 +139,7 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
             "/ontology/:market/market-session",
             get(get_market_session_contract),
         )
+        .route("/ontology/:market/world", get(get_ontology_world))
         .route("/ontology/:market/symbols", get(get_symbol_state_contracts))
         .route("/ontology/:market/symbols/:symbol", get(get_symbol_state_contract))
         .route("/ontology/:market/cases", get(get_case_contracts))
@@ -171,6 +176,27 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
             "/ontology/:market/macro-events/:event_id",
             get(get_macro_event_contract),
         )
+        .route(
+            "/ontology/:market/graph/history/macro-events",
+            get(get_agent_macro_event_history),
+        )
+        .route(
+            "/ontology/:market/graph/history/knowledge-links",
+            get(get_agent_knowledge_link_history),
+        )
+        .route(
+            "/ontology/:market/graph/state/macro-events",
+            get(get_agent_macro_event_state),
+        )
+        .route(
+            "/ontology/:market/graph/state/knowledge-links",
+            get(get_agent_knowledge_link_state),
+        )
+        .route(
+            "/ontology/:market/graph/node/:node_id",
+            get(get_agent_graph_node),
+        )
+        .route("/ontology/:market/graph/links", get(get_agent_graph_links))
         .route("/ontology/:market/threads", get(get_thread_contracts))
         .route("/ontology/:market/threads/:thread_id", get(get_thread_contract))
         .route("/ontology/:market/workflows", get(get_workflow_contracts))

@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent::{
     self, AgentAlertScoreboard, AgentBriefing, AgentBrokerState, AgentDepthState, AgentEodReview,
-    AgentInvalidationState, AgentNotice, AgentRecommendations, AgentSectorFlow, AgentSession,
-    AgentSnapshot, AgentStructureState, AgentSymbolState, AgentThread, AgentToolOutput,
-    AgentToolRequest, AgentToolSpec, AgentTransition, AgentTurn, AgentWakeState, AgentWatchlist,
+    AgentInvalidationState, AgentRecommendations, AgentSectorFlow, AgentSession, AgentSnapshot,
+    AgentStructureState, AgentSymbolState, AgentThread, AgentToolOutput, AgentToolRequest,
+    AgentToolSpec, AgentTurn, AgentWakeState, AgentWatchlist,
 };
 use crate::agent_codex::CodexCliAnalyzeBody;
 use crate::agent_llm::{AgentAnalysis, AgentAnalystReview, AgentAnalystScoreboard, AgentNarration};
@@ -19,24 +19,16 @@ use super::agent_surface::{
     load_agent_recommendations_for_market, load_agent_scoreboard_for_market,
     load_agent_session_for_market, load_agent_watchlist_for_market,
 };
+use super::feed_api::{
+    build_feed_notices_response, build_feed_transitions_response,
+    FeedNoticesResponse as AgentNoticesResponse,
+    FeedTransitionsResponse as AgentTransitionsResponse,
+};
 use super::core::{bounded, normalized_query_value, parse_case_market};
 use super::foundation::ApiError;
 use super::ontology_api::load_or_build_operational_snapshot;
+use super::ontology_query_api::load_world_state_for_market;
 use super::constants::{DEFAULT_LIMIT, MAX_LIMIT};
-
-#[derive(Debug, Serialize)]
-pub(super) struct AgentNoticesResponse {
-    tick: u64,
-    total: usize,
-    notices: Vec<AgentNotice>,
-}
-
-#[derive(Debug, Serialize)]
-pub(super) struct AgentTransitionsResponse {
-    tick: u64,
-    total: usize,
-    transitions: Vec<AgentTransition>,
-}
 
 #[derive(Debug, Serialize)]
 pub(super) struct AgentStructuresResponse {
@@ -335,83 +327,21 @@ pub(super) async fn get_agent_turns(
 pub(super) async fn get_agent_world(
     Path(market): Path<String>,
 ) -> Result<Json<WorldStateSnapshot>, ApiError> {
-    let market = parse_case_market(&market)?;
-    let snapshot = agent::load_snapshot(market)
-        .await
-        .map_err(|error| ApiError::internal(format!("failed to load agent snapshot: {error}")))?;
-    snapshot
-        .world_state
-        .map(Json)
-        .ok_or_else(|| ApiError::not_found("world state not available for this market"))
+    Ok(Json(load_world_state_for_market(&market).await?))
 }
 
 pub(super) async fn get_agent_notices(
     Path(market): Path<String>,
     Query(query): Query<AgentFeedQuery>,
 ) -> Result<Json<AgentNoticesResponse>, ApiError> {
-    let snapshot = load_agent_snapshot_for_market(&market).await?;
-    let mut notices = snapshot.notices.clone();
-    if let Some(since_tick) = query.since_tick {
-        notices.retain(|item| item.tick > since_tick);
-    }
-    if let Some(symbol) = normalized_query_value(query.symbol.as_deref()) {
-        notices.retain(|item| {
-            item.symbol
-                .as_deref()
-                .map(|value| value.eq_ignore_ascii_case(symbol))
-                .unwrap_or(false)
-        });
-    }
-    if let Some(sector) = normalized_query_value(query.sector.as_deref()) {
-        notices.retain(|item| {
-            item.sector
-                .as_deref()
-                .map(|value| value.eq_ignore_ascii_case(sector))
-                .unwrap_or(false)
-        });
-    }
-    let total = notices.len();
-    let limit = bounded(query.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?;
-    if notices.len() > limit {
-        notices.truncate(limit);
-    }
-    Ok(Json(AgentNoticesResponse {
-        tick: snapshot.tick,
-        total,
-        notices,
-    }))
+    Ok(Json(build_feed_notices_response(&market, &query).await?))
 }
 
 pub(super) async fn get_agent_transitions(
     Path(market): Path<String>,
     Query(query): Query<AgentFeedQuery>,
 ) -> Result<Json<AgentTransitionsResponse>, ApiError> {
-    let snapshot = load_agent_snapshot_for_market(&market).await?;
-    let mut transitions = snapshot.recent_transitions.clone();
-    if let Some(since_tick) = query.since_tick {
-        transitions.retain(|item| item.to_tick > since_tick);
-    }
-    if let Some(symbol) = normalized_query_value(query.symbol.as_deref()) {
-        transitions.retain(|item| item.symbol.eq_ignore_ascii_case(symbol));
-    }
-    if let Some(sector) = normalized_query_value(query.sector.as_deref()) {
-        transitions.retain(|item| {
-            item.sector
-                .as_deref()
-                .map(|value| value.eq_ignore_ascii_case(sector))
-                .unwrap_or(false)
-        });
-    }
-    let total = transitions.len();
-    let limit = bounded(query.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?;
-    if transitions.len() > limit {
-        transitions.truncate(limit);
-    }
-    Ok(Json(AgentTransitionsResponse {
-        tick: snapshot.tick,
-        total,
-        transitions,
-    }))
+    Ok(Json(build_feed_transitions_response(&market, &query).await?))
 }
 
 pub(super) async fn get_agent_structures(
