@@ -538,69 +538,12 @@ impl OperationalSnapshot {
     }
 
     pub fn resolve_object_ref(&self, object_ref: &OperationalObjectRef) -> Option<OperationalObjectRef> {
-        match object_ref.kind {
-            OperationalObjectKind::MarketSession => Some(self.market_session_ref()),
-            OperationalObjectKind::SymbolState => self
-                .symbols
-                .iter()
-                .find(|item| item.id.0.eq_ignore_ascii_case(&object_ref.id))
-                .map(|item| OperationalObjectRef {
-                    id: item.id.0.clone(),
-                    kind: OperationalObjectKind::SymbolState,
-                    endpoint: object_ref.endpoint.clone(),
-                    label: Some(item.symbol.clone()),
-                }),
-            OperationalObjectKind::Case => self
-                .cases
-                .iter()
-                .find(|item| item.id.0.eq_ignore_ascii_case(&object_ref.id))
-                .map(|item| OperationalObjectRef {
-                    id: item.id.0.clone(),
-                    kind: OperationalObjectKind::Case,
-                    endpoint: object_ref.endpoint.clone(),
-                    label: Some(item.title.clone()),
-                }),
-            OperationalObjectKind::Recommendation => self
-                .recommendations
-                .iter()
-                .find(|item| item.id.0.eq_ignore_ascii_case(&object_ref.id))
-                .map(|item| OperationalObjectRef {
-                    id: item.id.0.clone(),
-                    kind: OperationalObjectKind::Recommendation,
-                    endpoint: object_ref.endpoint.clone(),
-                    label: item.recommendation.title.clone(),
-                }),
-            OperationalObjectKind::MacroEvent => self
-                .macro_events
-                .iter()
-                .find(|item| item.id.0.eq_ignore_ascii_case(&object_ref.id))
-                .map(|item| OperationalObjectRef {
-                    id: item.id.0.clone(),
-                    kind: OperationalObjectKind::MacroEvent,
-                    endpoint: object_ref.endpoint.clone(),
-                    label: Some(item.event.headline.clone()),
-                }),
-            OperationalObjectKind::Thread => self
-                .threads
-                .iter()
-                .find(|item| item.id.0.eq_ignore_ascii_case(&object_ref.id))
-                .map(|item| OperationalObjectRef {
-                    id: item.id.0.clone(),
-                    kind: OperationalObjectKind::Thread,
-                    endpoint: object_ref.endpoint.clone(),
-                    label: item.thread.title.clone().or_else(|| Some(item.thread.symbol.clone())),
-                }),
-            OperationalObjectKind::Workflow => self
-                .workflows
-                .iter()
-                .find(|item| item.id.0.eq_ignore_ascii_case(&object_ref.id))
-                .map(|item| OperationalObjectRef {
-                    id: item.id.0.clone(),
-                    kind: OperationalObjectKind::Workflow,
-                    endpoint: object_ref.endpoint.clone(),
-                    label: Some(item.stage.clone()),
-                }),
-        }
+        self.navigation(object_ref.kind, &object_ref.id)
+            .and_then(|navigation| navigation.self_ref.clone())
+            .or_else(|| match object_ref.kind {
+                OperationalObjectKind::MarketSession => Some(self.market_session_ref()),
+                _ => None,
+            })
     }
 
     pub fn neighborhood(

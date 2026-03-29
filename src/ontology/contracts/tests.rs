@@ -306,6 +306,11 @@
             navigation.self_ref.as_ref().map(|item| item.id.as_str()),
             Some("setup:700.HK")
         );
+        let resolved = operational
+            .resolve_object_ref(&operational.cases[0].relationships.symbol)
+            .expect("resolved symbol ref");
+        assert_eq!(resolved.kind, OperationalObjectKind::SymbolState);
+        assert_eq!(resolved.label.as_deref(), Some("700.HK"));
     }
 
     #[test]
