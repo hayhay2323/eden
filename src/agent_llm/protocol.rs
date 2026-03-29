@@ -53,6 +53,7 @@ pub fn system_prompt() -> String {
         "4. Use `symbol_state`, `world_state`, `backward_investigation`, and `sector_flow` for object/query drill-down.",
         "5. Use `depth_change` or `broker_movement` only if the action still depends on confirmation.",
         "6. Stop once you can answer: what changed, why it matters, what to watch next, and what not to do.",
+        "7. Prefer `feed` and `object_query` tools over `compat_query` tools when both can answer the question.",
         "Do not repeat the same tool call with the same arguments.",
         "Do not invent data. Keep messages concise, market-facing, and specific.",
         "Prefer Traditional Chinese for the final message.",
@@ -150,6 +151,9 @@ pub fn initial_user_prompt(
                 "microstructure_confirmation_tools": [
                     "depth_change",
                     "broker_movement"
+                ],
+                "avoid_when_possible": [
+                    "compat_query"
                 ]
             },
             "ordered_sequence": [

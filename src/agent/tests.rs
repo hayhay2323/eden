@@ -286,6 +286,16 @@ fn tool_catalog_includes_core_queries() {
     assert!(catalog
         .iter()
         .any(|item| item.name == "backward_investigation"));
+    assert!(catalog.iter().any(|item| {
+        item.name == "notices"
+            && item.category == AgentToolCategory::Feed
+            && item.route == "/api/feed/:market/notices"
+    }));
+    assert!(catalog.iter().any(|item| {
+        item.name == "world_state"
+            && item.category == AgentToolCategory::ObjectQuery
+            && item.route == "/api/ontology/:market/world"
+    }));
 }
 
 #[test]

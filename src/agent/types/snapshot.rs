@@ -79,9 +79,21 @@ pub struct AgentSuggestedToolCall {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentToolCategory {
+    DerivedView,
+    Feed,
+    ObjectQuery,
+    Microstructure,
+    GraphQuery,
+    CompatQuery,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentToolSpec {
     pub name: String,
+    pub category: AgentToolCategory,
     pub route: String,
     pub method: String,
     pub description: String,

@@ -4,6 +4,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
     vec![
         AgentToolSpec {
             name: "wake".into(),
+            category: AgentToolCategory::DerivedView,
             route: "/api/agent/:market/wake".into(),
             method: "GET".into(),
             description:
@@ -13,6 +14,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "session".into(),
+            category: AgentToolCategory::DerivedView,
             route: "/api/agent/:market/session".into(),
             method: "GET".into(),
             description: "Returns the current analyst session state with threads and recent turns."
@@ -21,6 +23,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "watchlist".into(),
+            category: AgentToolCategory::DerivedView,
             route: "/api/agent/:market/watchlist".into(),
             method: "GET".into(),
             description:
@@ -46,6 +49,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "recommendations".into(),
+            category: AgentToolCategory::DerivedView,
             route: "/api/agent/:market/recommendations".into(),
             method: "GET".into(),
             description:
@@ -71,6 +75,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "alert_scoreboard".into(),
+            category: AgentToolCategory::DerivedView,
             route: "/api/agent/:market/scoreboard".into(),
             method: "GET".into(),
             description:
@@ -79,6 +84,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "eod_review".into(),
+            category: AgentToolCategory::DerivedView,
             route: "/api/agent/:market/eod-review".into(),
             method: "GET".into(),
             description:
@@ -88,6 +94,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "threads".into(),
+            category: AgentToolCategory::DerivedView,
             route: "/api/agent/:market/threads".into(),
             method: "GET".into(),
             description: "Returns the current analyst threads, optionally filtered by symbol or sector."
@@ -112,6 +119,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "turns".into(),
+            category: AgentToolCategory::DerivedView,
             route: "/api/agent/:market/turns".into(),
             method: "GET".into(),
             description: "Returns recent analyst turns, optionally filtered by since_tick or symbol."
@@ -136,6 +144,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "active_structures".into(),
+            category: AgentToolCategory::CompatQuery,
             route: "/api/agent/:market/structures".into(),
             method: "GET".into(),
             description: "Lists currently active structures ranked by confidence.".into(),
@@ -159,6 +168,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "structure_state".into(),
+            category: AgentToolCategory::CompatQuery,
             route: "/api/agent/:market/structures/:symbol".into(),
             method: "GET".into(),
             description:
@@ -172,6 +182,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "transitions_since".into(),
+            category: AgentToolCategory::Feed,
             route: "/api/feed/:market/transitions".into(),
             method: "GET".into(),
             description: "Returns recent structure transitions after an optional tick threshold."
@@ -201,6 +212,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "symbol_state".into(),
+            category: AgentToolCategory::CompatQuery,
             route: "/api/agent/:market/symbol/:symbol".into(),
             method: "GET".into(),
             description: "Returns the full current state for one symbol.".into(),
@@ -212,6 +224,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "depth_change".into(),
+            category: AgentToolCategory::Microstructure,
             route: "/api/agent/:market/depth/:symbol".into(),
             method: "GET".into(),
             description: "Returns tick-to-tick depth and imbalance changes for one symbol."
@@ -224,6 +237,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "broker_movement".into(),
+            category: AgentToolCategory::Microstructure,
             route: "/api/agent/:market/brokers/:symbol".into(),
             method: "GET".into(),
             description: "Returns institution entries, exits, and side switches for one symbol."
@@ -236,6 +250,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "invalidation_status".into(),
+            category: AgentToolCategory::CompatQuery,
             route: "/api/agent/:market/invalidation/:symbol".into(),
             method: "GET".into(),
             description: "Returns invalidation status, rules, and leading falsifier for one symbol."
@@ -248,7 +263,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "sector_flow".into(),
-            route: "/api/agent/:market/sector-flow".into(),
+            category: AgentToolCategory::ObjectQuery,
+            route: "/api/ontology/:market/sector-flows".into(),
             method: "GET".into(),
             description: "Returns sector-level flow summaries and exceptions.".into(),
             args: vec![
@@ -266,6 +282,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "world_state".into(),
+            category: AgentToolCategory::ObjectQuery,
             route: "/api/ontology/:market/world".into(),
             method: "GET".into(),
             description:
@@ -274,6 +291,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "backward_investigation".into(),
+            category: AgentToolCategory::ObjectQuery,
             route: "/api/ontology/:market/backward/:symbol".into(),
             method: "GET".into(),
             description: "Returns the current backward causal investigation for one symbol when available."
@@ -286,6 +304,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "notices".into(),
+            category: AgentToolCategory::Feed,
             route: "/api/feed/:market/notices".into(),
             method: "GET".into(),
             description: "Returns the current notice feed, with optional since_tick and filters."
@@ -315,6 +334,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "macro_event_candidates".into(),
+            category: AgentToolCategory::CompatQuery,
             route: "/api/agent/:market/query?tool=macro_event_candidates".into(),
             method: "GET".into(),
             description:
@@ -345,6 +365,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "macro_events".into(),
+            category: AgentToolCategory::CompatQuery,
             route: "/api/agent/:market/query?tool=macro_events".into(),
             method: "GET".into(),
             description:
@@ -375,6 +396,7 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
         },
         AgentToolSpec {
             name: "knowledge_links".into(),
+            category: AgentToolCategory::GraphQuery,
             route: "/api/agent/:market/query?tool=knowledge_links".into(),
             method: "GET".into(),
             description:
