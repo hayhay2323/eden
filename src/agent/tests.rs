@@ -341,6 +341,21 @@ fn tool_catalog_includes_core_queries() {
             && item.deprecated
             && item.replacement.as_deref() == Some("graph_knowledge_links")
     }));
+    let compat_entries = catalog
+        .iter()
+        .filter(|item| item.category == AgentToolCategory::CompatQuery)
+        .collect::<Vec<_>>();
+    assert!(!compat_entries.is_empty());
+    for item in &compat_entries {
+        assert!(compat_query_allowlist().contains(&item.name.as_str()));
+        assert!(item.deprecated);
+        assert!(item.replacement.is_some());
+    }
+    assert_eq!(
+        compat_entries.len(),
+        compat_query_allowlist().len(),
+        "compat allowlist and compat catalog should stay in sync"
+    );
     let names = catalog.iter().map(|item| item.name.as_str()).collect::<Vec<_>>();
     assert!(names.iter().position(|item| *item == "recommendations")
         < names.iter().position(|item| *item == "active_structures"));

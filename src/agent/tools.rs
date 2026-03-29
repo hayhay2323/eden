@@ -1,5 +1,14 @@
 use super::*;
 
+const COMPAT_QUERY_ALLOWLIST: &[&str] = &[
+    "active_structures",
+    "structure_state",
+    "symbol_state",
+    "invalidation_status",
+    "macro_event_candidates",
+    "macro_events",
+];
+
 pub fn tool_catalog() -> Vec<AgentToolSpec> {
     let mut tools = vec![
         AgentToolSpec {
@@ -562,6 +571,10 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
     tools
 }
 
+pub(crate) fn compat_query_allowlist() -> &'static [&'static str] {
+    COMPAT_QUERY_ALLOWLIST
+}
+
 pub(crate) fn sort_suggested_tool_calls(calls: &mut Vec<AgentSuggestedToolCall>) {
     calls.sort_by(|left, right| {
         suggested_tool_sort_key(&left.tool)
@@ -640,8 +653,7 @@ fn tool_catalog_category(tool_name: &str) -> Option<AgentToolCategory> {
         "knowledge_links" | "graph_knowledge_links" | "graph_macro_event_candidates" => {
             Some(AgentToolCategory::GraphQuery)
         }
-        "active_structures" | "structure_state" | "symbol_state" | "invalidation_status"
-        | "macro_event_candidates" | "macro_events" => Some(AgentToolCategory::CompatQuery),
+        _ if compat_query_allowlist().contains(&tool_name) => Some(AgentToolCategory::CompatQuery),
         _ => None,
     }
 }
