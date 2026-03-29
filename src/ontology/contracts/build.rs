@@ -228,6 +228,23 @@ pub fn build_market_session_contract(
         wake_reasons: snapshot.wake.reasons.clone(),
         suggested_tools: snapshot.wake.suggested_tools.clone(),
         market_summary: narration.and_then(|item| item.market_summary_5m.clone()),
+        relationships: MarketSessionRelationships {
+            focus_symbols: session
+                .map(|item| {
+                    item.focus_symbols
+                        .iter()
+                        .map(|symbol| symbol_object_ref(snapshot.market, snapshot.tick, symbol))
+                        .collect()
+                })
+                .unwrap_or_else(|| {
+                    snapshot
+                        .wake
+                        .focus_symbols
+                        .iter()
+                        .map(|symbol| symbol_object_ref(snapshot.market, snapshot.tick, symbol))
+                        .collect()
+                }),
+        },
         focus_symbol_refs: session
             .map(|item| {
                 item.focus_symbols
@@ -339,6 +356,24 @@ pub fn build_operational_snapshot(
                 .filter(|(_, case_id, _, _)| case_id.as_deref() == Some(item.case_id.as_str()))
                 .map(|(rec_id, _, _, _)| rec_id.clone())
                 .collect(),
+            relationships: CaseRelationships {
+                symbol: symbol_object_ref(item.market, snapshot.tick, &item.symbol),
+                workflow: item
+                    .workflow_id
+                    .as_deref()
+                    .map(|workflow_id| workflow_object_ref(item.market, workflow_id, None)),
+                recommendations: recommendation_links
+                    .iter()
+                    .filter(|(_, case_id, _, _)| case_id.as_deref() == Some(item.case_id.as_str()))
+                    .map(|(rec_id, _, _, _)| {
+                        recommendation_object_ref(
+                            item.market,
+                            rec_id,
+                            Some(format!("{} {}", item.symbol, item.recommended_action)),
+                        )
+                    })
+                    .collect(),
+            },
             symbol_ref: symbol_object_ref(item.market, snapshot.tick, &item.symbol),
             workflow_ref: item
                 .workflow_id
@@ -382,6 +417,19 @@ pub fn build_operational_snapshot(
                 related_case_id: linkage.and_then(|(_, case_id, _, _)| case_id.clone()),
                 related_setup_id: linkage.and_then(|(_, _, setup_id, _)| setup_id.clone()),
                 related_workflow_id: linkage.and_then(|(_, _, _, workflow_id)| workflow_id.clone()),
+                relationships: RecommendationRelationships {
+                    symbol: symbol_object_ref(snapshot.market, snapshot.tick, &item.symbol),
+                    case: linkage.and_then(|(_, case_id, _, _)| {
+                        case_id.as_ref().map(|case_id| {
+                            case_object_ref(snapshot.market, case_id, item.title.clone())
+                        })
+                    }),
+                    workflow: linkage.and_then(|(_, _, _, workflow_id)| {
+                        workflow_id.as_ref().map(|workflow_id| {
+                            workflow_object_ref(snapshot.market, workflow_id, None)
+                        })
+                    }),
+                },
                 symbol_ref: symbol_object_ref(snapshot.market, snapshot.tick, &item.symbol),
                 case_ref: linkage.and_then(|(_, case_id, _, _)| {
                     case_id.as_ref().map(|case_id| {
@@ -521,6 +569,24 @@ pub fn rebuild_operational_case_graph(
                 .filter(|(_, case_id, _, _)| case_id.as_deref() == Some(item.case_id.as_str()))
                 .map(|(rec_id, _, _, _)| rec_id.clone())
                 .collect(),
+            relationships: CaseRelationships {
+                symbol: symbol_object_ref(item.market, snapshot.source_tick, &item.symbol),
+                workflow: item
+                    .workflow_id
+                    .as_deref()
+                    .map(|workflow_id| workflow_object_ref(item.market, workflow_id, None)),
+                recommendations: recommendation_links
+                    .iter()
+                    .filter(|(_, case_id, _, _)| case_id.as_deref() == Some(item.case_id.as_str()))
+                    .map(|(rec_id, _, _, _)| {
+                        recommendation_object_ref(
+                            item.market,
+                            rec_id,
+                            Some(format!("{} {}", item.symbol, item.recommended_action)),
+                        )
+                    })
+                    .collect(),
+            },
             symbol_ref: symbol_object_ref(item.market, snapshot.source_tick, &item.symbol),
             workflow_ref: item
                 .workflow_id
@@ -555,6 +621,12 @@ pub fn rebuild_operational_case_graph(
             recommendation.related_case_id = case_id.clone();
             recommendation.related_setup_id = setup_id.clone();
             recommendation.related_workflow_id = workflow_id.clone();
+            recommendation.relationships.case = case_id.as_ref().map(|case_id| {
+                case_object_ref(snapshot.market, case_id, recommendation.recommendation.title.clone())
+            });
+            recommendation.relationships.workflow = workflow_id.as_ref().map(|workflow_id| {
+                workflow_object_ref(snapshot.market, workflow_id, None)
+            });
             recommendation.case_ref = case_id.as_ref().map(|case_id| {
                 case_object_ref(snapshot.market, case_id, recommendation.recommendation.title.clone())
             });

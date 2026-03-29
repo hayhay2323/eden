@@ -242,6 +242,7 @@
         assert_eq!(operational.workflows.len(), 1);
         assert_eq!(operational.market_session.market_summary.as_deref(), Some("summary"));
         assert_eq!(operational.market_session.focus_symbol_refs.len(), 1);
+        assert_eq!(operational.market_session.relationships.focus_symbols.len(), 1);
         assert_eq!(
             operational.market_session.focus_symbol_refs[0].endpoint.as_str(),
             "/api/ontology/hk/symbols/700.HK"
@@ -256,6 +257,10 @@
         );
         assert_eq!(
             operational.cases[0].symbol_ref.endpoint.as_str(),
+            "/api/ontology/hk/symbols/700.HK"
+        );
+        assert_eq!(
+            operational.cases[0].relationships.symbol.endpoint.as_str(),
             "/api/ontology/hk/symbols/700.HK"
         );
         assert_eq!(
@@ -283,6 +288,7 @@
             Some("/api/ontology/hk/workflows/workflow:setup:700.HK/history")
         );
         assert_eq!(operational.workflows[0].case_refs.len(), 1);
+        assert_eq!(operational.workflows[0].relationships.cases.len(), 1);
     }
 
     #[test]
