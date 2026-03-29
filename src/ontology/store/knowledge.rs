@@ -91,6 +91,52 @@ impl AccumulatedKnowledge {
         }
     }
 
+    #[cfg(feature = "persistence")]
+    pub async fn restore_from(
+        db: &crate::persistence::store::EdenStore,
+        market: &str,
+    ) -> Self {
+        use crate::pipeline::learning_loop::{
+            derive_learning_feedback, derive_outcome_learning_context_from_hk_rows,
+            derive_outcome_learning_context_from_us_rows, OutcomeLearningContext,
+        };
+
+        let mut knowledge = Self::empty();
+
+        if let Ok(assessments) = db
+            .recent_case_reasoning_assessments_by_market(market, 200)
+            .await
+        {
+            let outcome_ctx = match market {
+                "hk" => {
+                    if let Ok(rows) = db.recent_lineage_metric_rows(500).await {
+                        derive_outcome_learning_context_from_hk_rows(&rows)
+                    } else {
+                        OutcomeLearningContext::default()
+                    }
+                }
+                "us" => {
+                    if let Ok(rows) = db.recent_us_lineage_metric_rows(500).await {
+                        derive_outcome_learning_context_from_us_rows(&rows)
+                    } else {
+                        OutcomeLearningContext::default()
+                    }
+                }
+                _ => OutcomeLearningContext::default(),
+            };
+            let feedback = derive_learning_feedback(&assessments, &outcome_ctx);
+            knowledge.apply_calibration(&feedback);
+        }
+
+        eprintln!(
+            "  [KNOWLEDGE] Restored: {} factor adjustments, {} predicate adjustments",
+            knowledge.calibrated_weights.factor_adjustments.len(),
+            knowledge.calibrated_weights.predicate_adjustments.len(),
+        );
+
+        knowledge
+    }
+
     pub fn institution_history_bonus(
         &self,
         institution_id: &InstitutionId,
