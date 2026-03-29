@@ -24,7 +24,7 @@ use super::core::{
 };
 use super::foundation::{ApiError, JsonEventStream};
 use super::constants::{CASE_STREAM_INTERVAL_SECS, DEFAULT_LIMIT, MAX_LIMIT};
-use super::ontology_api::load_or_build_operational_snapshot;
+use super::ontology_api::load_contract_snapshot;
 
 #[derive(Clone, Copy)]
 enum AgentArtifact {
@@ -475,7 +475,7 @@ pub(super) fn should_return_loaded_final_narration(
 
 pub(super) async fn load_agent_session_for_market(raw: &str) -> Result<AgentSession, ApiError> {
     let market = parse_case_market(raw)?;
-    let snapshot = load_or_build_operational_snapshot(market).await?;
+    let snapshot = load_contract_snapshot(market).await?;
     Ok(derive_agent_session(&snapshot))
 }
 
@@ -483,7 +483,7 @@ pub(super) async fn load_agent_briefing_for_market(
     raw: &str,
 ) -> Result<AgentBriefing, ApiError> {
     let market = parse_case_market(raw)?;
-    let snapshot = load_or_build_operational_snapshot(market).await?;
+    let snapshot = load_contract_snapshot(market).await?;
     Ok(derive_agent_briefing(&snapshot))
 }
 
@@ -491,7 +491,7 @@ pub(super) async fn load_agent_watchlist_for_market(
     raw: &str,
 ) -> Result<AgentWatchlist, ApiError> {
     let market = parse_case_market(raw)?;
-    let snapshot = load_or_build_operational_snapshot(market).await?;
+    let snapshot = load_contract_snapshot(market).await?;
     Ok(derive_agent_watchlist(&snapshot, 8))
 }
 
@@ -499,7 +499,7 @@ pub(super) async fn load_agent_recommendations_for_market(
     raw: &str,
 ) -> Result<AgentRecommendations, ApiError> {
     let market = parse_case_market(raw)?;
-    let snapshot = load_or_build_operational_snapshot(market).await?;
+    let snapshot = load_contract_snapshot(market).await?;
     Ok(derive_agent_recommendations(&snapshot))
 }
 
@@ -508,7 +508,7 @@ pub(super) async fn load_agent_scoreboard_for_market(
 ) -> Result<AgentAlertScoreboard, ApiError> {
     let market = parse_case_market(raw)?;
     let previous = agent::load_scoreboard(market).await.ok();
-    let snapshot = load_or_build_operational_snapshot(market).await?;
+    let snapshot = load_contract_snapshot(market).await?;
     Ok(derive_agent_scoreboard(&snapshot, previous.as_ref()))
 }
 
@@ -516,7 +516,7 @@ pub(super) async fn load_agent_eod_review_for_market(
     raw: &str,
 ) -> Result<AgentEodReview, ApiError> {
     let market = parse_case_market(raw)?;
-    let snapshot = load_or_build_operational_snapshot(market).await?;
+    let snapshot = load_contract_snapshot(market).await?;
     let previous = agent::load_scoreboard(market).await.ok();
     let scoreboard = derive_agent_scoreboard(&snapshot, previous.as_ref());
     Ok(derive_agent_eod_review(&snapshot, &scoreboard))
@@ -560,7 +560,7 @@ pub(super) async fn load_agent_analyst_scoreboard_for_market(
 
 pub(super) async fn load_agent_narration_for_market(raw: &str) -> Result<AgentNarration, ApiError> {
     let market = parse_case_market(raw)?;
-    let operational = load_or_build_operational_snapshot(market).await?;
+    let operational = load_contract_snapshot(market).await?;
     let loaded_final = crate::agent_llm::load_final_narration(market).await.ok();
     let analysis = crate::agent_llm::load_analysis(market).await.ok();
     let codex_fresh = analysis_is_fresh_codex(operational.source_tick, analysis.as_ref());

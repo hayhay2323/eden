@@ -5,6 +5,7 @@ use axum::Json;
 use serde::Deserialize;
 
 use crate::agent;
+use crate::agent::AgentSectorFlow;
 use crate::agent_llm;
 use crate::cases;
 #[cfg(feature = "persistence")]
@@ -14,6 +15,7 @@ use crate::ontology::{
     MarketSessionContract, OperationalSnapshot, RecommendationContract, SymbolStateContract,
     ThreadContract, WorkflowContract,
 };
+use crate::ontology::world::BackwardInvestigation;
 
 use super::core::parse_case_market;
 #[cfg(feature = "persistence")]
@@ -77,21 +79,20 @@ async fn enrich_with_persistent_workflows(
     Ok(())
 }
 
-#[cfg(feature = "persistence")]
-pub(in crate::api) async fn load_contract_snapshot(
-    state: &ApiState,
-    market: crate::cases::CaseMarket,
-) -> Result<OperationalSnapshot, ApiError> {
-    let mut snapshot = load_or_build_operational_snapshot(market).await?;
-    enrich_with_persistent_workflows(state, market, &mut snapshot).await?;
-    Ok(snapshot)
-}
-
-#[cfg(not(feature = "persistence"))]
 pub(in crate::api) async fn load_contract_snapshot(
     market: crate::cases::CaseMarket,
 ) -> Result<OperationalSnapshot, ApiError> {
     load_or_build_operational_snapshot(market).await
+}
+
+#[cfg(feature = "persistence")]
+pub(in crate::api) async fn load_enriched_contract_snapshot(
+    state: &ApiState,
+    market: crate::cases::CaseMarket,
+) -> Result<OperationalSnapshot, ApiError> {
+    let mut snapshot = load_contract_snapshot(market).await?;
+    enrich_with_persistent_workflows(state, market, &mut snapshot).await?;
+    Ok(snapshot)
 }
 
 pub(super) async fn get_operational_snapshot(
@@ -100,7 +101,7 @@ pub(super) async fn get_operational_snapshot(
 ) -> Result<Json<OperationalSnapshot>, ApiError> {
     let market = parse_case_market(&market)?;
     #[cfg(feature = "persistence")]
-    let snapshot = load_contract_snapshot(&state, market).await?;
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
     Ok(Json(snapshot))
@@ -112,7 +113,7 @@ pub(super) async fn get_market_session_contract(
 ) -> Result<Json<MarketSessionContract>, ApiError> {
     let market = parse_case_market(&market)?;
     #[cfg(feature = "persistence")]
-    let snapshot = load_contract_snapshot(&state, market).await?;
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
     Ok(Json(snapshot.market_session))
@@ -125,7 +126,7 @@ pub(super) async fn get_symbol_state_contracts(
 ) -> Result<Json<Vec<SymbolStateContract>>, ApiError> {
     let market = parse_case_market(&market)?;
     #[cfg(feature = "persistence")]
-    let snapshot = load_contract_snapshot(&state, market).await?;
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
     let mut items = snapshot.symbols;
@@ -150,7 +151,7 @@ pub(super) async fn get_case_contracts(
 ) -> Result<Json<Vec<CaseContract>>, ApiError> {
     let market = parse_case_market(&market)?;
     #[cfg(feature = "persistence")]
-    let snapshot = load_contract_snapshot(&state, market).await?;
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
     let mut items = snapshot.cases;
@@ -178,7 +179,7 @@ pub(super) async fn get_recommendation_contracts(
 ) -> Result<Json<Vec<RecommendationContract>>, ApiError> {
     let market = parse_case_market(&market)?;
     #[cfg(feature = "persistence")]
-    let snapshot = load_contract_snapshot(&state, market).await?;
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
     let mut items = snapshot.recommendations;
@@ -207,7 +208,7 @@ pub(super) async fn get_macro_event_contracts(
 ) -> Result<Json<Vec<MacroEventContract>>, ApiError> {
     let market = parse_case_market(&market)?;
     #[cfg(feature = "persistence")]
-    let snapshot = load_contract_snapshot(&state, market).await?;
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
     let mut items = snapshot.macro_events;
@@ -239,7 +240,7 @@ pub(super) async fn get_thread_contracts(
 ) -> Result<Json<Vec<ThreadContract>>, ApiError> {
     let market = parse_case_market(&market)?;
     #[cfg(feature = "persistence")]
-    let snapshot = load_contract_snapshot(&state, market).await?;
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
     let mut items = snapshot.threads;
@@ -255,7 +256,7 @@ pub(super) async fn get_workflow_contracts(
 ) -> Result<Json<Vec<WorkflowContract>>, ApiError> {
     let market = parse_case_market(&market)?;
     #[cfg(feature = "persistence")]
-    let snapshot = load_contract_snapshot(&state, market).await?;
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
     Ok(Json(snapshot.workflows))
@@ -267,7 +268,7 @@ pub(super) async fn get_workflow_contract(
 ) -> Result<Json<WorkflowContract>, ApiError> {
     let market = parse_case_market(&market)?;
     #[cfg(feature = "persistence")]
-    let snapshot = load_contract_snapshot(&state, market).await?;
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
     let item = snapshot
@@ -283,7 +284,7 @@ pub(super) async fn get_symbol_state_contract(
 ) -> Result<Json<SymbolStateContract>, ApiError> {
     let market = parse_case_market(&market)?;
     #[cfg(feature = "persistence")]
-    let snapshot = load_contract_snapshot(&state, market).await?;
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
     let item = snapshot
@@ -299,7 +300,7 @@ pub(super) async fn get_case_contract(
 ) -> Result<Json<CaseContract>, ApiError> {
     let market = parse_case_market(&market)?;
     #[cfg(feature = "persistence")]
-    let snapshot = load_contract_snapshot(&state, market).await?;
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
     let item = snapshot
@@ -315,7 +316,7 @@ pub(super) async fn get_recommendation_contract(
 ) -> Result<Json<RecommendationContract>, ApiError> {
     let market = parse_case_market(&market)?;
     #[cfg(feature = "persistence")]
-    let snapshot = load_contract_snapshot(&state, market).await?;
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
     let item = snapshot
@@ -335,7 +336,7 @@ pub(super) async fn get_macro_event_contract(
 ) -> Result<Json<MacroEventContract>, ApiError> {
     let market = parse_case_market(&market)?;
     #[cfg(feature = "persistence")]
-    let snapshot = load_contract_snapshot(&state, market).await?;
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
     let item = snapshot
@@ -351,13 +352,50 @@ pub(super) async fn get_thread_contract(
 ) -> Result<Json<ThreadContract>, ApiError> {
     let market = parse_case_market(&market)?;
     #[cfg(feature = "persistence")]
-    let snapshot = load_contract_snapshot(&state, market).await?;
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
     let item = snapshot
         .thread(&thread_id)
         .cloned()
         .ok_or_else(|| ApiError::not_found(format!("thread contract `{thread_id}` not found")))?;
+    Ok(Json(item))
+}
+
+pub(super) async fn get_sector_flow_sidecars(
+    #[cfg(feature = "persistence")] State(state): State<ApiState>,
+    Path(market): Path<String>,
+    Query(query): Query<OntologyObjectQuery>,
+) -> Result<Json<Vec<AgentSectorFlow>>, ApiError> {
+    let market = parse_case_market(&market)?;
+    #[cfg(feature = "persistence")]
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
+    #[cfg(not(feature = "persistence"))]
+    let snapshot = load_contract_snapshot(market).await?;
+    let mut items = snapshot.sidecars.sector_flows;
+    if let Some(sector) = normalized_query(query.sector.as_deref()) {
+        items.retain(|item| item.sector.eq_ignore_ascii_case(sector));
+    }
+    Ok(Json(items))
+}
+
+pub(super) async fn get_backward_investigation_sidecar(
+    #[cfg(feature = "persistence")] State(state): State<ApiState>,
+    Path((market, symbol)): Path<(String, String)>,
+) -> Result<Json<BackwardInvestigation>, ApiError> {
+    let market = parse_case_market(&market)?;
+    #[cfg(feature = "persistence")]
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
+    #[cfg(not(feature = "persistence"))]
+    let snapshot = load_contract_snapshot(market).await?;
+    let item = snapshot
+        .backward_investigation(&symbol)
+        .cloned()
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "backward investigation sidecar for `{symbol}` not found"
+            ))
+        })?;
     Ok(Json(item))
 }
 

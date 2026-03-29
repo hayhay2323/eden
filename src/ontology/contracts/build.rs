@@ -145,6 +145,14 @@ pub fn build_operational_snapshot(
         &cases,
         &recommendation_contracts,
     );
+    let sidecars = OperationalSidecars {
+        sector_flows: snapshot.sector_flows.clone(),
+        backward_investigations: snapshot
+            .backward_reasoning
+            .as_ref()
+            .map(|item| item.investigations.clone())
+            .unwrap_or_default(),
+    };
 
     Ok(OperationalSnapshot {
         version: 1,
@@ -174,6 +182,7 @@ pub fn build_operational_snapshot(
         macro_events,
         threads,
         workflows,
+        sidecars,
         events: snapshot.events.clone(),
     })
 }

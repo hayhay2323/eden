@@ -40,11 +40,11 @@ use super::super::lineage_api::{
     get_us_lineage_rows,
 };
 use super::super::ontology_api::{
-    get_case_contract, get_case_contracts, get_macro_event_contract,
-    get_macro_event_contracts, get_market_session_contract, get_operational_snapshot,
-    get_recommendation_contract, get_recommendation_contracts, get_symbol_state_contract,
-    get_symbol_state_contracts, get_thread_contract, get_thread_contracts,
-    get_workflow_contract, get_workflow_contracts,
+    get_backward_investigation_sidecar, get_case_contract, get_case_contracts,
+    get_macro_event_contract, get_macro_event_contracts, get_market_session_contract,
+    get_operational_snapshot, get_recommendation_contract, get_recommendation_contracts,
+    get_sector_flow_sidecars, get_symbol_state_contract, get_symbol_state_contracts,
+    get_thread_contract, get_thread_contracts, get_workflow_contract, get_workflow_contracts,
 };
 use super::auth::{audit_request, build_cors_layer, require_api_key};
 use super::health::{get_live_snapshot, get_polymarket, get_us_live_snapshot, health, health_report};
@@ -155,6 +155,11 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
         .route("/ontology/:market/threads/:thread_id", get(get_thread_contract))
         .route("/ontology/:market/workflows", get(get_workflow_contracts))
         .route("/ontology/:market/workflows/:workflow_id", get(get_workflow_contract))
+        .route("/ontology/:market/sector-flows", get(get_sector_flow_sidecars))
+        .route(
+            "/ontology/:market/backward/:symbol",
+            get(get_backward_investigation_sidecar),
+        )
         .route("/stream/agent/:market/live", get(stream_agent_snapshot))
         .route("/stream/agent/:market/wake", get(stream_agent_wake))
         .route("/stream/agent/:market/briefing", get(stream_agent_briefing))

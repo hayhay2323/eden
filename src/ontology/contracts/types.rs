@@ -176,6 +176,14 @@ pub struct WorkflowContract {
     pub recommendation_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OperationalSidecars {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sector_flows: Vec<AgentSectorFlow>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backward_investigations: Vec<BackwardInvestigation>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationalSnapshot {
     pub version: u32,
@@ -208,6 +216,8 @@ pub struct OperationalSnapshot {
     pub threads: Vec<ThreadContract>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflows: Vec<WorkflowContract>,
+    #[serde(default)]
+    pub sidecars: OperationalSidecars,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<LiveEvent>,
 }
@@ -247,6 +257,25 @@ impl OperationalSnapshot {
         self.workflows
             .iter()
             .find(|item| item.id.0.eq_ignore_ascii_case(workflow_id))
+    }
+
+    pub fn sector_flow(&self, sector: &str) -> Option<&AgentSectorFlow> {
+        self.sidecars
+            .sector_flows
+            .iter()
+            .find(|item| item.sector.eq_ignore_ascii_case(sector))
+    }
+
+    pub fn backward_investigation(&self, symbol: &str) -> Option<&BackwardInvestigation> {
+        self.sidecars
+            .backward_investigations
+            .iter()
+            .find(|item| match &item.leaf_scope {
+                crate::ontology::ReasoningScope::Symbol(candidate) => {
+                    candidate.0.eq_ignore_ascii_case(symbol)
+                }
+                _ => false,
+            })
     }
 }
 

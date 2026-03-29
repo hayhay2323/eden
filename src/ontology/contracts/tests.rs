@@ -7,8 +7,13 @@
     };
     use crate::live_snapshot::LiveScorecard;
     use crate::ontology::AgentKnowledgeLink;
+    use crate::ontology::world::{
+        BackwardInvestigation, BackwardReasoningSnapshot, CausalContestState,
+    };
     use crate::agent_llm::AgentNarration;
     use crate::live_snapshot::{LiveStressSnapshot, LiveMarketRegime};
+    use crate::ontology::ReasoningScope;
+    use time::OffsetDateTime;
 
     #[test]
     fn builds_operational_snapshot_from_projection_views() {
@@ -236,4 +241,152 @@
         assert_eq!(operational.threads.len(), 1);
         assert_eq!(operational.workflows.len(), 1);
         assert_eq!(operational.market_session.market_summary.as_deref(), Some("summary"));
+    }
+
+    #[test]
+    fn operational_snapshot_exposes_sidecar_views() {
+        let live_snapshot = LiveSnapshot {
+            tick: 9,
+            timestamp: "2026-03-29T16:00:00Z".into(),
+            market: LiveMarket::Hk,
+            stock_count: 1,
+            edge_count: 0,
+            hypothesis_count: 0,
+            observation_count: 0,
+            active_positions: 0,
+            active_position_nodes: vec![],
+            market_regime: LiveMarketRegime {
+                bias: "neutral".into(),
+                confidence: Decimal::ZERO,
+                breadth_up: Decimal::ZERO,
+                breadth_down: Decimal::ZERO,
+                average_return: Decimal::ZERO,
+                directional_consensus: None,
+                pre_market_sentiment: None,
+            },
+            stress: LiveStressSnapshot {
+                composite_stress: Decimal::ZERO,
+                sector_synchrony: None,
+                pressure_consensus: None,
+                momentum_consensus: None,
+                pressure_dispersion: None,
+                volume_anomaly: None,
+            },
+            scorecard: LiveScorecard {
+                total_signals: 0,
+                resolved_signals: 0,
+                hits: 0,
+                misses: 0,
+                hit_rate: Decimal::ZERO,
+                mean_return: Decimal::ZERO,
+            },
+            tactical_cases: vec![],
+            hypothesis_tracks: vec![],
+            top_signals: vec![],
+            convergence_scores: vec![],
+            pressures: vec![],
+            backward_chains: vec![],
+            causal_leaders: vec![],
+            events: vec![],
+            cross_market_signals: vec![],
+            cross_market_anomalies: vec![],
+            structural_deltas: vec![],
+            propagation_senses: vec![],
+            lineage: vec![],
+        };
+        let snapshot = AgentSnapshot {
+            tick: 9,
+            timestamp: "2026-03-29T16:00:00Z".into(),
+            market: LiveMarket::Hk,
+            market_regime: live_snapshot.market_regime.clone(),
+            stress: live_snapshot.stress.clone(),
+            wake: AgentWakeState {
+                should_speak: false,
+                priority: Decimal::ZERO,
+                headline: None,
+                summary: vec![],
+                focus_symbols: vec!["700.HK".into()],
+                reasons: vec![],
+                suggested_tools: vec![],
+            },
+            world_state: None,
+            backward_reasoning: Some(BackwardReasoningSnapshot {
+                timestamp: OffsetDateTime::UNIX_EPOCH,
+                investigations: vec![BackwardInvestigation {
+                    investigation_id: "backward:700.HK".into(),
+                    leaf_scope: ReasoningScope::Symbol(Symbol("700.HK".into())),
+                    leaf_label: "700.HK".into(),
+                    leaf_regime: "flow-led".into(),
+                    contest_state: CausalContestState::Stable,
+                    leading_cause_streak: 2,
+                    previous_leading_cause_id: None,
+                    leading_cause: None,
+                    runner_up_cause: None,
+                    cause_gap: None,
+                    leading_support_delta: None,
+                    leading_contradict_delta: None,
+                    leader_transition_summary: None,
+                    leading_falsifier: Some("flow disappears".into()),
+                    candidate_causes: vec![],
+                }],
+            }),
+            notices: vec![],
+            active_structures: vec![],
+            recent_transitions: vec![],
+            sector_flows: vec![crate::agent::AgentSectorFlow {
+                sector: "Technology".into(),
+                member_count: 3,
+                average_composite: Decimal::ZERO,
+                average_capital_flow: Decimal::ZERO,
+                leaders: vec!["700.HK".into()],
+                exceptions: vec![],
+                summary: "technology leadership".into(),
+            }],
+            symbols: vec![AgentSymbolState {
+                symbol: "700.HK".into(),
+                sector: Some("Technology".into()),
+                structure: None,
+                signal: None,
+                depth: None,
+                brokers: None,
+                invalidation: None,
+                pressure: None,
+                active_position: None,
+                latest_events: vec![],
+            }],
+            events: vec![],
+            cross_market_signals: vec![],
+            context_priors: vec![],
+            macro_event_candidates: vec![],
+            macro_events: vec![],
+            knowledge_links: vec![],
+        };
+        let session = AgentSession {
+            tick: 9,
+            timestamp: "2026-03-29T16:00:00Z".into(),
+            market: LiveMarket::Hk,
+            should_speak: false,
+            active_thread_count: 0,
+            focus_symbols: vec!["700.HK".into()],
+            active_threads: vec![],
+            recent_turns: vec![],
+        };
+        let recommendations = AgentRecommendations {
+            tick: 9,
+            timestamp: "2026-03-29T16:00:00Z".into(),
+            market: LiveMarket::Hk,
+            regime_bias: "neutral".into(),
+            total: 0,
+            market_recommendation: None,
+            decisions: vec![],
+            items: vec![],
+            knowledge_links: vec![],
+        };
+
+        let operational =
+            build_operational_snapshot(&live_snapshot, &snapshot, &session, &recommendations, None)
+                .expect("operational snapshot");
+
+        assert!(operational.sector_flow("technology").is_some());
+        assert!(operational.backward_investigation("700.hk").is_some());
     }

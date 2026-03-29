@@ -149,11 +149,7 @@ pub(super) async fn get_agent_analyst_scoreboard(
 pub(super) async fn get_agent_session(
     Path(market): Path<String>,
 ) -> Result<Json<AgentSession>, ApiError> {
-    let market = parse_case_market(&market)?;
-    let session = agent::load_session(market)
-        .await
-        .map_err(|error| ApiError::internal(format!("failed to load agent session: {error}")))?;
-    Ok(Json(session))
+    Ok(Json(load_agent_session_for_market(&market).await?))
 }
 
 pub(super) async fn get_agent_watchlist(
@@ -479,10 +475,11 @@ pub(super) async fn get_agent_symbol(
 pub(super) async fn get_agent_depth(
     Path((market, symbol)): Path<(String, String)>,
 ) -> Result<Json<AgentDepthState>, ApiError> {
-    let snapshot = load_agent_snapshot_for_market(&market).await?;
-    let depth = snapshot
+    let market = parse_case_market(&market)?;
+    let operational = load_or_build_operational_snapshot(market).await?;
+    let depth = operational
         .symbol(&symbol)
-        .and_then(|item| item.depth.clone())
+        .and_then(|item| item.state.depth.clone())
         .ok_or_else(|| ApiError::not_found(format!("no depth state found for `{symbol}`")))?;
     Ok(Json(depth))
 }
@@ -490,10 +487,11 @@ pub(super) async fn get_agent_depth(
 pub(super) async fn get_agent_brokers(
     Path((market, symbol)): Path<(String, String)>,
 ) -> Result<Json<AgentBrokerState>, ApiError> {
-    let snapshot = load_agent_snapshot_for_market(&market).await?;
-    let brokers = snapshot
+    let market = parse_case_market(&market)?;
+    let operational = load_or_build_operational_snapshot(market).await?;
+    let brokers = operational
         .symbol(&symbol)
-        .and_then(|item| item.brokers.clone())
+        .and_then(|item| item.state.brokers.clone())
         .ok_or_else(|| ApiError::not_found(format!("no broker state found for `{symbol}`")))?;
     Ok(Json(brokers))
 }
@@ -501,10 +499,11 @@ pub(super) async fn get_agent_brokers(
 pub(super) async fn get_agent_invalidation(
     Path((market, symbol)): Path<(String, String)>,
 ) -> Result<Json<AgentInvalidationState>, ApiError> {
-    let snapshot = load_agent_snapshot_for_market(&market).await?;
-    let invalidation = snapshot
+    let market = parse_case_market(&market)?;
+    let operational = load_or_build_operational_snapshot(market).await?;
+    let invalidation = operational
         .symbol(&symbol)
-        .and_then(|item| item.invalidation.clone())
+        .and_then(|item| item.state.invalidation.clone())
         .ok_or_else(|| {
             ApiError::not_found(format!("no invalidation state found for `{symbol}`"))
         })?;
@@ -515,18 +514,20 @@ pub(super) async fn get_agent_sector_flows(
     Path(market): Path<String>,
     Query(query): Query<AgentFeedQuery>,
 ) -> Result<Json<AgentSectorFlowsResponse>, ApiError> {
-    let snapshot = load_agent_snapshot_for_market(&market).await?;
-    let mut flows = snapshot.sector_flows.clone();
+    let market = parse_case_market(&market)?;
+    let operational = load_or_build_operational_snapshot(market).await?;
+    let mut flows = operational.sidecars.sector_flows.clone();
     if let Some(sector) = normalized_query_value(query.sector.as_deref()) {
         flows.retain(|item| item.sector.eq_ignore_ascii_case(sector));
     }
+    let total = flows.len();
     let limit = bounded(query.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?;
     if flows.len() > limit {
         flows.truncate(limit);
     }
     Ok(Json(AgentSectorFlowsResponse {
-        tick: snapshot.tick,
-        total: flows.len(),
+        tick: operational.source_tick,
+        total,
         flows,
     }))
 }
@@ -534,8 +535,9 @@ pub(super) async fn get_agent_sector_flows(
 pub(super) async fn get_agent_backward(
     Path((market, symbol)): Path<(String, String)>,
 ) -> Result<Json<BackwardInvestigation>, ApiError> {
-    let snapshot = load_agent_snapshot_for_market(&market).await?;
-    let investigation = snapshot
+    let market = parse_case_market(&market)?;
+    let operational = load_or_build_operational_snapshot(market).await?;
+    let investigation = operational
         .backward_investigation(&symbol)
         .cloned()
         .ok_or_else(|| {
