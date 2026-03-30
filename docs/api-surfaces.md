@@ -98,12 +98,22 @@ Primary routes:
 - `/api/ontology/:market/workflows`
 - `/api/ontology/:market/workflows/:workflow_id`
 
+Contract note:
+
+- Primary consumers should prefer each object's `summary`, `navigation`, and `relationships`
+  before falling back to legacy payload-shaped fields.
+- `navigation` is now the preferred traversal entry.
+- `neighborhood` is the expanded traversal view.
+- `graph_ref` and `history_refs` remain available, but should be treated as inputs into
+  `navigation`, not as the first thing a new consumer reads.
+
 ## 3. History Surface
 
 History should hang off ontology objects, not off ad hoc agent payloads.
 
 Preferred routes:
 
+- `/api/ontology/:market/navigation/:kind/:id`
 - `/api/ontology/:market/cases/:case_id/history/workflow`
 - `/api/ontology/:market/cases/:case_id/history/reasoning`
 - `/api/ontology/:market/cases/:case_id/history/outcomes`
@@ -121,6 +131,8 @@ World state and graph queries belong to the ontology/query layer.
 
 Preferred routes:
 
+- `/api/ontology/:market/macro-event-candidates`
+- `/api/ontology/:market/knowledge-links`
 - `/api/ontology/:market/world`
 - `/api/ontology/:market/graph/node/:node_id`
 - `/api/ontology/:market/graph/links`
