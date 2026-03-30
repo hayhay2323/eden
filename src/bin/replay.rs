@@ -1,87 +1,57 @@
 //! Replay historical tick archives through Eden's own reasoning stack.
 //!
-//! This binary is intentionally replay-only. It does not modify production
-//! runtime policy. Instead it reconstructs the current HK pipeline from stored
-//! archives and prints a readable thought chain plus an Eden-native entry/exit
-//! replay based on:
-//! - tactical setup action
-//! - hypothesis track status
-//! - primary mechanism and automated invalidations
-//! - backward contest state
+//! Supports two data sources:
+//! - SurrealDB (--db, requires --features persistence)
+//! - Parquet JSON archives (--parquet <dir>, no persistence needed)
+//!
+//! The Parquet path reads TickArchive JSON files produced by `replay_parquet.py`.
 //!
 //! Usage:
+//!   # From Parquet (no persistence feature needed):
+//!   cargo run --bin replay --release -- --parquet data/parquet_replay
+//!   cargo run --bin replay --release -- --parquet data/parquet_replay --limit 50 --chains 8
+//!
+//!   # From SurrealDB (requires persistence):
 //!   cargo run --features persistence --bin replay --release
 //!   cargo run --features persistence --bin replay --release -- --limit 300 --chains 8
 //!   cargo run --features persistence --bin replay --release -- --db data/eden.db
 
-#[cfg(feature = "persistence")]
 use std::collections::{HashMap, HashSet};
 
-#[cfg(feature = "persistence")]
 use eden::action::narrative::NarrativeSnapshot;
-#[cfg(feature = "persistence")]
 use eden::graph::decision::{DecisionSnapshot, StructuralFingerprint};
-#[cfg(feature = "persistence")]
 use eden::graph::graph::BrainGraph;
-#[cfg(feature = "persistence")]
 use eden::graph::insights::{ConflictHistory, GraphInsights, StockPressure};
-#[cfg(feature = "persistence")]
 use eden::graph::temporal::{TemporalBrokerRegistry, TemporalEdgeRegistry, TemporalNodeRegistry};
-#[cfg(feature = "persistence")]
 use eden::graph::tracker::PositionTracker;
-#[cfg(feature = "persistence")]
 use eden::live_snapshot::{
     LiveBackwardChain, LiveEvent, LiveHypothesisTrack, LiveMarketRegime, LivePressure,
     LiveSignal, LiveStressSnapshot, LiveTacticalCase,
 };
-#[cfg(feature = "persistence")]
 use eden::logic::tension::TensionSnapshot;
-#[cfg(feature = "persistence")]
 use eden::ontology::links::LinkSnapshot;
-#[cfg(feature = "persistence")]
 use eden::ontology::microstructure::TickArchive;
-#[cfg(feature = "persistence")]
 use eden::ontology::objects::{Market, Symbol};
-#[cfg(feature = "persistence")]
 use eden::ontology::store::ObjectStore;
-#[cfg(feature = "persistence")]
 use eden::ontology::{
     BackwardInvestigation, CaseReasoningProfile, ReasoningScope, TacticalSetup,
 };
 #[cfg(feature = "persistence")]
 use eden::persistence::store::EdenStore;
-#[cfg(feature = "persistence")]
 use eden::pipeline::dimensions::{DimensionSnapshot, SymbolDimensions};
-#[cfg(feature = "persistence")]
 use eden::pipeline::mechanism_inference::build_reasoning_profile;
-#[cfg(feature = "persistence")]
 use eden::pipeline::predicate_engine::{derive_atomic_predicates, PredicateInputs};
-#[cfg(feature = "persistence")]
 use eden::pipeline::reasoning::ReasoningSnapshot;
-#[cfg(feature = "persistence")]
 use eden::pipeline::signals::{
     broker_events_from_delta, DerivedSignalSnapshot, EventSnapshot, ObservationSnapshot,
 };
-#[cfg(feature = "persistence")]
 use eden::pipeline::world::WorldSnapshots;
-#[cfg(feature = "persistence")]
 use eden::temporal::buffer::TickHistory;
-#[cfg(feature = "persistence")]
 use eden::temporal::lineage::compute_family_context_outcomes;
-#[cfg(feature = "persistence")]
 use eden::temporal::record::TickRecord;
-#[cfg(feature = "persistence")]
 use eden::HypothesisTrackStatus;
-#[cfg(feature = "persistence")]
 use rust_decimal::Decimal;
 
-#[cfg(not(feature = "persistence"))]
-fn main() {
-    eprintln!("replay requires `--features persistence`");
-    std::process::exit(1);
-}
-
-#[cfg(feature = "persistence")]
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
@@ -91,7 +61,6 @@ async fn main() {
     }
 }
 
-#[cfg(feature = "persistence")]
 async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args: Vec<String> = std::env::args().collect();
     let requested_limit: usize = parse_flag(&args, "--limit").unwrap_or(300);
@@ -100,26 +69,21 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     } else {
         Some(requested_limit)
     };
-    let chunk_size: usize = parse_flag(&args, "--chunk-size").unwrap_or(100).max(1);
     let chains: usize = parse_flag(&args, "--chains").unwrap_or(8);
-    let db_path = parse_flag_str(&args, "--db").unwrap_or_else(|| "data/eden.db".into());
+    let parquet_dir = parse_flag_str(&args, "--parquet");
 
-    println!("=== Eden Replay ===");
-    println!("db:      {db_path}");
-    match replay_limit {
-        Some(limit) => println!("limit:   {limit} archives"),
-        None => println!("limit:   all archives"),
+    let archives = load_archives(&args, parquet_dir.as_deref(), replay_limit).await?;
+
+    if archives.is_empty() {
+        println!("No archives found.");
+        return Ok(());
     }
-    println!("chunk:   {chunk_size} archives");
+
+    println!("Loaded {} archives.", archives.len());
     println!("chains:  {chains}");
     println!();
 
-    println!("Opening store...");
-    let store = EdenStore::open(&db_path).await?;
-    println!("Store opened.");
-    println!("Streaming archives...");
-
-    let history_capacity = replay_limit.unwrap_or(1024).clamp(512, 4096);
+    let history_capacity = archives.len().clamp(512, 4096);
     let mut history = TickHistory::new(history_capacity);
     let mut conflict_history = ConflictHistory::new();
     let mut edge_registry = TemporalEdgeRegistry::new();
@@ -135,50 +99,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut printed_candidates = Vec::new();
     let mut seen_symbols = HashSet::new();
     let mut current_store = object_store_from_symbols(&seen_symbols);
-    let mut total_archives = 0usize;
-    let mut first_tick = None;
-    let mut last_tick = None;
-    let mut batch_index = 0usize;
-    let mut next_after_tick = None;
-    let mut remaining = replay_limit;
+    let total_archives = archives.len();
+    let first_tick = archives.first().map(|a| a.tick_number);
+    let last_tick = archives.last().map(|a| a.tick_number);
 
-    loop {
-        let batch_limit = remaining.map(|left| left.min(chunk_size)).unwrap_or(chunk_size);
-        if batch_limit == 0 {
-            break;
-        }
+    for archive in &archives {
+        collect_symbols_from_archive(&mut seen_symbols, archive);
+    }
+    current_store = object_store_from_symbols(&seen_symbols);
+    println!(
+        "Archives tick {}..{}, known stocks={}",
+        first_tick.unwrap_or_default(),
+        last_tick.unwrap_or_default(),
+        current_store.stocks.len(),
+    );
 
-        let batch: Vec<TickArchive> = store
-            .replay_tick_archives_after(next_after_tick, batch_limit)
-            .await?;
-        if batch.is_empty() {
-            break;
-        }
-
-        batch_index += 1;
-        first_tick.get_or_insert(batch.first().map(|item| item.tick_number).unwrap_or_default());
-        let batch_last_tick = batch.last().map(|item| item.tick_number).unwrap_or_default();
-        last_tick = Some(batch_last_tick);
-        next_after_tick = Some(batch_last_tick);
-        total_archives += batch.len();
-        if let Some(left) = remaining.as_mut() {
-            *left = left.saturating_sub(batch.len());
-        }
-
-        for archive in &batch {
-            collect_symbols_from_archive(&mut seen_symbols, archive);
-        }
-        current_store = object_store_from_symbols(&seen_symbols);
-        println!(
-            "Batch {} loaded: {} archives (tick {}..{}), known stocks={}",
-            batch_index,
-            batch.len(),
-            batch.first().map(|item| item.tick_number).unwrap_or_default(),
-            batch_last_tick,
-            current_store.stocks.len(),
-        );
-
-        for archive in &batch {
+    {
+        for archive in &archives {
             let tick = archive.tick_number;
             let links = LinkSnapshot::from_archive(archive, &current_store);
             let price_map = current_prices(&links);
@@ -416,20 +353,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
-    if total_archives == 0 {
-        println!("No tick_archive records found.");
-        return Ok(());
-    }
-
     println!("Archive stream complete.");
     println!(
-        "Loaded {} archives (tick {}..{}).",
-        total_archives,
-        first_tick.unwrap_or_default(),
-        last_tick.unwrap_or_default(),
-    );
-    println!(
-        "Replay store: {} stocks, {} sectors (institution mapping replay-safe only)",
+        "Replay store: {} stocks, {} sectors",
         current_store.stocks.len(),
         current_store.sectors.len(),
     );
@@ -505,7 +431,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-#[cfg(feature = "persistence")]
 #[derive(Clone)]
 struct ReplaySymbolState {
     symbol: Symbol,
@@ -517,7 +442,6 @@ struct ReplaySymbolState {
     reasoning_profile: CaseReasoningProfile,
 }
 
-#[cfg(feature = "persistence")]
 #[derive(Clone)]
 struct ReplayPosition {
     setup_id: String,
@@ -528,7 +452,6 @@ struct ReplayPosition {
     primary_driver: Option<String>,
 }
 
-#[cfg(feature = "persistence")]
 struct ClosedReplayPosition {
     symbol: String,
     setup_id: String,
@@ -543,7 +466,6 @@ struct ClosedReplayPosition {
     exit_reason: String,
 }
 
-#[cfg(feature = "persistence")]
 struct CandidateReplayObservation {
     symbol: Symbol,
     tick: u64,
@@ -556,14 +478,12 @@ struct CandidateReplayObservation {
     horizon_returns: HashMap<u64, Decimal>,
 }
 
-#[cfg(feature = "persistence")]
 fn collect_symbols_from_archive(seen_symbols: &mut HashSet<Symbol>, archive: &TickArchive) {
     for quote in &archive.quotes {
         seen_symbols.insert(quote.symbol.clone());
     }
 }
 
-#[cfg(feature = "persistence")]
 fn object_store_from_symbols(seen_symbols: &HashSet<Symbol>) -> ObjectStore {
     use eden::ontology::objects::Stock;
     use eden::ontology::store::define_sectors;
@@ -592,7 +512,6 @@ fn object_store_from_symbols(seen_symbols: &HashSet<Symbol>) -> ObjectStore {
     ObjectStore::from_parts(Vec::new(), stocks, sectors)
 }
 
-#[cfg(feature = "persistence")]
 fn build_symbol_states(
     reasoning: &ReasoningSnapshot,
     investigations: &[BackwardInvestigation],
@@ -706,7 +625,6 @@ fn build_symbol_states(
         .collect()
 }
 
-#[cfg(feature = "persistence")]
 fn build_live_signal(
     symbol: &Symbol,
     sector: &Option<String>,
@@ -730,7 +648,6 @@ fn build_live_signal(
     }
 }
 
-#[cfg(feature = "persistence")]
 fn build_live_pressure(
     symbol: &Symbol,
     sector: Option<String>,
@@ -747,7 +664,6 @@ fn build_live_pressure(
     }
 }
 
-#[cfg(feature = "persistence")]
 fn build_live_track(track: &eden::HypothesisTrack) -> LiveHypothesisTrack {
     LiveHypothesisTrack {
         symbol: match &track.scope {
@@ -761,7 +677,6 @@ fn build_live_track(track: &eden::HypothesisTrack) -> LiveHypothesisTrack {
     }
 }
 
-#[cfg(feature = "persistence")]
 fn build_live_backward_chain(symbol: &Symbol, investigation: &BackwardInvestigation) -> LiveBackwardChain {
     LiveBackwardChain {
         symbol: symbol.0.clone(),
@@ -794,7 +709,6 @@ fn build_live_backward_chain(symbol: &Symbol, investigation: &BackwardInvestigat
     }
 }
 
-#[cfg(feature = "persistence")]
 fn build_live_events(symbol: &Symbol, events: &EventSnapshot) -> Vec<LiveEvent> {
     events
         .events
@@ -813,7 +727,6 @@ fn build_live_events(symbol: &Symbol, events: &EventSnapshot) -> Vec<LiveEvent> 
         .collect()
 }
 
-#[cfg(feature = "persistence")]
 fn build_live_tactical_case(setup: &TacticalSetup, symbol: &Symbol) -> LiveTacticalCase {
     LiveTacticalCase {
         setup_id: setup.setup_id.clone(),
@@ -829,7 +742,6 @@ fn build_live_tactical_case(setup: &TacticalSetup, symbol: &Symbol) -> LiveTacti
     }
 }
 
-#[cfg(feature = "persistence")]
 fn build_live_market_regime(
     regime: &eden::graph::decision::MarketRegimeFilter,
 ) -> LiveMarketRegime {
@@ -844,7 +756,6 @@ fn build_live_market_regime(
     }
 }
 
-#[cfg(feature = "persistence")]
 fn current_prices(links: &LinkSnapshot) -> HashMap<Symbol, Decimal> {
     let mut prices = HashMap::new();
     for quote in &links.quotes {
@@ -855,7 +766,6 @@ fn current_prices(links: &LinkSnapshot) -> HashMap<Symbol, Decimal> {
     prices
 }
 
-#[cfg(feature = "persistence")]
 fn enter_reason(state: &ReplaySymbolState) -> Option<String> {
     if state.setup.action != "enter" {
         return None;
@@ -887,7 +797,6 @@ fn enter_reason(state: &ReplaySymbolState) -> Option<String> {
     ))
 }
 
-#[cfg(feature = "persistence")]
 fn exit_reason(state: &ReplaySymbolState) -> Option<String> {
     if state.setup.action != "enter" {
         return Some(format!("setup downgraded to `{}`", state.setup.action));
@@ -920,7 +829,6 @@ fn exit_reason(state: &ReplaySymbolState) -> Option<String> {
     None
 }
 
-#[cfg(feature = "persistence")]
 fn setup_direction(setup: &TacticalSetup, composite: Decimal) -> i8 {
     if setup.title.starts_with("Long ") {
         1
@@ -935,7 +843,6 @@ fn setup_direction(setup: &TacticalSetup, composite: Decimal) -> i8 {
     }
 }
 
-#[cfg(feature = "persistence")]
 fn direction_label(direction: i8) -> &'static str {
     match direction.cmp(&0) {
         std::cmp::Ordering::Greater => "long",
@@ -944,7 +851,6 @@ fn direction_label(direction: i8) -> &'static str {
     }
 }
 
-#[cfg(feature = "persistence")]
 fn directional_return(entry_price: Decimal, exit_price: Decimal, direction: i8) -> Decimal {
     if entry_price <= Decimal::ZERO || exit_price <= Decimal::ZERO {
         return Decimal::ZERO;
@@ -957,7 +863,6 @@ fn directional_return(entry_price: Decimal, exit_price: Decimal, direction: i8) 
     }
 }
 
-#[cfg(feature = "persistence")]
 fn update_candidate_outcomes(
     candidates: &mut [CandidateReplayObservation],
     tick: u64,
@@ -980,7 +885,6 @@ fn update_candidate_outcomes(
     }
 }
 
-#[cfg(feature = "persistence")]
 fn print_candidate_outcomes(candidates: &[CandidateReplayObservation]) {
     println!("=== Candidate Outcome Check ===");
     let horizons = [15u64, 50u64, 150u64];
@@ -1058,12 +962,10 @@ fn print_candidate_outcomes(candidates: &[CandidateReplayObservation]) {
     println!();
 }
 
-#[cfg(feature = "persistence")]
 fn format_return_pct(value: Decimal) -> String {
     format!("{:+.4}%", value * Decimal::new(100, 0))
 }
 
-#[cfg(feature = "persistence")]
 fn strongest_candidate<'a>(
     symbol_states: &'a HashMap<Symbol, ReplaySymbolState>,
     positions: &HashMap<Symbol, ReplayPosition>,
@@ -1090,7 +992,6 @@ fn strongest_candidate<'a>(
     ranked.into_iter().next()
 }
 
-#[cfg(feature = "persistence")]
 fn candidate_reason(state: &ReplaySymbolState) -> String {
     if state.setup.action == "enter" {
         if state.reasoning_profile.primary_mechanism.is_none() {
@@ -1138,7 +1039,6 @@ fn candidate_reason(state: &ReplaySymbolState) -> String {
     blockers.join(", ")
 }
 
-#[cfg(feature = "persistence")]
 fn print_entry_chain(
     tick: u64,
     state: &ReplaySymbolState,
@@ -1219,7 +1119,6 @@ fn print_entry_chain(
     println!("  enter_price={} reason={}", entry_price.round_dp(4), reason);
 }
 
-#[cfg(feature = "persistence")]
 fn print_candidate_chain(tick: u64, state: &ReplaySymbolState) {
     println!();
     println!("=== CANDIDATE {} @ tick {} ===", state.symbol, tick);
@@ -1295,7 +1194,6 @@ fn print_candidate_chain(tick: u64, state: &ReplaySymbolState) {
     println!("  candidate_reason={}", candidate_reason(state));
 }
 
-#[cfg(feature = "persistence")]
 fn print_exit_chain(
     tick: u64,
     state: &ReplaySymbolState,
@@ -1324,7 +1222,6 @@ fn print_exit_chain(
     println!("  exit_reason={}", reason);
 }
 
-#[cfg(feature = "persistence")]
 fn print_policy_verdict(setup: &TacticalSetup) {
     let Some(verdict) = &setup.policy_verdict else {
         return;
@@ -1345,14 +1242,107 @@ fn print_policy_verdict(setup: &TacticalSetup) {
     }
 }
 
-#[cfg(feature = "persistence")]
+async fn load_archives(
+    args: &[String],
+    parquet_dir: Option<&str>,
+    limit: Option<usize>,
+) -> Result<Vec<TickArchive>, Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(dir) = parquet_dir {
+        // ── Parquet/JSON mode ──
+        println!("=== Eden Replay (Parquet) ===");
+        println!("dir:     {dir}");
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let session_dir = std::path::Path::new(dir).join(&today);
+        let scan_dir = if session_dir.is_dir() {
+            println!("date:    {today}");
+            session_dir
+        } else {
+            println!("date:    (using dir directly)");
+            std::path::Path::new(dir).to_path_buf()
+        };
+
+        let mut json_files: Vec<String> = std::fs::read_dir(&scan_dir)?
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|name| name.starts_with("tick_") && name.ends_with(".json"))
+            .collect();
+        json_files.sort();
+
+        if let Some(max) = limit {
+            json_files.truncate(max);
+        }
+
+        println!("files:   {}", json_files.len());
+        println!();
+
+        let mut archives = Vec::with_capacity(json_files.len());
+        for file_name in &json_files {
+            let path = scan_dir.join(file_name);
+            let content = std::fs::read_to_string(&path)?;
+            let archive: TickArchive = serde_json::from_str(&content)?;
+            archives.push(archive);
+        }
+
+        Ok(archives)
+    } else {
+        // ── SurrealDB mode ──
+        #[cfg(feature = "persistence")]
+        {
+            let chunk_size: usize = parse_flag(args, "--chunk-size").unwrap_or(100).max(1);
+            let db_path =
+                parse_flag_str(args, "--db").unwrap_or_else(|| "data/eden.db".into());
+
+            println!("=== Eden Replay (SurrealDB) ===");
+            println!("db:      {db_path}");
+            println!();
+
+            println!("Opening store...");
+            let store = EdenStore::open(&db_path).await?;
+            println!("Store opened. Streaming archives...");
+
+            let mut archives = Vec::new();
+            let mut next_after_tick = None;
+            let mut remaining = limit;
+
+            loop {
+                let batch_limit =
+                    remaining.map(|left| left.min(chunk_size)).unwrap_or(chunk_size);
+                if batch_limit == 0 {
+                    break;
+                }
+                let batch: Vec<TickArchive> = store
+                    .replay_tick_archives_after(next_after_tick, batch_limit)
+                    .await?;
+                if batch.is_empty() {
+                    break;
+                }
+                let batch_last = batch.last().map(|a| a.tick_number).unwrap_or_default();
+                next_after_tick = Some(batch_last);
+                if let Some(left) = remaining.as_mut() {
+                    *left = left.saturating_sub(batch.len());
+                }
+                archives.extend(batch);
+            }
+
+            Ok(archives)
+        }
+
+        #[cfg(not(feature = "persistence"))]
+        {
+            let _ = args;
+            eprintln!("No --parquet dir specified and persistence feature is not enabled.");
+            eprintln!("Use: --parquet <dir>  or  --features persistence --db <path>");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn parse_flag<T: std::str::FromStr>(args: &[String], name: &str) -> Option<T> {
     args.windows(2)
         .find(|window| window[0] == name)
         .and_then(|window| window[1].parse().ok())
 }
 
-#[cfg(feature = "persistence")]
 fn parse_flag_str(args: &[String], name: &str) -> Option<String> {
     args.windows(2)
         .find(|window| window[0] == name)
