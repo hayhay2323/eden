@@ -377,7 +377,7 @@ mod tests {
             hit: None,
             realized_return: None,
         };
-        UsSignalScorecard::try_resolve(&mut record, 25, Some(dec!(185)));
+        UsSignalScorecard::try_resolve(&mut record, 60, Some(dec!(185)));
         assert!(record.resolved);
         assert_eq!(record.hit, Some(true));
         assert!(record.realized_return.unwrap() > Decimal::ZERO);
@@ -396,7 +396,7 @@ mod tests {
             hit: None,
             realized_return: None,
         };
-        UsSignalScorecard::try_resolve(&mut record, 25, Some(dec!(880)));
+        UsSignalScorecard::try_resolve(&mut record, 60, Some(dec!(880)));
         assert!(record.resolved);
         assert_eq!(record.hit, Some(true));
         assert!(record.realized_return.unwrap() > Decimal::ZERO);

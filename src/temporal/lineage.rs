@@ -7,7 +7,7 @@ use time::OffsetDateTime;
 use super::buffer::TickHistory;
 #[path = "lineage/outcomes.rs"]
 mod outcomes;
-pub use outcomes::{compute_case_realized_outcomes, compute_family_context_outcomes};
+pub use outcomes::{compute_case_realized_outcomes, compute_case_realized_outcomes_adaptive, compute_family_context_outcomes};
 use outcomes::*;
 #[cfg(test)]
 use outcomes::{fade_return, setup_direction};

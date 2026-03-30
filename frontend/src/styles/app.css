@@ -1,0 +1,120 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap");
+
+:root {
+  color-scheme: light;
+  --bg: #f4f5f7;
+  --grid: rgba(16, 24, 40, 0.03);
+  --surface: rgba(255, 255, 255, 0.97);
+  --border: rgba(16, 24, 40, 0.1);
+  --border-focus: rgba(37, 99, 235, 0.18);
+  --text: #111827;
+  --placeholder: #8a94a4;
+  --shadow: 0 8px 18px rgba(15, 23, 42, 0.035);
+  font-family:
+    "IBM Plex Sans",
+    "Aptos",
+    "Segoe UI",
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100vh;
+  margin: 0;
+}
+
+body {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.72)),
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px),
+    var(--bg);
+  background-size:
+    auto,
+    32px 32px,
+    32px 32px,
+    auto;
+  color: var(--text);
+  font-family: inherit;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.app-shell,
+.app-shell--minimal {
+  min-height: 100vh;
+}
+
+.dock-shell {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px 24px 28px;
+}
+
+.dock-shell__field {
+  width: min(1120px, calc(100vw - 48px));
+}
+
+.threads-composer {
+  display: flex;
+  align-items: center;
+  min-height: 56px;
+  padding: 0 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.threads-composer__input {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.threads-composer__input::placeholder {
+  color: var(--placeholder);
+}
+
+.threads-composer:focus-within {
+  border-color: var(--border-focus);
+  box-shadow:
+    0 0 0 3px rgba(37, 99, 235, 0.05),
+    0 10px 20px rgba(15, 23, 42, 0.05);
+}
+
+@media (max-width: 720px) {
+  .dock-shell {
+    padding: 16px 16px 18px;
+  }
+
+  .dock-shell__field {
+    width: calc(100vw - 32px);
+  }
+
+  .threads-composer {
+    min-height: 52px;
+    padding: 0 14px;
+    border-radius: 12px;
+  }
+
+  .threads-composer__input {
+    font-size: 15px;
+  }
+}

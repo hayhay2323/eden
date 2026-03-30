@@ -117,7 +117,7 @@ pub(super) async fn initialize_hk_runtime() -> HkRuntimeBootstrap {
     let edge_registry = TemporalEdgeRegistry::new();
     let node_registry = TemporalNodeRegistry::new();
     let broker_registry = TemporalBrokerRegistry::new();
-    let scorecard = SignalScorecard::new(500, 15);
+    let scorecard = SignalScorecard::new(500, 50);
     let bridge_service = FileSystemBridgeService::default();
     let analyst_service = DefaultAnalystService;
     let bridge_snapshot_path =

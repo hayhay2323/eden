@@ -1,0 +1,1 @@
+{"root":["./src/main.tsx","./src/router.tsx","./src/vite-env.d.ts","./src/lib/api/client.ts","./src/lib/query/health.ts","./src/routes/desk-page.tsx","./src/routes/signals-page.tsx","./src/routes/workspace-page.tsx","./src/shell/app-shell.tsx","./src/state/shell-store.ts"],"version":"6.0.2"}

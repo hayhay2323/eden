@@ -2,7 +2,7 @@
 use super::*;
 
 #[cfg(feature = "persistence")]
-pub(super) const CASE_OUTCOME_RESOLUTION_LAG: u64 = 15;
+// Replaced by adaptive multi-horizon evaluation (15/50/150 ticks)
 #[cfg(feature = "persistence")]
 pub(super) const PERSISTENCE_MAX_IN_FLIGHT: usize = 16;
 
@@ -167,10 +167,9 @@ pub(super) async fn run_hk_projection_stage<S: AnalystService>(
         .iter()
         .map(|case| (case.setup_id.clone(), case.primary_lens.clone()))
         .collect::<std::collections::HashMap<_, _>>();
-    let realized_outcomes = compute_case_realized_outcomes(
+    let realized_outcomes = compute_case_realized_outcomes_adaptive(
         history,
         LINEAGE_WINDOW,
-        CASE_OUTCOME_RESOLUTION_LAG,
     )
     .into_iter()
     .map(|outcome| {

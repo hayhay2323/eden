@@ -2,7 +2,7 @@ use rust_decimal::Decimal;
 
 use crate::us::pipeline::dimensions::UsSymbolDimensions;
 
-pub const SIGNAL_RESOLUTION_LAG: u64 = 15;
+pub const SIGNAL_RESOLUTION_LAG: u64 = 50;
 
 /// Equal-weight composite across the five US dimensions.
 pub fn dimension_composite(dims: &UsSymbolDimensions) -> Decimal {

@@ -83,6 +83,8 @@ use crate::temporal::causality::{compute_causal_timelines, CausalTimeline};
 use crate::temporal::causality::{CausalFlipEvent, CausalTimelinePoint};
 #[cfg(feature = "persistence")]
 use crate::temporal::lineage::compute_case_realized_outcomes;
+#[cfg(feature = "persistence")]
+use crate::temporal::lineage::compute_case_realized_outcomes_adaptive;
 use crate::temporal::lineage::{compute_family_context_outcomes, compute_lineage_stats};
 use crate::temporal::record::TickRecord;
 

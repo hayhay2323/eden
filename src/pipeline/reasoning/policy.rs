@@ -850,17 +850,18 @@ fn best_lineage_prior<'a>(
 }
 
 fn classify_lineage_prior(prior: &FamilyContextLineageOutcome) -> PriorSignal {
-    if prior.resolved < 3 {
+    if prior.resolved < 5 {
+        // Too few samples to judge — let the case through
         return PriorSignal::Neutral;
     }
-    if prior.mean_net_return <= Decimal::ZERO
-        || prior.follow_through_rate < Decimal::new(45, 2)
-        || prior.invalidation_rate > Decimal::new(55, 2)
-    {
+    // Only suppress when evidence is strongly negative across multiple dimensions
+    let strongly_negative = prior.mean_net_return < Decimal::new(-1, 2) // < -1%
+        && prior.follow_through_rate < Decimal::new(30, 2)             // < 30%
+        && prior.invalidation_rate > Decimal::new(60, 2);              // > 60%
+    if strongly_negative {
         PriorSignal::Negative
     } else if prior.mean_net_return > Decimal::ZERO
-        && prior.follow_through_rate >= Decimal::new(55, 2)
-        && prior.invalidation_rate <= Decimal::new(45, 2)
+        && prior.follow_through_rate >= Decimal::new(45, 2)
     {
         PriorSignal::Positive
     } else {
