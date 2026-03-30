@@ -252,6 +252,8 @@
             operational.symbols[0].graph_ref.endpoint.as_str(),
             "/api/ontology/hk/graph/node/symbol:700.hk"
         );
+        assert_eq!(operational.symbols[0].summary.symbol, "700.HK");
+        assert_eq!(operational.symbols[0].summary.structure_action, None);
         assert!(operational.symbols[0].navigation.graph.is_some());
         assert_eq!(
             operational.cases[0].graph_ref.endpoint.as_str(),
@@ -501,4 +503,131 @@
             operational.sidecars.knowledge_links[0].link_id.as_str(),
             "link:1"
         );
+    }
+
+    #[test]
+    fn operational_contract_summaries_expose_ontology_native_surface() {
+        let snapshot = AgentSnapshot {
+            tick: 1,
+            timestamp: "2026-03-29T15:00:00Z".into(),
+            market: LiveMarket::Hk,
+            market_regime: LiveMarketRegime {
+                bias: "neutral".into(),
+                confidence: Decimal::ZERO,
+                breadth_up: Decimal::ZERO,
+                breadth_down: Decimal::ZERO,
+                average_return: Decimal::ZERO,
+                directional_consensus: None,
+                pre_market_sentiment: None,
+            },
+            stress: LiveStressSnapshot {
+                composite_stress: Decimal::ZERO,
+                sector_synchrony: None,
+                pressure_consensus: None,
+                momentum_consensus: None,
+                pressure_dispersion: None,
+                volume_anomaly: None,
+            },
+            wake: AgentWakeState {
+                should_speak: false,
+                priority: Decimal::ZERO,
+                headline: None,
+                summary: vec![],
+                focus_symbols: vec![],
+                reasons: vec![],
+                suggested_tools: vec![],
+            },
+            world_state: None,
+            backward_reasoning: None,
+            notices: vec![],
+            active_structures: vec![],
+            recent_transitions: vec![],
+            sector_flows: vec![],
+            symbols: vec![AgentSymbolState {
+                symbol: "700.HK".into(),
+                sector: Some("Technology".into()),
+                structure: Some(AgentStructureState {
+                    symbol: "700.HK".into(),
+                    sector: Some("Technology".into()),
+                    setup_id: None,
+                    title: "Long 700".into(),
+                    action: "enter".into(),
+                    status: Some("strengthening".into()),
+                    age_ticks: None,
+                    status_streak: None,
+                    confidence: Decimal::ZERO,
+                    confidence_change: None,
+                    confidence_gap: None,
+                    transition_reason: None,
+                    contest_state: None,
+                    current_leader: None,
+                    leader_streak: None,
+                    leader_transition_summary: None,
+                    thesis_family: None,
+                    action_expectancies: AgentActionExpectancies::default(),
+                    expected_net_alpha: None,
+                    alpha_horizon: None,
+                    invalidation_rule: None,
+                }),
+                signal: Some(crate::agent::AgentSignalState {
+                    composite: Decimal::ONE,
+                    mark_price: None,
+                    capital_flow_direction: Decimal::ZERO,
+                    price_momentum: Decimal::ZERO,
+                    volume_profile: Decimal::ZERO,
+                    pre_post_market_anomaly: Decimal::ZERO,
+                    valuation: Decimal::ZERO,
+                    sector_coherence: None,
+                    cross_stock_correlation: None,
+                    cross_market_propagation: None,
+                }),
+                depth: None,
+                brokers: None,
+                invalidation: None,
+                pressure: None,
+                active_position: None,
+                latest_events: vec![],
+            }],
+            events: vec![],
+            cross_market_signals: vec![],
+            context_priors: vec![],
+            macro_event_candidates: vec![],
+            macro_events: vec![crate::ontology::AgentMacroEvent {
+                event_id: "macro:1".into(),
+                tick: 1,
+                market: LiveMarket::Hk,
+                event_type: "policy".into(),
+                authority_level: "confirmed".into(),
+                headline: "Policy update".into(),
+                summary: "Policy update".into(),
+                confidence: Decimal::ONE,
+                confirmation_state: "confirmed".into(),
+                impact: crate::ontology::AgentEventImpact {
+                    primary_scope: "market".into(),
+                    secondary_scopes: vec![],
+                    affected_markets: vec!["hk".into()],
+                    affected_sectors: vec!["Technology".into()],
+                    affected_symbols: vec!["700.HK".into()],
+                    preferred_expression: "index".into(),
+                    requires_market_confirmation: false,
+                    decisive_factors: vec![],
+                },
+                supporting_notice_ids: vec![],
+                promotion_reasons: vec![],
+            }],
+            knowledge_links: vec![],
+        };
+        let symbol_contract = build_symbol_state_contract(&snapshot, &snapshot.symbols[0])
+            .expect("symbol contract");
+        let macro_event_contracts =
+            build_macro_event_contracts(&snapshot).expect("macro event contracts");
+
+        assert_eq!(symbol_contract.summary.structure_action.as_deref(), Some("enter"));
+        assert_eq!(
+            symbol_contract.summary.structure_status.as_deref(),
+            Some("strengthening")
+        );
+        assert_eq!(symbol_contract.summary.signal_composite, Some(Decimal::ONE));
+        assert_eq!(macro_event_contracts[0].summary.headline, "Policy update");
+        assert_eq!(macro_event_contracts[0].summary.affected_symbol_count, 1);
     }

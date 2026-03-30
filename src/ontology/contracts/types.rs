@@ -160,6 +160,51 @@ pub struct WorkflowRelationships {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolStateSummary {
+    pub symbol: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structure_action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structure_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal_composite: Option<Decimal>,
+    pub has_depth: bool,
+    pub has_brokers: bool,
+    pub invalidated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leading_falsifier: Option<String>,
+    pub latest_event_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecommendationSummary {
+    pub action: String,
+    pub bias: String,
+    pub severity: String,
+    pub confidence: Decimal,
+    pub best_action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_lens: Option<String>,
+    pub execution_policy: ActionExecutionPolicy,
+    pub governance_reason_code: ActionGovernanceReasonCode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MacroEventSummary {
+    pub headline: String,
+    pub event_type: String,
+    pub authority_level: String,
+    pub confidence: Decimal,
+    pub confirmation_state: String,
+    pub primary_scope: String,
+    pub preferred_expression: String,
+    pub affected_symbol_count: usize,
+    pub affected_sector_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationalRelationshipGroup {
     pub name: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -239,6 +284,7 @@ pub struct SymbolStateContract {
     pub navigation: OperationalNavigation,
     #[serde(default)]
     pub relationships: SymbolStateRelationships,
+    pub summary: SymbolStateSummary,
     pub graph_ref: OperationalGraphRef,
     pub state: AgentSymbolState,
 }
@@ -316,6 +362,7 @@ pub struct RecommendationContract {
     #[serde(default)]
     pub navigation: OperationalNavigation,
     pub relationships: RecommendationRelationships,
+    pub summary: RecommendationSummary,
     pub symbol_ref: OperationalObjectRef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub case_ref: Option<OperationalObjectRef>,
@@ -338,6 +385,7 @@ pub struct MacroEventContract {
     pub navigation: OperationalNavigation,
     #[serde(default)]
     pub relationships: MacroEventRelationships,
+    pub summary: MacroEventSummary,
     pub graph_ref: OperationalGraphRef,
     pub event: AgentMacroEvent,
 }

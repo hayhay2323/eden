@@ -300,6 +300,25 @@ pub fn build_symbol_state_contract(
         sector: state.sector.clone(),
         navigation: OperationalNavigation::default(),
         relationships: SymbolStateRelationships::default(),
+        summary: SymbolStateSummary {
+            symbol: state.symbol.clone(),
+            sector: state.sector.clone(),
+            structure_action: state.structure.as_ref().map(|item| item.action.clone()),
+            structure_status: state.structure.as_ref().and_then(|item| item.status.clone()),
+            signal_composite: state.signal.as_ref().map(|item| item.composite),
+            has_depth: state.depth.is_some(),
+            has_brokers: state.brokers.is_some(),
+            invalidated: state
+                .invalidation
+                .as_ref()
+                .map(|item| item.invalidated)
+                .unwrap_or(false),
+            leading_falsifier: state
+                .invalidation
+                .as_ref()
+                .and_then(|item| item.leading_falsifier.clone()),
+            latest_event_count: state.latest_events.len(),
+        },
         graph_ref: symbol_graph_ref(snapshot.market, &state.symbol),
         state: state.clone(),
     })
@@ -320,6 +339,17 @@ pub fn build_macro_event_contracts(
             observed_at,
             navigation: OperationalNavigation::default(),
             relationships: MacroEventRelationships::default(),
+            summary: MacroEventSummary {
+                headline: event.headline.clone(),
+                event_type: event.event_type.clone(),
+                authority_level: event.authority_level.clone(),
+                confidence: event.confidence,
+                confirmation_state: event.confirmation_state.clone(),
+                primary_scope: event.impact.primary_scope.clone(),
+                preferred_expression: event.impact.preferred_expression.clone(),
+                affected_symbol_count: event.impact.affected_symbols.len(),
+                affected_sector_count: event.impact.affected_sectors.len(),
+            },
             graph_ref: macro_event_graph_ref(snapshot.market, &event.event_id),
             event,
         })
@@ -712,6 +742,16 @@ pub fn build_operational_snapshot(
                             workflow_object_ref(snapshot.market, workflow_id, None)
                         })
                     }),
+                },
+                summary: RecommendationSummary {
+                    action: item.action.clone(),
+                    bias: item.bias.clone(),
+                    severity: item.severity.clone(),
+                    confidence: item.confidence,
+                    best_action: item.best_action.clone(),
+                    primary_lens: item.primary_lens.clone(),
+                    execution_policy: item.execution_policy,
+                    governance_reason_code: item.governance_reason_code,
                 },
                 symbol_ref: symbol_object_ref(snapshot.market, snapshot.tick, &item.symbol),
                 case_ref: linkage.and_then(|(_, case_id, _, _)| {
