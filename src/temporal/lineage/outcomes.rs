@@ -4,7 +4,7 @@ use rust_decimal::Decimal;
 
 use crate::temporal::buffer::TickHistory;
 
-use super::{CaseRealizedOutcome, FamilyContextLineageOutcome, compute_lineage_stats};
+use super::{compute_lineage_stats, CaseRealizedOutcome, FamilyContextLineageOutcome};
 
 #[path = "outcomes/aggregation.rs"]
 mod aggregation;
@@ -14,12 +14,12 @@ mod evaluation;
 mod filters;
 
 pub(super) use aggregation::{
-    ContextualOutcomeAccumulator, FamilyContextAccumulator, OutcomeAccumulator,
     top_context_outcomes, top_counts, top_family_context_outcomes, top_outcomes,
     update_context_outcome, update_family_context_outcome, update_outcome,
+    ContextualOutcomeAccumulator, FamilyContextAccumulator, OutcomeAccumulator,
 };
 pub(super) use evaluation::{
-    EvaluatedOutcome, SetupOutcomeContext, evaluate_setup_outcome, setup_context,
+    evaluate_setup_outcome, setup_context, EvaluatedOutcome, SetupOutcomeContext,
 };
 #[cfg(test)]
 pub(super) use evaluation::{fade_return, setup_direction};
@@ -54,7 +54,13 @@ pub fn compute_case_realized_outcomes(
     let mut outcomes = seen_setups
         .into_values()
         .filter_map(|context| {
-            evaluate_at_horizon(&context, resolution_lag, current_tick, &window, &window_by_tick)
+            evaluate_at_horizon(
+                &context,
+                resolution_lag,
+                current_tick,
+                &window,
+                &window_by_tick,
+            )
         })
         .collect::<Vec<_>>();
 
@@ -108,50 +114,36 @@ pub fn compute_case_realized_outcomes_adaptive(
                 return None;
             }
 
-            // Evaluate the full path
-            let outcome = evaluate_setup_outcome(&context, &future_records, &window_by_tick)?;
-
-            // Now find the peak horizon by scanning tick by tick
             let symbol = context.symbol.as_ref()?;
             let entry_price = context.entry_price?;
             if entry_price <= Decimal::ZERO {
                 return None;
             }
-
-            let mut peak_return = Decimal::ZERO;
-            let mut peak_tick = context.entry_tick + min_lag;
-            let mut ticks_since_entry: u64 = 0;
-
-            for record in &future_records {
-                ticks_since_entry += 1;
-                if ticks_since_entry < min_lag {
-                    continue;
-                }
-                if let Some(signal) = record.signals.get(symbol) {
-                    if let Some(mark_price) = signal.mark_price {
-                        if mark_price > Decimal::ZERO {
-                            let ret = if context.direction >= 0 {
-                                (mark_price - entry_price) / entry_price
-                            } else {
-                                (entry_price - mark_price) / entry_price
-                            };
-                            if ret > peak_return {
-                                peak_return = ret;
-                                peak_tick = record.tick_number;
-                            }
-                        }
-                    }
-                }
-            }
-
-            let resolved_tick = peak_tick;
+            let resolved_tick = adaptive_peak_tick_from_prices(
+                context.entry_tick,
+                entry_price,
+                context.direction,
+                min_lag,
+                future_records.iter().filter_map(|record| {
+                    let price = record
+                        .signals
+                        .get(symbol)
+                        .and_then(|signal| signal.mark_price)
+                        .filter(|price| *price > Decimal::ZERO)?;
+                    Some((record.tick_number, price))
+                }),
+            )?;
+            let bounded_records = future_records
+                .iter()
+                .copied()
+                .filter(|record| record.tick_number <= resolved_tick)
+                .collect::<Vec<_>>();
+            let outcome = evaluate_setup_outcome(&context, &bounded_records, &window_by_tick)?;
             let resolved_at = window_by_tick
                 .get(&resolved_tick)
                 .copied()
                 .map(|record| record.timestamp)
-                .or_else(|| {
-                    future_records.last().map(|record| record.timestamp)
-                })?;
+                .or_else(|| future_records.last().map(|record| record.timestamp))?;
             Some(CaseRealizedOutcome {
                 setup_id: context.setup_id.clone(),
                 workflow_id: context.workflow_id.clone(),
@@ -178,6 +170,38 @@ pub fn compute_case_realized_outcomes_adaptive(
 
     outcomes.sort_by(|left, right| right.resolved_tick.cmp(&left.resolved_tick));
     outcomes
+}
+
+fn adaptive_peak_tick_from_prices<I>(
+    entry_tick: u64,
+    entry_price: Decimal,
+    direction: i8,
+    min_lag: u64,
+    future_prices: I,
+) -> Option<u64>
+where
+    I: IntoIterator<Item = (u64, Decimal)>,
+{
+    let mut best: Option<(u64, Decimal)> = None;
+
+    for (tick_number, price) in future_prices {
+        if tick_number < entry_tick + min_lag || price <= Decimal::ZERO {
+            continue;
+        }
+
+        let ret = if direction >= 0 {
+            (price - entry_price) / entry_price
+        } else {
+            (entry_price - price) / entry_price
+        };
+
+        match best {
+            Some((_, best_ret)) if ret <= best_ret => {}
+            _ => best = Some((tick_number, ret)),
+        }
+    }
+
+    best.map(|(tick_number, _)| tick_number)
 }
 
 fn collect_setup_contexts(
@@ -239,6 +263,57 @@ fn evaluate_at_horizon(
         structure_retained: outcome.structure_retained,
         convergence_score: outcome.convergence_score,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use rust_decimal_macros::dec;
+
+    use super::adaptive_peak_tick_from_prices;
+
+    #[test]
+    fn adaptive_peak_tick_prefers_best_long_return() {
+        let resolved = adaptive_peak_tick_from_prices(
+            10,
+            dec!(100),
+            1,
+            2,
+            vec![
+                (11, dec!(98)),
+                (12, dec!(103)),
+                (13, dec!(101)),
+                (14, dec!(105)),
+            ],
+        );
+
+        assert_eq!(resolved, Some(14));
+    }
+
+    #[test]
+    fn adaptive_peak_tick_prefers_least_negative_return_when_long_never_recovers() {
+        let resolved = adaptive_peak_tick_from_prices(
+            10,
+            dec!(100),
+            1,
+            2,
+            vec![(12, dec!(97)), (13, dec!(96)), (14, dec!(98))],
+        );
+
+        assert_eq!(resolved, Some(14));
+    }
+
+    #[test]
+    fn adaptive_peak_tick_respects_short_direction() {
+        let resolved = adaptive_peak_tick_from_prices(
+            10,
+            dec!(100),
+            -1,
+            2,
+            vec![(12, dec!(97)), (13, dec!(94)), (14, dec!(96))],
+        );
+
+        assert_eq!(resolved, Some(13));
+    }
 }
 
 pub fn compute_family_context_outcomes(

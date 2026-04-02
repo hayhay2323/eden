@@ -18,6 +18,8 @@ impl<P, U> LoopActivity<P, U> {
     }
 }
 
+const ACTIVITY_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub async fn wait_for_activity<P, U>(
     bootstrap_pending: &mut bool,
     push_rx: &mut mpsc::Receiver<P>,
@@ -28,18 +30,39 @@ pub async fn wait_for_activity<P, U>(
         return Ok(LoopActivity::bootstrap());
     }
 
-    tokio::select! {
-        maybe_push = push_rx.recv() => match maybe_push {
-            Some(event) => Ok(LoopActivity {
-                first_push: Some(event),
-                latest_update: None,
-            }),
-            None => Err(()),
-        },
-        maybe_update = update_rx.recv() => Ok(LoopActivity {
-            first_push: None,
-            latest_update: maybe_update,
-        }),
+    let mut silent_rounds: u32 = 0;
+    loop {
+        let result = tokio::time::timeout(ACTIVITY_TIMEOUT, async {
+            tokio::select! {
+                maybe_push = push_rx.recv() => match maybe_push {
+                    Some(event) => Ok(LoopActivity {
+                        first_push: Some(event),
+                        latest_update: None,
+                    }),
+                    None => Err(()),
+                },
+                maybe_update = update_rx.recv() => Ok(LoopActivity {
+                    first_push: None,
+                    latest_update: maybe_update,
+                }),
+            }
+        })
+        .await;
+
+        match result {
+            Ok(inner) => return inner,
+            Err(_timeout) => {
+                silent_rounds += 1;
+                eprintln!(
+                    "[runtime watchdog] no activity for {}s (silent_rounds={}). Data feed may be disconnected.",
+                    ACTIVITY_TIMEOUT.as_secs() * u64::from(silent_rounds),
+                    silent_rounds,
+                );
+                if silent_rounds >= 10 {
+                    eprintln!("[runtime watchdog] 5 minutes with no data — feed is likely dead.");
+                }
+            }
+        }
     }
 }
 
@@ -156,4 +179,207 @@ where
         }
     });
     rx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    #[derive(Debug, Default)]
+    struct MockTickState {
+        dirty: bool,
+        log: Vec<String>,
+        clear_dirty_calls: usize,
+    }
+
+    impl MockTickState {
+        fn dirty() -> Self {
+            Self {
+                dirty: true,
+                ..Self::default()
+            }
+        }
+    }
+
+    impl TickState<&'static str, &'static str> for MockTickState {
+        fn apply_push(&mut self, event: &'static str) {
+            self.log.push(format!("push:{event}"));
+            self.dirty = true;
+        }
+
+        fn apply_update(&mut self, update: &'static str) {
+            self.log.push(format!("update:{update}"));
+            self.dirty = true;
+        }
+
+        fn is_dirty(&self) -> bool {
+            self.dirty
+        }
+
+        fn clear_dirty(&mut self) {
+            self.dirty = false;
+            self.clear_dirty_calls += 1;
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn bootstrap_does_not_consume_ready_messages() {
+        let (mut push_tx, mut push_rx) = mpsc::channel(4);
+        let (mut update_tx, mut update_rx) = mpsc::channel(4);
+        push_tx.send("push-1").await.unwrap();
+        update_tx.send("update-1").await.unwrap();
+
+        let mut bootstrap_pending = true;
+        let mut tick = 0;
+        let mut state = MockTickState::dirty();
+
+        let result = next_tick(
+            &mut bootstrap_pending,
+            &mut push_rx,
+            &mut update_rx,
+            Duration::from_millis(5),
+            &mut state,
+            &mut tick,
+        )
+        .await
+        .unwrap();
+
+        let advance = result.expect("bootstrap should still advance dirty state");
+        assert!(!advance.received_push);
+        assert!(!advance.received_update);
+        assert_eq!(tick, 1);
+        assert_eq!(state.clear_dirty_calls, 1);
+        assert!(!bootstrap_pending);
+        assert_eq!(push_rx.try_recv().ok(), Some("push-1"));
+        assert_eq!(update_rx.try_recv().ok(), Some("update-1"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn clean_state_is_gated_even_on_bootstrap() {
+        let (mut push_tx, mut push_rx) = mpsc::channel(4);
+        let (mut update_tx, mut update_rx) = mpsc::channel(4);
+        drop(push_tx);
+        drop(update_tx);
+
+        let mut bootstrap_pending = true;
+        let mut tick = 0;
+        let mut state = MockTickState::default();
+
+        let result = next_tick(
+            &mut bootstrap_pending,
+            &mut push_rx,
+            &mut update_rx,
+            Duration::from_millis(5),
+            &mut state,
+            &mut tick,
+        )
+        .await
+        .unwrap();
+
+        assert!(result.is_none());
+        assert_eq!(tick, 0);
+        assert_eq!(state.clear_dirty_calls, 0);
+        assert!(!bootstrap_pending);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn next_tick_coalesces_debounced_pushes_and_keeps_latest_update() {
+        let (mut push_tx, mut push_rx) = mpsc::channel(8);
+        let (mut update_tx, mut update_rx) = mpsc::channel(8);
+        push_tx.send("first").await.unwrap();
+
+        let mut bootstrap_pending = false;
+
+        let next_tick_handle = tokio::spawn(async move {
+            let mut tick = 0;
+            let mut state = MockTickState::dirty();
+            let result = next_tick(
+                &mut bootstrap_pending,
+                &mut push_rx,
+                &mut update_rx,
+                Duration::from_millis(15),
+                &mut state,
+                &mut tick,
+            )
+            .await;
+            (result, state, tick, bootstrap_pending)
+        });
+
+        let producer = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            push_tx.send("debounced-1").await.unwrap();
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            update_tx.send("update-1").await.unwrap();
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            push_tx.send("debounced-2").await.unwrap();
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            update_tx.send("update-2").await.unwrap();
+        });
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        producer.await.unwrap();
+        let (result, state, tick, bootstrap_pending) = next_tick_handle.await.unwrap();
+        let advance = result
+            .expect("tick loop should not fail")
+            .expect("dirty state should produce a tick");
+
+        assert!(advance.received_push);
+        assert!(advance.received_update);
+        assert_eq!(tick, 1);
+        assert!(!bootstrap_pending);
+        assert_eq!(
+            state.log,
+            vec![
+                "push:first".to_string(),
+                "push:debounced-1".to_string(),
+                "push:debounced-2".to_string(),
+                "update:update-2".to_string(),
+            ]
+        );
+        assert_eq!(state.clear_dirty_calls, 1);
+        assert!(!state.dirty);
+    }
+
+    #[test]
+    fn drain_latest_returns_the_last_available_update() {
+        let (tx, mut rx) = mpsc::channel(4);
+        tx.try_send("update-1").unwrap();
+        tx.try_send("update-2").unwrap();
+        tx.try_send("update-3").unwrap();
+
+        let latest = drain_latest(&mut rx);
+        assert_eq!(latest, Some("update-3"));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn closed_channels_cause_clean_shutdown() {
+        let (push_tx, mut push_rx) = mpsc::channel::<&'static str>(1);
+        let (update_tx, mut update_rx) = mpsc::channel::<&'static str>(1);
+        drop(push_tx);
+        drop(update_tx);
+
+        let mut bootstrap_pending = false;
+        let mut tick = 0;
+        let mut state = MockTickState::default();
+
+        let result = next_tick(
+            &mut bootstrap_pending,
+            &mut push_rx,
+            &mut update_rx,
+            Duration::from_millis(5),
+            &mut state,
+            &mut tick,
+        )
+        .await;
+
+        assert!(matches!(result, Err(())));
+        assert_eq!(tick, 0);
+        assert_eq!(state.clear_dirty_calls, 0);
+    }
 }
