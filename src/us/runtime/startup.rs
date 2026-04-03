@@ -1,6 +1,6 @@
+use super::support::{fetch_us_rest_data, initialize_us_store, UsLiveState, UsRestSnapshot};
 use super::*;
 use crate::core::runtime::PreparedRuntimeContext;
-use super::support::{fetch_us_rest_data, initialize_us_store, UsLiveState, UsRestSnapshot};
 
 pub(super) struct UsRuntimeBootstrap {
     pub(super) store: Arc<ObjectStore>,
@@ -25,9 +25,13 @@ pub(super) struct UsRuntimeBootstrap {
     pub(super) bootstrap_pending: bool,
     #[cfg(feature = "persistence")]
     pub(super) cached_us_learning_feedback: Option<ReasoningLearningFeedback>,
+    #[cfg(feature = "persistence")]
+    pub(super) cached_us_reviewer_doctrine:
+        Option<crate::pipeline::reasoning::ReviewerDoctrinePressure>,
 }
 
-pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dyn std::error::Error>> {
+pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dyn std::error::Error>>
+{
     println!("=== Eden US — Real-time US Market Monitor ===\n");
 
     let config = Config::from_env()?;
@@ -97,15 +101,27 @@ pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dy
 
     #[cfg(feature = "persistence")]
     if let Some(ref db) = runtime.store {
-        let restored =
-            crate::ontology::store::AccumulatedKnowledge::restore_from(db, "us").await;
-        *store.knowledge.write().unwrap() = restored;
+        let restored = crate::ontology::store::AccumulatedKnowledge::restore_from(db, "us").await;
+        *store.knowledge_write() = restored;
     }
 
     runtime.log_monitoring_active("Real-time US monitoring active");
+    runtime.runtime_task_heartbeat(
+        "us runtime monitoring active",
+        serde_json::json!({
+            "phase": "startup_complete",
+            "market": "us",
+            "quotes": live.quotes.len(),
+            "watchlist_symbols": US_WATCHLIST.len(),
+            "bootstrap_pending": bootstrap_pending,
+        }),
+    );
 
-    let push_rx =
-        runtime.spawn_batched_push_forwarder(receiver, US_PUSH_BATCH_CHANNEL_CAP, US_PUSH_BATCH_SIZE);
+    let push_rx = runtime.spawn_batched_push_forwarder(
+        receiver,
+        US_PUSH_BATCH_CHANNEL_CAP,
+        US_PUSH_BATCH_SIZE,
+    );
 
     let rest_ctx = ctx.clone();
     let rest_watchlist = watchlist_symbols.clone();
@@ -138,5 +154,7 @@ pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dy
         bootstrap_pending,
         #[cfg(feature = "persistence")]
         cached_us_learning_feedback: None,
+        #[cfg(feature = "persistence")]
+        cached_us_reviewer_doctrine: None,
     })
 }

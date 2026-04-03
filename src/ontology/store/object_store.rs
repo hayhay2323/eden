@@ -1,7 +1,7 @@
-use std::sync::RwLock;
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use super::*;
 use super::knowledge::AccumulatedKnowledge;
+use super::*;
 
 pub struct ObjectStore {
     pub institutions: HashMap<InstitutionId, Institution>,
@@ -13,6 +13,20 @@ pub struct ObjectStore {
 }
 
 impl ObjectStore {
+    pub fn knowledge_read(&self) -> RwLockReadGuard<'_, AccumulatedKnowledge> {
+        self.knowledge.read().unwrap_or_else(|poisoned| {
+            eprintln!("[knowledge] poisoned read lock recovered");
+            poisoned.into_inner()
+        })
+    }
+
+    pub fn knowledge_write(&self) -> RwLockWriteGuard<'_, AccumulatedKnowledge> {
+        self.knowledge.write().unwrap_or_else(|poisoned| {
+            eprintln!("[knowledge] poisoned write lock recovered");
+            poisoned.into_inner()
+        })
+    }
+
     pub fn institution_for_broker(&self, broker_id: &BrokerId) -> Option<&Institution> {
         self.broker_to_institution
             .get(broker_id)
@@ -93,5 +107,42 @@ impl ObjectStore {
             broker_to_institution: b2i,
             knowledge: RwLock::new(AccumulatedKnowledge::empty()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn knowledge_read_recovers_from_poisoned_lock() {
+        let store = ObjectStore::from_parts(vec![], vec![], vec![]);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = store.knowledge.write().unwrap();
+            panic!("poison knowledge");
+        }));
+
+        assert!(store.knowledge.is_poisoned());
+        let guard = store.knowledge_read();
+        assert!(guard.institutional_memory.is_empty());
+    }
+
+    #[test]
+    fn knowledge_write_recovers_from_poisoned_lock() {
+        let store = ObjectStore::from_parts(vec![], vec![], vec![]);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = store.knowledge.write().unwrap();
+            panic!("poison knowledge");
+        }));
+
+        assert!(store.knowledge.is_poisoned());
+        {
+            let mut guard = store.knowledge_write();
+            guard
+                .mechanism_priors
+                .insert("test".into(), MechanismPrior::default());
+        }
+
+        assert!(store.knowledge_read().mechanism_priors.contains_key("test"));
     }
 }

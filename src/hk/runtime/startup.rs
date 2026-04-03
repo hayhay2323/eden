@@ -120,8 +120,7 @@ pub(super) async fn initialize_hk_runtime() -> HkRuntimeBootstrap {
     let scorecard = SignalScorecard::new(500, 50);
     let bridge_service = FileSystemBridgeService::default();
     let analyst_service = DefaultAnalystService;
-    let bridge_snapshot_path =
-        resolve_artifact_path(MarketId::Hk, ArtifactKind::BridgeSnapshot);
+    let bridge_snapshot_path = resolve_artifact_path(MarketId::Hk, ArtifactKind::BridgeSnapshot);
     #[cfg(feature = "persistence")]
     let persistence_slots = PERSISTENCE_MAX_IN_FLIGHT;
     #[cfg(not(feature = "persistence"))]
@@ -136,12 +135,21 @@ pub(super) async fn initialize_hk_runtime() -> HkRuntimeBootstrap {
 
     #[cfg(feature = "persistence")]
     if let Some(ref db) = runtime.store {
-        let restored =
-            eden::ontology::store::AccumulatedKnowledge::restore_from(db, "hk").await;
-        *store.knowledge.write().unwrap() = restored;
+        let restored = eden::ontology::store::AccumulatedKnowledge::restore_from(db, "hk").await;
+        *store.knowledge_write() = restored;
     }
 
     runtime.log_monitoring_active("Real-time event-driven monitoring active");
+    runtime.runtime_task_heartbeat(
+        "hk runtime monitoring active",
+        serde_json::json!({
+            "phase": "startup_complete",
+            "market": "hk",
+            "quotes": live.quotes.len(),
+            "watchlist_symbols": WATCHLIST.len(),
+            "bootstrap_pending": bootstrap_pending,
+        }),
+    );
 
     let push_rx = runtime.spawn_push_forwarder(receiver, 10_000);
     let tick = 0;

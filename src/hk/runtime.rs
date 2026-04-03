@@ -12,6 +12,7 @@ use longport::quote::{
 use longport::{Config, Market};
 use rust_decimal::prelude::Signed;
 use rust_decimal::Decimal;
+use serde_json::json;
 #[cfg(feature = "persistence")]
 use tokio::sync::Semaphore;
 
@@ -25,12 +26,12 @@ use crate::cases::build_case_list_with_feedback;
 #[cfg(feature = "persistence")]
 use crate::core::analyst_service::AnalystService;
 use crate::core::analyst_service::DefaultAnalystService;
-use crate::core::market::{ArtifactKind, MarketId};
 use crate::core::artifact_repository::resolve_artifact_path;
+use crate::core::market::{ArtifactKind, MarketId};
 use crate::core::projection::{project_hk, HkProjectionInputs};
-use crate::core::runtime::{prepare_runtime_artifact_path, prepare_runtime_context_or_exit};
 #[cfg(feature = "persistence")]
 use crate::core::runtime::PreparedRuntimeContext;
+use crate::core::runtime::{prepare_runtime_artifact_path, prepare_runtime_context_or_exit};
 use crate::external::polymarket::{
     fetch_polymarket_snapshot, load_polymarket_configs, PolymarketMarketConfig, PolymarketSnapshot,
 };
@@ -70,11 +71,13 @@ use crate::pipeline::learning_loop::{
     derive_learning_feedback, derive_outcome_learning_context_from_hk_rows,
     ReasoningLearningFeedback,
 };
+#[cfg(feature = "persistence")]
+use crate::pipeline::reasoning::ReviewerDoctrinePressure;
 use crate::pipeline::reasoning::{path_has_family, path_is_mixed_multi_hop, ReasoningSnapshot};
 use crate::pipeline::signals::{
     DerivedSignalSnapshot, EventSnapshot, MarketEventKind, ObservationSnapshot, SignalScope,
 };
-use crate::pipeline::world::WorldSnapshots;
+use crate::pipeline::world::{derive_with_backward_confirmation, WorldSnapshots};
 use crate::runtime_loop::TickState;
 use crate::temporal::analysis::{compute_dynamics, compute_polymarket_dynamics};
 use crate::temporal::buffer::TickHistory;
@@ -85,7 +88,11 @@ use crate::temporal::causality::{CausalFlipEvent, CausalTimelinePoint};
 use crate::temporal::lineage::compute_case_realized_outcomes;
 #[cfg(feature = "persistence")]
 use crate::temporal::lineage::compute_case_realized_outcomes_adaptive;
-use crate::temporal::lineage::{compute_family_context_outcomes, compute_lineage_stats};
+use crate::temporal::lineage::{
+    compute_family_context_outcomes, compute_lineage_stats, compute_vortex_success_patterns,
+    evaluate_candidate_mechanisms, extract_causal_schema, run_evolution_cycle,
+    SurfaceQualitySnapshot,
+};
 use crate::temporal::record::TickRecord;
 
 #[cfg(feature = "persistence")]
@@ -105,9 +112,9 @@ use display::*;
 #[path = "runtime/persistence.rs"]
 mod persistence;
 #[cfg(feature = "persistence")]
-use persistence::{run_hk_persistence_stage, run_hk_projection_stage};
+use persistence::PERSISTENCE_MAX_IN_FLIGHT;
 #[cfg(feature = "persistence")]
-use persistence::{CASE_OUTCOME_RESOLUTION_LAG, PERSISTENCE_MAX_IN_FLIGHT};
+use persistence::{run_hk_persistence_stage, run_hk_projection_stage};
 #[path = "runtime/state.rs"]
 mod state;
 use state::*;
@@ -120,7 +127,8 @@ use actions::*;
 #[path = "runtime/startup.rs"]
 mod startup;
 use startup::*;
-
+#[path = "runtime/integration.rs"]
+pub mod integration;
 
 pub async fn merge_external_priors(
     base: &PolymarketSnapshot,
@@ -163,6 +171,35 @@ pub async fn run() {
         mut bootstrap_pending,
     } = initialize_hk_runtime().await;
     let pct = Decimal::new(100, 0);
+    let mut last_idle_log_at = Instant::now();
+    let mut integration = integration::RuntimeIntegration::new(WATCHLIST.len());
+    #[cfg(feature = "persistence")]
+    let mut cached_hk_reviewer_doctrine: Option<ReviewerDoctrinePressure> = None;
+    let mut cached_candidate_mechanisms: Vec<
+        crate::persistence::candidate_mechanism::CandidateMechanismRecord,
+    > = Vec::new();
+    let mut cached_causal_schemas: Vec<crate::persistence::causal_schema::CausalSchemaRecord> =
+        Vec::new();
+    let mut baseline_quality: Option<SurfaceQualitySnapshot> = None;
+    #[allow(unused_mut)]
+    let mut shadow_scores: std::collections::HashMap<
+        String,
+        crate::temporal::lineage::ShadowScore,
+    > = std::collections::HashMap::new();
+    #[cfg(feature = "persistence")]
+    if let Some(ref store) = runtime.store {
+        if let Ok(mechs) = store.load_candidate_mechanisms("hk").await {
+            eprintln!(
+                "[hk] loaded {} candidate mechanisms from store",
+                mechs.len()
+            );
+            cached_candidate_mechanisms = mechs;
+        }
+        if let Ok(schemas) = store.load_causal_schemas("hk").await {
+            eprintln!("[hk] loaded {} causal schemas from store", schemas.len());
+            cached_causal_schemas = schemas;
+        }
+    }
 
     loop {
         let mut rest_updated = false;
@@ -172,15 +209,16 @@ pub async fn run() {
                 rest: &mut rest,
                 rest_updated: &mut rest_updated,
             };
-            match runtime.begin_tick(
-                &mut bootstrap_pending,
-                &mut push_rx,
-                &mut rest_rx,
-                debounce,
-                &mut tick_state,
-                &mut tick,
-            )
-            .await
+            match runtime
+                .begin_tick(
+                    &mut bootstrap_pending,
+                    &mut push_rx,
+                    &mut rest_rx,
+                    debounce,
+                    &mut tick_state,
+                    &mut tick,
+                )
+                .await
             {
                 Some(result) => Some(result),
                 None => {
@@ -188,8 +226,23 @@ pub async fn run() {
                 }
             }
         }) else {
+            if last_idle_log_at.elapsed() >= std::time::Duration::from_secs(30) {
+                eprintln!(
+                    "[HK idle] tick={} push_count={} dirty={} quotes={} depths={} brokers={} calc_indexes={} capital_flows={}",
+                    tick,
+                    live.push_count,
+                    live.dirty,
+                    live.quotes.len(),
+                    live.depths.len(),
+                    live.brokers.len(),
+                    rest.calc_indexes.len(),
+                    rest.capital_flows.len(),
+                );
+                last_idle_log_at = Instant::now();
+            }
             continue;
         };
+        last_idle_log_at = Instant::now();
         let tick_started_at = tick_advance.started_at;
         let tick_advance = tick_advance.advance;
         let now = tick_advance.now;
@@ -269,7 +322,8 @@ pub async fn run() {
 
         let graph_temporal_delta = edge_registry.update(&brain, tick);
         let graph_node_delta = node_registry.update(&brain, tick);
-        let broker_delta = broker_registry.update(&links.broker_queues, &links.order_books, &store, tick);
+        let broker_delta =
+            broker_registry.update(&links.broker_queues, &links.order_books, &store, tick);
         let graph_insights = GraphInsights::compute(
             &brain,
             &store,
@@ -286,6 +340,10 @@ pub async fn run() {
         let rolling_composites = {
             let mut map = std::collections::HashMap::new();
             for symbol in brain.stock_nodes.keys() {
+                // Skip rolling stats for symbols the attention budget marks as inactive
+                if !integration.should_compute_rolling_stats(&symbol.0) {
+                    continue;
+                }
                 let series = history.signal_series(symbol, |s| s.composite);
                 if series.len() >= 5 {
                     let n = series.len() as f64;
@@ -368,6 +426,21 @@ pub async fn run() {
         let broker_events =
             crate::pipeline::signals::broker_events_from_delta(&broker_delta, links.timestamp);
         event_snapshot.events.extend(broker_events);
+        if let Some(previous_agent_snapshot) =
+            runtime.projection_state.previous_agent_snapshot.as_ref()
+        {
+            let catalyst_events = crate::pipeline::signals::catalyst_events_from_macro_events(
+                &previous_agent_snapshot.macro_events,
+                links.timestamp,
+            );
+            event_snapshot.events.extend(catalyst_events);
+            crate::pipeline::signals::enrich_attribution_with_evidence(
+                &mut event_snapshot,
+                &links.cross_stock_presences,
+                &previous_agent_snapshot.macro_events,
+            );
+        }
+        crate::pipeline::signals::detect_propagation_absences(&mut event_snapshot, &dim_snapshot);
         let derived_signal_snapshot = DerivedSignalSnapshot::compute(
             &dim_snapshot,
             &graph_insights,
@@ -382,29 +455,131 @@ pub async fn run() {
             .latest()
             .map(|tick| tick.hypothesis_tracks.as_slice())
             .unwrap_or(&[]);
-        let lineage_family_priors = compute_family_context_outcomes(&history, LINEAGE_WINDOW);
-        let reasoning_stock_deltas =
-            compute_reasoning_stock_deltas(&decision.convergence_scores, history.latest());
-        let reasoning_snapshot = ReasoningSnapshot::derive_with_diffusion(
-            &event_snapshot,
+        let attention_plan = attention_reasoning_plan(
+            brain.stock_nodes.keys().cloned(),
+            &integration,
+            previous_setups,
+            previous_tracks,
+        );
+        let reasoning_active_symbols = attention_plan.active_symbols();
+        let deep_reasoning_event_snapshot =
+            filter_event_snapshot_for_reasoning(&event_snapshot, &attention_plan.deep_symbols);
+        let reasoning_event_snapshot =
+            filter_event_snapshot_for_reasoning(&event_snapshot, &reasoning_active_symbols);
+        let deep_reasoning_derived_signal_snapshot = filter_derived_signal_snapshot_for_reasoning(
             &derived_signal_snapshot,
+            &attention_plan.deep_symbols,
+        );
+        let reasoning_derived_signal_snapshot = filter_derived_signal_snapshot_for_reasoning(
+            &derived_signal_snapshot,
+            &reasoning_active_symbols,
+        );
+        let deep_reasoning_decision =
+            filter_decision_for_reasoning(&decision, &attention_plan.deep_symbols);
+        let reasoning_decision =
+            filter_decision_for_reasoning(&decision, &reasoning_active_symbols);
+        let lineage_family_priors = compute_family_context_outcomes(&history, LINEAGE_WINDOW);
+        let multi_horizon_lineage = eden::temporal::lineage::compute_multi_horizon_lineage_metrics(
+            &history,
+            LINEAGE_WINDOW,
+            330,
+        );
+        let multi_horizon_gate =
+            eden::temporal::lineage::MultiHorizonGate::from_metrics(&multi_horizon_lineage);
+        let vortex_success_patterns = compute_vortex_success_patterns(&history, LINEAGE_WINDOW);
+        let reasoning_stock_deltas = compute_reasoning_stock_deltas(
+            &deep_reasoning_decision.convergence_scores,
+            history.latest(),
+        );
+        #[cfg(feature = "persistence")]
+        if let Some(ref store) = runtime.store {
+            if cached_hk_reviewer_doctrine.is_none() || tick % 30 == 0 {
+                if let Ok(assessments) = store
+                    .recent_case_reasoning_assessments_by_market("hk", 240)
+                    .await
+                {
+                    cached_hk_reviewer_doctrine =
+                        Some(ReviewerDoctrinePressure::from_assessments(&assessments));
+                }
+            }
+        }
+        let mut reasoning_snapshot = ReasoningSnapshot::derive_with_diffusion(
+            &deep_reasoning_event_snapshot,
+            &deep_reasoning_derived_signal_snapshot,
             &graph_insights,
-            &decision,
+            &deep_reasoning_decision,
             previous_setups,
             previous_tracks,
             &lineage_family_priors,
+            Some(&multi_horizon_gate),
             &brain,
             &reasoning_stock_deltas,
+            Some(&dim_snapshot.dimensions),
+            {
+                #[cfg(feature = "persistence")]
+                {
+                    cached_hk_reviewer_doctrine.as_ref()
+                }
+                #[cfg(not(feature = "persistence"))]
+                {
+                    None
+                }
+            },
         );
-        let world_snapshots = WorldSnapshots::derive(
-            &event_snapshot,
-            &derived_signal_snapshot,
+        merge_standard_attention_maintenance(
+            &mut reasoning_snapshot,
+            history.latest(),
+            &attention_plan.standard_symbols,
+            previous_setups,
+            previous_tracks,
+            decision.timestamp,
+        );
+        let mut world_snapshots = derive_with_backward_confirmation(
+            &reasoning_event_snapshot,
+            &reasoning_derived_signal_snapshot,
             &graph_insights,
-            &decision,
-            &reasoning_snapshot,
+            &reasoning_decision,
+            &mut reasoning_snapshot,
+            previous_setups,
+            previous_tracks,
             (!external_priors.is_empty()).then_some(&external_priors),
             history.latest().map(|tick| &tick.backward_reasoning),
         );
+        if eden::pipeline::reasoning::apply_vortex_success_pattern_feedback(
+            &mut reasoning_snapshot,
+            &reasoning_decision,
+            &reasoning_event_snapshot,
+            &graph_insights,
+            previous_setups,
+            previous_tracks,
+            &lineage_family_priors,
+            Some(&multi_horizon_gate),
+            Some(&dim_snapshot.dimensions),
+            {
+                #[cfg(feature = "persistence")]
+                {
+                    cached_hk_reviewer_doctrine.as_ref()
+                }
+                #[cfg(not(feature = "persistence"))]
+                {
+                    None
+                }
+            },
+            &vortex_success_patterns,
+            &world_snapshots.world_state,
+        ) {
+            world_snapshots = derive_with_backward_confirmation(
+                &reasoning_event_snapshot,
+                &reasoning_derived_signal_snapshot,
+                &graph_insights,
+                &reasoning_decision,
+                &mut reasoning_snapshot,
+                previous_setups,
+                previous_tracks,
+                (!external_priors.is_empty()).then_some(&external_priors),
+                history.latest().map(|tick| &tick.backward_reasoning),
+            );
+        }
         let action_stage = build_hk_action_stage(
             now,
             &brain,
@@ -419,7 +594,10 @@ pub async fn run() {
         );
         let new_set: HashSet<&Symbol> = action_stage.newly_entered.iter().collect();
         #[cfg(not(feature = "persistence"))]
-        let _ = (&action_stage.workflow_records, &action_stage.workflow_events);
+        let _ = (
+            &action_stage.workflow_records,
+            &action_stage.workflow_events,
+        );
 
         // Refresh fingerprints every 30 ticks to prevent stale degradation baselines
         if tick % 30 == 0 && tracker.active_count() > 0 {
@@ -448,7 +626,255 @@ pub async fn run() {
             &graph_node_delta.transitions,
         );
         history.push(tick_record);
-        store.knowledge.write().unwrap().accumulate_institutional_memory(tick, &brain);
+        let next_vortex_success_patterns =
+            compute_vortex_success_patterns(&history, LINEAGE_WINDOW);
+        integration.refresh_vortex_attention_with_patterns(
+            &world_snapshots.world_state,
+            &next_vortex_success_patterns,
+        );
+
+        // Evaluate and persist candidate mechanisms
+        {
+            let now_str = now
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default();
+            cached_candidate_mechanisms = evaluate_candidate_mechanisms(
+                &next_vortex_success_patterns,
+                &cached_candidate_mechanisms,
+                "hk",
+                tick,
+                &now_str,
+            );
+            let live_count = cached_candidate_mechanisms
+                .iter()
+                .filter(|m| m.mode == "live")
+                .count();
+            let assist_count = cached_candidate_mechanisms
+                .iter()
+                .filter(|m| m.mode == "assist")
+                .count();
+            if !cached_candidate_mechanisms.is_empty() {
+                eprintln!(
+                    "[hk] candidate mechanisms: {} total, {} live, {} assist, {} shadow",
+                    cached_candidate_mechanisms.len(),
+                    live_count,
+                    assist_count,
+                    cached_candidate_mechanisms.len() - live_count - assist_count,
+                );
+            }
+            #[cfg(feature = "persistence")]
+            if let Some(ref store) = runtime.store {
+                if let Err(err) = store
+                    .write_candidate_mechanisms(&cached_candidate_mechanisms)
+                    .await
+                {
+                    eprintln!("[hk] failed to persist candidate mechanisms: {err}");
+                }
+            }
+        }
+
+        // Extract causal schemas from assist/live mechanisms (every 10 ticks)
+        if tick % 10 == 0 && !cached_candidate_mechanisms.is_empty() {
+            let now_str = now
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default();
+            let fingerprints = crate::temporal::lineage::compute_vortex_successful_fingerprints(
+                &history,
+                LINEAGE_WINDOW,
+            );
+            let all_outcomes = crate::temporal::lineage::compute_case_realized_outcomes_adaptive(
+                &history,
+                LINEAGE_WINDOW,
+            );
+            let active_mechs: Vec<
+                &crate::persistence::candidate_mechanism::CandidateMechanismRecord,
+            > = cached_candidate_mechanisms
+                .iter()
+                .filter(|m| m.mode == "assist" || m.mode == "live")
+                .collect();
+            let mut schema_count = 0usize;
+            let mut schemas_to_write = Vec::new();
+            for mech in &active_mechs {
+                if let Some(schema) = extract_causal_schema(
+                    mech,
+                    &fingerprints,
+                    &all_outcomes,
+                    &history,
+                    tick,
+                    &now_str,
+                ) {
+                    schemas_to_write.push(schema);
+                    schema_count += 1;
+                }
+            }
+            if schema_count > 0 {
+                eprintln!(
+                    "[hk] extracted {} causal schemas from {} active mechanisms",
+                    schema_count,
+                    active_mechs.len()
+                );
+                #[cfg(feature = "persistence")]
+                if let Some(ref store) = runtime.store {
+                    if let Err(err) = store.write_causal_schemas(&schemas_to_write).await {
+                        eprintln!("[hk] failed to persist causal schemas: {err}");
+                    }
+                }
+            }
+        }
+
+        // Evolution cycle: governed lifecycle management (every 50 ticks)
+        if tick % 50 == 0 {
+            let now_str = now
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default();
+
+            // Compute current surface quality from lineage outcomes
+            let all_outcomes = crate::temporal::lineage::compute_case_realized_outcomes_adaptive(
+                &history,
+                LINEAGE_WINDOW,
+            );
+            let hits = all_outcomes
+                .iter()
+                .filter(|o| o.net_return > Decimal::ZERO && o.followed_through)
+                .count() as u64;
+            let misses = all_outcomes
+                .iter()
+                .filter(|o| o.net_return <= Decimal::ZERO || !o.followed_through)
+                .count() as u64;
+            let total_return: Decimal = all_outcomes.iter().map(|o| o.net_return).sum();
+            let live_mech_count = cached_candidate_mechanisms
+                .iter()
+                .filter(|m| m.mode == "live")
+                .count();
+            let live_schema_count = cached_causal_schemas
+                .iter()
+                .filter(|s| s.status == "active")
+                .count();
+            let current_quality = SurfaceQualitySnapshot::from_outcomes(
+                tick,
+                hits,
+                misses,
+                total_return,
+                live_mech_count,
+                live_schema_count,
+            );
+
+            // Set baseline on first measurement (before any live schemas)
+            if baseline_quality.is_none() && (live_mech_count == 0 && live_schema_count == 0) {
+                baseline_quality = Some(current_quality.clone());
+            }
+
+            let evolution_result = run_evolution_cycle(
+                &mut cached_candidate_mechanisms,
+                &mut cached_causal_schemas,
+                &shadow_scores,
+                baseline_quality.as_ref(),
+                Some(&current_quality),
+                tick,
+                &now_str,
+            );
+
+            if !evolution_result.events.is_empty() {
+                eprintln!(
+                    "[hk] evolution cycle: {} events ({}p/{}d/{}r/{}x mechanisms, {}p/{}d/{}r/{}x schemas)",
+                    evolution_result.events.len(),
+                    evolution_result.mechanisms_promoted,
+                    evolution_result.mechanisms_demoted,
+                    evolution_result.rollbacks_triggered,
+                    evolution_result.mechanisms_pruned,
+                    evolution_result.schemas_promoted,
+                    evolution_result.schemas_demoted,
+                    evolution_result.rollbacks_triggered,
+                    evolution_result.schemas_pruned,
+                );
+                for event in &evolution_result.events {
+                    eprintln!(
+                        "[hk]   {} {} {} → {} ({})",
+                        event.action,
+                        event.entity_kind,
+                        event.from_state,
+                        event.to_state,
+                        event.reason
+                    );
+                }
+            }
+
+            // Persist updated state
+            #[cfg(feature = "persistence")]
+            if let Some(ref store) = runtime.store {
+                let _ = store
+                    .write_candidate_mechanisms(&cached_candidate_mechanisms)
+                    .await;
+                let _ = store.write_causal_schemas(&cached_causal_schemas).await;
+            }
+        }
+
+        store
+            .knowledge_write()
+            .accumulate_institutional_memory(tick, &brain);
+
+        // Update new infrastructure modules with tick results
+        {
+            let captured_at_str = now
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default();
+            let signal_symbols: Vec<String> = derived_signal_snapshot
+                .signals
+                .iter()
+                .filter_map(|s| match &s.value.scope {
+                    SignalScope::Symbol(sym) => Some(sym.0.clone()),
+                    _ => None,
+                })
+                .collect();
+            integration.after_tick(
+                tick,
+                &captured_at_str,
+                signal_symbols.clone(),
+                None, // regime — wired later when regime detection matures
+                None, // stress — wired later
+                derived_signal_snapshot.signals.len(),
+                reasoning_snapshot.hypothesis_tracks.len(),
+                vec![], // decisions placeholder
+                tick_started_at.elapsed().as_millis() as u64,
+            );
+
+            // Update per-symbol attention activity for next tick's budget allocation
+            let signal_set: std::collections::HashSet<&str> =
+                signal_symbols.iter().map(|s| s.as_str()).collect();
+            for symbol in brain.stock_nodes.keys() {
+                let sym = &symbol.0;
+                let has_signal = signal_set.contains(sym.as_str());
+                let has_convergence = decision.convergence_scores.contains_key(symbol);
+                let hyp_count = reasoning_snapshot
+                    .hypothesis_tracks
+                    .iter()
+                    .filter(|h| matches!(&h.scope, eden::ontology::reasoning::ReasoningScope::Symbol(s) if s.0 == *sym))
+                    .count() as u32;
+                let change_pct: f64 = links
+                    .quotes
+                    .iter()
+                    .find(|q| q.symbol.0 == *sym)
+                    .map(|q| {
+                        use rust_decimal::prelude::ToPrimitive;
+                        let last = q.last_done.to_f64().unwrap_or(0.0);
+                        let prev = q.prev_close.to_f64().unwrap_or(0.0);
+                        if prev.abs() > 0.0001 {
+                            ((last - prev) / prev) * 100.0
+                        } else {
+                            0.0
+                        }
+                    })
+                    .unwrap_or(0.0);
+                integration.update_symbol_activity(
+                    sym,
+                    has_signal,
+                    change_pct.abs() > 0.5,
+                    change_pct,
+                    hyp_count,
+                    has_convergence,
+                );
+            }
+        }
 
         // ── Persist to SurrealDB (non-blocking, fire-and-forget) ──
         #[cfg(feature = "persistence")]
@@ -458,7 +884,9 @@ pub async fn run() {
             now,
             &raw,
             &links,
-            history.latest().expect("tick history contains latest record after push"),
+            history
+                .latest()
+                .expect("tick history contains latest record after push"),
             &action_stage.workflow_records,
             &action_stage.workflow_events,
             &reasoning_snapshot,
@@ -487,10 +915,10 @@ pub async fn run() {
                 &observation_snapshot,
                 &scorecard,
                 &dim_snapshot,
+                &history,
                 latest,
                 &tracker,
                 &causal_timelines,
-                &lineage_stats,
                 &dynamics,
             );
             let hk_bridge_snapshot = build_hk_bridge_snapshot(
@@ -507,7 +935,10 @@ pub async fn run() {
                 lineage_priors: &lineage_family_priors,
                 previous_agent_snapshot: runtime.projection_state.previous_agent_snapshot.as_ref(),
                 previous_agent_session: runtime.projection_state.previous_agent_session.as_ref(),
-                previous_agent_scoreboard: runtime.projection_state.previous_agent_scoreboard.as_ref(),
+                previous_agent_scoreboard: runtime
+                    .projection_state
+                    .previous_agent_scoreboard
+                    .as_ref(),
             });
             #[cfg(feature = "persistence")]
             run_hk_projection_stage(
@@ -533,7 +964,10 @@ pub async fn run() {
                 MarketId::Hk,
                 crate::cases::CaseMarket::Hk,
                 &artifact_projection,
-                vec![(bridge_snapshot_path.clone(), json_payload(&hk_bridge_snapshot))],
+                vec![(
+                    bridge_snapshot_path.clone(),
+                    json_payload(&hk_bridge_snapshot),
+                )],
                 &analyst_service,
                 tick,
                 live.push_count,
@@ -589,6 +1023,43 @@ pub async fn run() {
             &action_stage.newly_entered,
         );
 
+        runtime.runtime_task_heartbeat(
+            format!(
+                "hk runtime tick {} · pushes={} · ready={}",
+                tick,
+                live.push_count,
+                readiness.ready_symbols.len()
+            ),
+            json!({
+                "market": "hk",
+                "tick": tick,
+                "push_count": live.push_count,
+                "received_push": tick_advance.received_push,
+                "received_update": tick_advance.received_update,
+                "tick_ms": tick_started_at.elapsed().as_millis(),
+                "history_len": history.len(),
+                "ready_symbols": readiness.ready_symbols.len(),
+                "quote_symbols": readiness.quote_symbols,
+                "order_book_symbols": readiness.order_book_symbols,
+                "context_symbols": readiness.context_symbols,
+                "quotes": live.quotes.len(),
+                "depths": live.depths.len(),
+                "brokers": live.brokers.len(),
+                "calc_indexes": rest.calc_indexes.len(),
+                "capital_flows": rest.capital_flows.len(),
+            }),
+        );
+
         prev_insights = Some(graph_insights);
     }
+
+    runtime.complete_runtime_task(
+        "hk runtime stopped",
+        json!({
+            "market": "hk",
+            "final_tick": tick,
+            "push_count": live.push_count,
+            "history_len": history.len(),
+        }),
+    );
 }

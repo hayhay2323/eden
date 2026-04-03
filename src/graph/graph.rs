@@ -219,7 +219,7 @@ impl BrainGraph {
         }
 
         // 4. Add institution→stock edges from InstitutionActivity
-        let knowledge = store.knowledge.read().unwrap();
+        let knowledge = store.knowledge_read();
         for act in &links.institution_activities {
             if let (Some(&inst_idx), Some(&stock_idx)) = (
                 institution_nodes.get(&act.institution_id),
@@ -228,14 +228,11 @@ impl BrainGraph {
                 let bid = Decimal::from(act.bid_positions.len() as i64);
                 let ask = Decimal::from(act.ask_positions.len() as i64);
                 let direction = normalized_ratio(bid, ask);
-                let history_bonus = knowledge.institution_history_bonus(
-                    &act.institution_id,
-                    &act.symbol,
-                );
+                let history_bonus =
+                    knowledge.institution_history_bonus(&act.institution_id, &act.symbol);
                 let base_confidence = direction.abs();
-                let adjusted_confidence = crate::math::clamp_unit_interval(
-                    base_confidence + history_bonus,
-                );
+                let adjusted_confidence =
+                    crate::math::clamp_unit_interval(base_confidence + history_bonus);
                 graph.add_edge(
                     inst_idx,
                     stock_idx,
