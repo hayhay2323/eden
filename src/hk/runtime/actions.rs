@@ -147,10 +147,9 @@ pub(super) fn build_action_workflows(
         ));
 
         if let Some(reason) = review_reason {
-            let reviewed =
-                monitored
-                    .clone()
-                    .review(timestamp, Some("eden".into()), Some(reason));
+            let reviewed = monitored
+                .clone()
+                .review(timestamp, Some("eden".into()), Some(reason));
             events.push(ActionWorkflowEventRecord::from_transition(
                 &monitored, &reviewed,
             ));
@@ -197,8 +196,7 @@ pub(super) fn position_review_reason(
     track: Option<&HypothesisTrack>,
 ) -> Option<String> {
     if let Some(track) = track {
-        if matches!(track.status.as_str(), "weakening" | "invalidated")
-            || track.action == "review"
+        if matches!(track.status.as_str(), "weakening" | "invalidated") || track.action == "review"
         {
             return Some(
                 track
@@ -233,7 +231,10 @@ pub(super) fn symbol_track<'a>(
     })
 }
 
-pub(super) fn symbol_setup<'a>(symbol: &Symbol, setups: &'a [TacticalSetup]) -> Option<&'a TacticalSetup> {
+pub(super) fn symbol_setup<'a>(
+    symbol: &Symbol,
+    setups: &'a [TacticalSetup],
+) -> Option<&'a TacticalSetup> {
     setups.iter().find(|setup| {
         matches!(
             &setup.scope,
@@ -265,7 +266,10 @@ pub(super) fn workflow_lineage_summary(setup: &TacticalSetup) -> Option<String> 
     }
 }
 
-pub(super) fn critical_event_reason(symbol: &Symbol, event_snapshot: &EventSnapshot) -> Option<String> {
+pub(super) fn critical_event_reason(
+    symbol: &Symbol,
+    event_snapshot: &EventSnapshot,
+) -> Option<String> {
     event_snapshot.events.iter().find_map(|event| {
     let symbol_match = matches!(&event.value.scope, SignalScope::Symbol(event_symbol) if event_symbol == symbol);
     let market_match = matches!(event.value.scope, SignalScope::Market);
@@ -326,9 +330,7 @@ pub(super) fn compute_readiness(links: &LinkSnapshot) -> ReadinessReport {
 
     let ready_symbols = quoted_symbols
         .iter()
-        .filter(|symbol| {
-            order_book_symbols.contains(*symbol) && context_symbols.contains(*symbol)
-        })
+        .filter(|symbol| order_book_symbols.contains(*symbol) && context_symbols.contains(*symbol))
         .cloned()
         .collect();
 
@@ -387,11 +389,8 @@ pub(super) fn build_hk_action_stage(
         tracker.exit(sym);
     }
 
-    let newly_entered = tracker.auto_enter_allowed(
-        ready_convergence_scores,
-        Some(&actionable_symbols),
-        brain,
-    );
+    let newly_entered =
+        tracker.auto_enter_allowed(ready_convergence_scores, Some(&actionable_symbols), brain);
     let (workflow_snapshots, workflow_records, workflow_events) = build_action_workflows(
         now,
         &actionable_order_suggestions,
@@ -411,3 +410,157 @@ pub(super) fn build_hk_action_stage(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal_macros::dec;
+
+    fn setup(symbol: &str, action: &str) -> TacticalSetup {
+        TacticalSetup {
+            setup_id: format!("setup:{symbol}"),
+            hypothesis_id: format!("hyp:{symbol}:flow"),
+            runner_up_hypothesis_id: None,
+            provenance: eden::ProvenanceMetadata::new(
+                eden::ProvenanceSource::Computed,
+                time::OffsetDateTime::UNIX_EPOCH,
+            ),
+            lineage: eden::DecisionLineage::default(),
+            scope: eden::ReasoningScope::Symbol(Symbol(symbol.into())),
+            title: format!("Long {symbol}"),
+            action: action.into(),
+            time_horizon: "intraday".into(),
+            confidence: dec!(0.7),
+            confidence_gap: dec!(0.2),
+            heuristic_edge: dec!(0.1),
+            convergence_score: Some(dec!(0.4)),
+            convergence_detail: None,
+            workflow_id: Some(format!("order:{symbol}:buy")),
+            entry_rationale: "flow leads".into(),
+            causal_narrative: None,
+            risk_notes: vec![],
+            review_reason_code: None,
+            policy_verdict: None,
+        }
+    }
+
+    fn track(symbol: &str, action: &str) -> HypothesisTrack {
+        HypothesisTrack {
+            track_id: format!("track:{symbol}"),
+            setup_id: format!("setup:{symbol}"),
+            hypothesis_id: format!("hyp:{symbol}:flow"),
+            runner_up_hypothesis_id: None,
+            scope: eden::ReasoningScope::Symbol(Symbol(symbol.into())),
+            title: format!("Long {symbol}"),
+            action: action.into(),
+            status: eden::HypothesisTrackStatus::Stable,
+            age_ticks: 6,
+            status_streak: 3,
+            confidence: dec!(0.7),
+            previous_confidence: Some(dec!(0.7)),
+            confidence_change: Decimal::ZERO,
+            confidence_gap: dec!(0.2),
+            previous_confidence_gap: Some(dec!(0.2)),
+            confidence_gap_change: Decimal::ZERO,
+            heuristic_edge: dec!(0.1),
+            policy_reason: "holding enter".into(),
+            transition_reason: None,
+            first_seen_at: time::OffsetDateTime::UNIX_EPOCH,
+            last_updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            invalidated_at: None,
+        }
+    }
+
+    fn reasoning_snapshot(symbol: &str, action: &str) -> ReasoningSnapshot {
+        ReasoningSnapshot {
+            timestamp: time::OffsetDateTime::UNIX_EPOCH,
+            hypotheses: vec![],
+            propagation_paths: vec![],
+            investigation_selections: vec![],
+            tactical_setups: vec![setup(symbol, action)],
+            hypothesis_tracks: vec![track(symbol, action)],
+            case_clusters: vec![],
+        }
+    }
+
+    #[test]
+    fn backward_confirmation_demotes_enter_without_investigation() {
+        let previous_setups = vec![setup("700.HK", "enter")];
+        let previous_tracks = vec![track("700.HK", "enter")];
+        let mut snapshot = reasoning_snapshot("700.HK", "enter");
+        let backward = eden::BackwardReasoningSnapshot {
+            timestamp: time::OffsetDateTime::UNIX_EPOCH,
+            investigations: vec![],
+        };
+
+        eden::pipeline::reasoning::apply_backward_confirmation_gate(
+            &mut snapshot,
+            &previous_setups,
+            &previous_tracks,
+            &backward,
+        );
+
+        assert_eq!(snapshot.tactical_setups[0].action, "review");
+        assert!(snapshot.tactical_setups[0]
+            .risk_notes
+            .iter()
+            .any(|note| note.contains("no backward investigation is available")));
+        assert_eq!(snapshot.hypothesis_tracks[0].action, "review");
+    }
+
+    #[test]
+    fn backward_confirmation_keeps_enter_with_stable_conviction() {
+        let previous_setups = vec![setup("700.HK", "enter")];
+        let previous_tracks = vec![track("700.HK", "enter")];
+        let mut snapshot = reasoning_snapshot("700.HK", "enter");
+        let backward = eden::BackwardReasoningSnapshot {
+            timestamp: time::OffsetDateTime::UNIX_EPOCH,
+            investigations: vec![eden::BackwardInvestigation {
+                investigation_id: "backward:700.HK".into(),
+                leaf_scope: eden::ReasoningScope::Symbol(Symbol("700.HK".into())),
+                leaf_label: "Long 700.HK".into(),
+                leaf_regime: "flow-led".into(),
+                contest_state: eden::CausalContestState::Stable,
+                leading_cause_streak: 2,
+                previous_leading_cause_id: None,
+                leading_cause: Some(eden::BackwardCause {
+                    cause_id: "cause:700.HK".into(),
+                    scope: eden::ReasoningScope::market(),
+                    layer: eden::WorldLayer::Forest,
+                    depth: 1,
+                    provenance: eden::ProvenanceMetadata::new(
+                        eden::ProvenanceSource::Computed,
+                        time::OffsetDateTime::UNIX_EPOCH,
+                    ),
+                    explanation: "market flow still supports the leaf".into(),
+                    chain_summary: None,
+                    confidence: dec!(0.6),
+                    support_weight: dec!(0.4),
+                    contradict_weight: dec!(0.1),
+                    net_conviction: dec!(0.3),
+                    competitive_score: dec!(0.5),
+                    falsifier: None,
+                    supporting_evidence: vec![],
+                    contradicting_evidence: vec![],
+                    references: vec![],
+                }),
+                runner_up_cause: None,
+                cause_gap: Some(dec!(0.12)),
+                leading_support_delta: None,
+                leading_contradict_delta: None,
+                leader_transition_summary: None,
+                leading_falsifier: None,
+                candidate_causes: vec![],
+            }],
+        };
+
+        eden::pipeline::reasoning::apply_backward_confirmation_gate(
+            &mut snapshot,
+            &previous_setups,
+            &previous_tracks,
+            &backward,
+        );
+
+        assert_eq!(snapshot.tactical_setups[0].action, "enter");
+        assert_eq!(snapshot.hypothesis_tracks[0].action, "enter");
+    }
+}

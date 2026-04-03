@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use time::serde::rfc3339;
 use time::OffsetDateTime;
 
@@ -95,9 +95,12 @@ mod tests {
             confidence_gap: dec!(0.18),
             heuristic_edge: dec!(0.11),
             convergence_score: Some(dec!(0.44)),
+            convergence_detail: None,
             workflow_id: Some("order:700.HK:buy".into()),
             entry_rationale: "flow explanation leads".into(),
+            causal_narrative: None,
             risk_notes: vec!["runner-up remains close".into()],
+            review_reason_code: None,
             policy_verdict: None,
         };
 

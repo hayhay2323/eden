@@ -200,6 +200,7 @@ pub async fn run() {
             cached_causal_schemas = schemas;
         }
     }
+    let mut hidden_force_state = eden::pipeline::residual::HiddenForceVerificationState::default();
 
     loop {
         let mut rest_updated = false;
@@ -313,7 +314,25 @@ pub async fn run() {
             .map(|(s, t)| (s.clone(), t.len(), t.iter().map(|t| t.volume).sum::<i64>()))
             .collect();
 
-        let links = LinkSnapshot::compute(&raw, &store);
+        let intraday_obs: Vec<eden::ontology::links::IntradayObservation> = rest
+            .intraday_lines
+            .iter()
+            .filter_map(|(sym, lines)| {
+                let last = lines.last()?;
+                if last.avg_price <= Decimal::ZERO {
+                    return None;
+                }
+                let deviation = (last.price - last.avg_price) / last.avg_price;
+                Some(eden::ontology::links::IntradayObservation {
+                    symbol: sym.clone(),
+                    avg_price: last.avg_price,
+                    last_price: last.price,
+                    vwap_deviation: deviation,
+                    point_count: lines.len(),
+                })
+            })
+            .collect();
+        let links = LinkSnapshot::compute(&raw, &store).with_intraday(intraday_obs);
         let readiness = compute_readiness(&links);
         let dim_snapshot = DimensionSnapshot::compute(&links, &store);
         let tension_snapshot = TensionSnapshot::compute(&dim_snapshot);
@@ -491,6 +510,38 @@ pub async fn run() {
             &deep_reasoning_decision.convergence_scores,
             history.latest(),
         );
+        let residual_field = eden::pipeline::residual::compute_residual_field(
+            &deep_reasoning_decision.convergence_scores,
+            &dim_snapshot.dimensions,
+            &reasoning_stock_deltas,
+            &brain,
+        );
+        if !residual_field.residuals.is_empty() {
+            eprintln!(
+                "[hk] residual field: {} symbols with residual, {} sector clusters, {} divergent pairs",
+                residual_field.residuals.len(),
+                residual_field.clustered_sectors.len(),
+                residual_field.divergent_pairs.len(),
+            );
+            for cluster in &residual_field.clustered_sectors {
+                eprintln!(
+                    "[hk]   sector {} residual={:.4} coherence={:.2} dimension={} ({} symbols)",
+                    cluster.sector.0,
+                    cluster.mean_residual,
+                    cluster.coherence,
+                    cluster.dominant_dimension.label(),
+                    cluster.symbol_count,
+                );
+            }
+            for pair in residual_field.divergent_pairs.iter().take(3) {
+                eprintln!(
+                    "[hk]   divergence: {} ({:+.4}) vs {} ({:+.4}) strength={:.4}",
+                    pair.symbol_a.0, pair.residual_a,
+                    pair.symbol_b.0, pair.residual_b,
+                    pair.divergence_strength,
+                );
+            }
+        }
         #[cfg(feature = "persistence")]
         if let Some(ref store) = runtime.store {
             if cached_hk_reviewer_doctrine.is_none() || tick % 30 == 0 {
@@ -503,19 +554,16 @@ pub async fn run() {
                 }
             }
         }
-        let mut reasoning_snapshot = ReasoningSnapshot::derive_with_diffusion(
-            &deep_reasoning_event_snapshot,
-            &deep_reasoning_derived_signal_snapshot,
-            &graph_insights,
-            &deep_reasoning_decision,
-            previous_setups,
-            previous_tracks,
+        let family_boost = eden::pipeline::reasoning::FamilyBoostLedger::from_lineage_priors(
             &lineage_family_priors,
-            Some(&multi_horizon_gate),
-            &brain,
-            &reasoning_stock_deltas,
-            Some(&dim_snapshot.dimensions),
-            {
+            eden::pipeline::reasoning::hk_session_label(deep_reasoning_event_snapshot.timestamp),
+            deep_reasoning_decision.market_regime.bias.as_str(),
+        );
+        let reasoning_ctx = eden::pipeline::reasoning::ReasoningContext {
+            lineage_priors: &lineage_family_priors,
+            multi_horizon_gate: Some(&multi_horizon_gate),
+            symbol_dimensions: Some(&dim_snapshot.dimensions),
+            reviewer_doctrine: {
                 #[cfg(feature = "persistence")]
                 {
                     cached_hk_reviewer_doctrine.as_ref()
@@ -525,7 +573,109 @@ pub async fn run() {
                     None
                 }
             },
+            convergence_components: &deep_reasoning_decision.convergence_scores,
+            market_regime: &deep_reasoning_decision.market_regime,
+            world_state: None,
+            absence_memory: &eden::pipeline::reasoning::AbsenceMemory::default(),
+            family_boost: &family_boost,
+        };
+        let mut reasoning_snapshot = ReasoningSnapshot::derive_with_diffusion(
+            &deep_reasoning_event_snapshot,
+            &deep_reasoning_derived_signal_snapshot,
+            &graph_insights,
+            &deep_reasoning_decision,
+            previous_setups,
+            previous_tracks,
+            &reasoning_ctx,
+            &brain,
+            &reasoning_stock_deltas,
         );
+        // Inject hidden force hypotheses from residual field
+        let hidden_force_hypotheses =
+            eden::pipeline::residual::infer_hidden_forces(&residual_field, decision.timestamp);
+        if !hidden_force_hypotheses.is_empty() {
+            eprintln!(
+                "[hk] injected {} hidden force hypotheses ({} isolated, {} sector, {} connection)",
+                hidden_force_hypotheses.len(),
+                hidden_force_hypotheses.iter().filter(|h| h.family_key == "hidden_force" && h.hypothesis_id.contains("isolated")).count(),
+                hidden_force_hypotheses.iter().filter(|h| h.hypothesis_id.contains("sector")).count(),
+                hidden_force_hypotheses.iter().filter(|h| h.family_key == "hidden_connection").count(),
+            );
+            reasoning_snapshot
+                .hypotheses
+                .extend(hidden_force_hypotheses);
+        }
+
+        // Verify hidden forces against current residuals (tick-level outcome)
+        let verification_result = hidden_force_state.tick(
+            &residual_field,
+            &reasoning_snapshot.hypotheses,
+            tick,
+        );
+        if !verification_result.confirmed.is_empty()
+            || !verification_result.invalidated.is_empty()
+            || !verification_result.dissipating.is_empty()
+        {
+            eprintln!(
+                "[hk] hidden force verification: {} confirmed, {} dissipating, {} invalidated, {} resolved, {} new",
+                verification_result.confirmed.len(),
+                verification_result.dissipating.len(),
+                verification_result.invalidated.len(),
+                verification_result.resolved.len(),
+                verification_result.new_trackers,
+            );
+        }
+        // Apply confidence adjustments from verification
+        for (hyp_id, adjustment) in hidden_force_state.confidence_adjustments() {
+            if let Some(hyp) = reasoning_snapshot
+                .hypotheses
+                .iter_mut()
+                .find(|h| h.hypothesis_id == hyp_id)
+            {
+                hyp.confidence = (hyp.confidence + adjustment)
+                    .clamp(Decimal::ZERO, Decimal::ONE)
+                    .round_dp(4);
+            }
+        }
+
+        // Crystallize confirmed forces → attention boosts + emergent paths + graph edges
+        let crystallization =
+            eden::pipeline::residual::crystallize_confirmed_forces(&hidden_force_state);
+        if !crystallization.attention_boosts.is_empty()
+            || !crystallization.emergent_paths.is_empty()
+            || !crystallization.emergent_edges.is_empty()
+        {
+            eprintln!(
+                "[hk] crystallization: {} attention boosts, {} emergent paths, {} emergent edges",
+                crystallization.attention_boosts.len(),
+                crystallization.emergent_paths.len(),
+                crystallization.emergent_edges.len(),
+            );
+            // Log attention boosts (integration feeds these into next tick's attention plan)
+            for boost in &crystallization.attention_boosts {
+                eprintln!(
+                    "[hk]   attention boost: {} — {}",
+                    boost.symbol.0, boost.boost_reason,
+                );
+            }
+            // Inject emergent propagation paths into reasoning
+            let emergent_prop_paths = eden::pipeline::residual::emergent_paths_to_propagation_paths(
+                &crystallization.emergent_paths,
+                decision.timestamp,
+            );
+            reasoning_snapshot
+                .propagation_paths
+                .extend(emergent_prop_paths);
+            // Log emergent edges (graph integration deferred to next tick's BrainGraph::compute)
+            for edge in &crystallization.emergent_edges {
+                eprintln!(
+                    "[hk]   emergent edge: {} ↔ {} type={:?} strength={:.2} ({})",
+                    edge.symbol_a.0, edge.symbol_b.0, edge.edge_type,
+                    edge.strength, edge.evidence_summary,
+                );
+            }
+        }
+
         merge_standard_attention_maintenance(
             &mut reasoning_snapshot,
             history.latest(),

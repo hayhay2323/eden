@@ -322,9 +322,12 @@ mod tests {
             confidence_gap: dec!(0.2),
             heuristic_edge: confidence * dec!(0.2),
             convergence_score: None,
+            convergence_detail: None,
             workflow_id: None,
             entry_rationale: "capital flow momentum suggests continuation".into(),
+            causal_narrative: None,
             risk_notes: vec!["valuation extreme reached".into()],
+            review_reason_code: None,
             policy_verdict: None,
         }
     }

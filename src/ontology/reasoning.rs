@@ -213,12 +213,275 @@ pub struct TacticalSetup {
     pub heuristic_edge: Decimal,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub convergence_score: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub convergence_detail: Option<crate::pipeline::reasoning::ConvergenceDetail>,
     pub workflow_id: Option<String>,
     pub entry_rationale: String,
+    /// One-sentence causal explanation: why does this case exist at the reasoning level?
+    /// Distinct from entry_rationale which is a policy-level justification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub causal_narrative: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub risk_notes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_reason_code: Option<ReviewReasonCode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_verdict: Option<PolicyVerdictSummary>,
+}
+
+pub fn tactical_setup_family_key(setup: &TacticalSetup) -> Option<&str> {
+    setup
+        .risk_notes
+        .iter()
+        .find_map(|note| note.strip_prefix("family="))
+}
+
+fn tactical_setup_action_priority(action: &str) -> i32 {
+    match action {
+        "enter" => 3,
+        "review" => 2,
+        "observe" => 1,
+        _ => 0,
+    }
+}
+
+fn tactical_setup_emergence_priority(setup: &TacticalSetup) -> i32 {
+    match tactical_setup_emergence_bucket(setup) {
+        "diffusion" | "spillover" | "chain" | "relay" => 3,
+        "arbitrage" => 1,
+        "rotation" | "stress" | "breakout" | "reversal" => 1,
+        _ => 0,
+    }
+}
+
+fn tactical_setup_emergence_bucket(setup: &TacticalSetup) -> &'static str {
+    let family = tactical_setup_family_key(setup).unwrap_or_default();
+    if family.contains("diffusion") {
+        "diffusion"
+    } else if family.contains("spillover") {
+        "spillover"
+    } else if family.contains("chain") {
+        "chain"
+    } else if family.contains("relay") {
+        "relay"
+    } else if family.contains("arbitrage") {
+        "arbitrage"
+    } else if family.contains("rotation") {
+        "rotation"
+    } else if family.contains("stress") {
+        "stress"
+    } else if family.contains("breakout") {
+        "breakout"
+    } else if family.contains("reversal") {
+        "reversal"
+    } else {
+        "other"
+    }
+}
+
+fn ranked_tactical_setups(setups: &[TacticalSetup]) -> Vec<&TacticalSetup> {
+    let mut ranked = setups.iter().collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        tactical_setup_action_priority(right.action.as_str())
+            .cmp(&tactical_setup_action_priority(left.action.as_str()))
+            .then_with(|| {
+                tactical_setup_emergence_priority(right)
+                    .cmp(&tactical_setup_emergence_priority(left))
+            })
+            .then_with(|| right.heuristic_edge.cmp(&left.heuristic_edge))
+            .then_with(|| right.confidence_gap.cmp(&left.confidence_gap))
+            .then_with(|| right.confidence.cmp(&left.confidence))
+            .then_with(|| left.setup_id.cmp(&right.setup_id))
+    });
+    ranked
+}
+
+fn push_diversified_setup<'a>(
+    selected: &mut Vec<&'a TacticalSetup>,
+    family_counts: &mut std::collections::HashMap<String, usize>,
+    observe_count: &mut usize,
+    setup: &'a TacticalSetup,
+    observe_cap: usize,
+) -> bool {
+    let family = tactical_setup_family_key(setup)
+        .unwrap_or("unknown")
+        .to_string();
+    let current_family_count = family_counts.get(&family).copied().unwrap_or(0);
+    let family_cap = if family.contains("arbitrage") {
+        1
+    } else if tactical_setup_emergence_priority(setup) >= 3 {
+        2
+    } else if setup.action == "observe" {
+        1
+    } else {
+        2
+    };
+    let observe_overflow = setup.action == "observe" && *observe_count >= observe_cap;
+
+    if current_family_count >= family_cap || observe_overflow {
+        return false;
+    }
+
+    family_counts.insert(family, current_family_count + 1);
+    if setup.action == "observe" {
+        *observe_count += 1;
+    }
+    selected.push(setup);
+    true
+}
+
+pub fn opening_diversified_tactical_frontier(
+    setups: &[TacticalSetup],
+    limit: usize,
+    tick_number: u64,
+) -> Vec<&TacticalSetup> {
+    if tick_number > 5 {
+        return diversified_tactical_frontier(setups, limit);
+    }
+    let limit = limit.max(1);
+    let observe_cap = (limit / 2).max(2);
+    let ranked = ranked_tactical_setups(setups);
+    let has_non_arbitrage = ranked
+        .iter()
+        .any(|setup| tactical_setup_emergence_bucket(setup) != "arbitrage");
+    let mut selected = Vec::new();
+    let mut deferred = Vec::new();
+    let mut family_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut observe_count = 0usize;
+    let mut seeded_buckets = std::collections::HashSet::new();
+
+    for setup in ranked.iter().copied() {
+        let bucket = tactical_setup_emergence_bucket(setup);
+        if matches!(bucket, "arbitrage" | "other") {
+            continue;
+        }
+        if seeded_buckets.insert(bucket) {
+            let _ = push_diversified_setup(
+                &mut selected,
+                &mut family_counts,
+                &mut observe_count,
+                setup,
+                observe_cap,
+            );
+        }
+        if selected.len() >= limit.min(3) {
+            break;
+        }
+    }
+
+    for setup in ranked {
+        if selected
+            .iter()
+            .any(|existing| existing.setup_id == setup.setup_id)
+        {
+            continue;
+        }
+        let bucket = tactical_setup_emergence_bucket(setup);
+        let non_arbitrage_count = selected
+            .iter()
+            .filter(|item| tactical_setup_emergence_bucket(item) != "arbitrage")
+            .count();
+        if has_non_arbitrage && bucket == "arbitrage" && non_arbitrage_count < 2 {
+            deferred.push(setup);
+            continue;
+        }
+        if !push_diversified_setup(
+            &mut selected,
+            &mut family_counts,
+            &mut observe_count,
+            setup,
+            observe_cap,
+        ) {
+            deferred.push(setup);
+        }
+    }
+
+    if selected.len() < limit {
+        selected.extend(deferred.into_iter().take(limit - selected.len()));
+    }
+
+    selected.truncate(limit);
+    selected
+}
+
+pub fn diversified_tactical_frontier(
+    setups: &[TacticalSetup],
+    limit: usize,
+) -> Vec<&TacticalSetup> {
+    let limit = limit.max(1);
+    let observe_cap = (limit / 2).max(2);
+    let ranked = ranked_tactical_setups(setups);
+    let mut selected = Vec::new();
+    let mut deferred = Vec::new();
+    let mut family_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut observe_count = 0usize;
+
+    for setup in ranked {
+        if !push_diversified_setup(
+            &mut selected,
+            &mut family_counts,
+            &mut observe_count,
+            setup,
+            observe_cap,
+        ) {
+            deferred.push(setup);
+        } else {
+            continue;
+        }
+    }
+
+    if selected.len() < limit {
+        selected.extend(deferred.into_iter().take(limit - selected.len()));
+    }
+
+    selected.truncate(limit);
+    selected
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewReasonCode {
+    PersistenceBuilding,
+    LeadingInvalidated,
+    Weakening,
+    RegimeBlocked,
+    StaleSymbolConfirmation,
+    DirectionalConflict,
+    BackwardMissing,
+    BackwardDirectionConflict,
+    BackwardContested,
+    BackwardWeakConviction,
+    BackwardNarrowGap,
+    AttentionCapped,
+    ConvergenceDisagreement,
+}
+
+impl ReviewReasonCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PersistenceBuilding => "persistence_building",
+            Self::LeadingInvalidated => "leading_invalidated",
+            Self::Weakening => "weakening",
+            Self::RegimeBlocked => "regime_blocked",
+            Self::StaleSymbolConfirmation => "stale_symbol_confirmation",
+            Self::DirectionalConflict => "directional_conflict",
+            Self::BackwardMissing => "backward_missing",
+            Self::BackwardDirectionConflict => "backward_direction_conflict",
+            Self::BackwardContested => "backward_contested",
+            Self::BackwardWeakConviction => "backward_weak_conviction",
+            Self::BackwardNarrowGap => "backward_narrow_gap",
+            Self::AttentionCapped => "attention_capped",
+            Self::ConvergenceDisagreement => "convergence_disagreement",
+        }
+    }
+}
+
+impl std::fmt::Display for ReviewReasonCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,6 +530,8 @@ pub struct PolicyVerdictSummary {
     pub primary: PolicyVerdictKind,
     pub rationale: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_reason_code: Option<ReviewReasonCode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conflict_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub horizons: Vec<HorizonPolicyVerdict>,
@@ -291,6 +556,8 @@ pub struct InvestigationSelection {
     pub priority_score: Decimal,
     pub attention_hint: String,
     pub rationale: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_reason_code: Option<ReviewReasonCode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }
@@ -501,9 +768,12 @@ mod tests {
             confidence_gap: dec!(0.11),
             heuristic_edge: dec!(0.11),
             convergence_score: Some(dec!(0.52)),
+            convergence_detail: None,
             workflow_id: Some("order:700.HK:buy".into()),
             entry_rationale: "cross-market alignment remains positive".into(),
+            causal_narrative: None,
             risk_notes: vec!["edge disappears if spread widens".into()],
+            review_reason_code: None,
             policy_verdict: None,
         };
 

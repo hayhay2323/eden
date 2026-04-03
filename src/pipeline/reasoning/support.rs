@@ -7,7 +7,10 @@ use crate::ontology::reasoning::{
     EvidencePolarity, InvalidationCondition, PropagationPath, ReasoningEvidence,
     ReasoningEvidenceKind, ReasoningScope,
 };
-use crate::pipeline::signals::{DerivedSignalKind, MarketEventKind, SignalScope};
+use crate::pipeline::signals::{
+    event_propagation_scope, DerivedSignalKind, EventPropagationScope, MarketEventKind, SignalScope,
+};
+pub(super) use super::family_gate::FamilyAlphaGate;
 
 use super::propagation::{path_has_family, path_is_mixed_multi_hop};
 
@@ -102,11 +105,12 @@ where
     .with_inputs(lineage)
 }
 
-pub(super) struct HypothesisTemplate {
+pub struct HypothesisTemplate {
     pub key: String,
     pub family_label: String,
     pub thesis: String,
 }
+
 
 pub(super) fn hypothesis_templates(
     relevant_events: &[&crate::ontology::Event<crate::pipeline::signals::MarketEventRecord>],
@@ -114,6 +118,10 @@ pub(super) fn hypothesis_templates(
         crate::pipeline::signals::DerivedSignalRecord,
     >],
     relevant_paths: &[&PropagationPath],
+    family_gate: Option<&FamilyAlphaGate>,
+    absence_memory: &super::context::AbsenceMemory,
+    world_state: Option<&crate::ontology::world::WorldStateSnapshot>,
+    current_scope: &ReasoningScope,
 ) -> Vec<HypothesisTemplate> {
     let mut templates = vec![
         HypothesisTemplate {
@@ -158,39 +166,76 @@ pub(super) fn hypothesis_templates(
     };
 
     if has_family("shared_holder") {
-        templates.push(HypothesisTemplate {
+        let template = HypothesisTemplate {
             key: "shared_holder_spillover".into(),
             family_label: "Shared-Holder Spillover".into(),
             thesis: "shared-holder spillover".into(),
-        });
+        };
+        if attribution_allows_template(relevant_events, template.key.as_str()) {
+            templates.push(template);
+        }
+    }
+    if has_family("institution_affinity") || has_family("institution_diffusion") {
+        let template = HypothesisTemplate {
+            key: "institution_relay".into(),
+            family_label: "Institution Relay".into(),
+            thesis: "institution relay".into(),
+        };
+        if attribution_allows_template(relevant_events, template.key.as_str()) {
+            templates.push(template);
+        }
     }
     if has_family("rotation") {
-        templates.push(HypothesisTemplate {
+        let template = HypothesisTemplate {
             key: "sector_rotation_spillover".into(),
             family_label: "Sector Rotation Spillover".into(),
             thesis: "sector rotation spillover".into(),
-        });
+        };
+        if attribution_allows_template(relevant_events, template.key.as_str()) {
+            templates.push(template);
+        }
     }
-    if has_family("market_stress") || has_signal(|kind| matches!(kind, DerivedSignalKind::MarketStress)) {
-        templates.push(HypothesisTemplate {
+    if has_family("market_stress") && has_family("rotation") {
+        let template = HypothesisTemplate {
+            key: "stress_feedback_loop".into(),
+            family_label: "Stress Feedback Loop".into(),
+            thesis: "stress feedback loop".into(),
+        };
+        if attribution_allows_template(relevant_events, template.key.as_str()) {
+            templates.push(template);
+        }
+    }
+    if has_family("market_stress")
+        || has_signal(|kind| matches!(kind, DerivedSignalKind::MarketStress))
+    {
+        let template = HypothesisTemplate {
             key: "stress_concentration".into(),
             family_label: "Stress Concentration".into(),
             thesis: "market stress concentration".into(),
-        });
+        };
+        if attribution_allows_template(relevant_events, template.key.as_str()) {
+            templates.push(template);
+        }
     }
     if has_family("sector_symbol_bridge") {
-        templates.push(HypothesisTemplate {
+        let template = HypothesisTemplate {
             key: "sector_symbol_spillover".into(),
             family_label: "Sector-Symbol Spillover".into(),
             thesis: "sector-symbol spillover".into(),
-        });
+        };
+        if attribution_allows_template(relevant_events, template.key.as_str()) {
+            templates.push(template);
+        }
     }
     if has_mixed {
-        templates.push(HypothesisTemplate {
+        let template = HypothesisTemplate {
             key: "cross_mechanism_chain".into(),
             family_label: "Cross-Mechanism Chain".into(),
             thesis: "cross-mechanism chain".into(),
-        });
+        };
+        if attribution_allows_template(relevant_events, template.key.as_str()) {
+            templates.push(template);
+        }
     }
     if has_event(|kind| matches!(kind, MarketEventKind::InstitutionalFlip)) {
         templates.push(HypothesisTemplate {
@@ -208,10 +253,103 @@ pub(super) fn hypothesis_templates(
             thesis: "breakout-led contagion".into(),
         });
     }
+    if has_event(|kind| matches!(kind, MarketEventKind::CatalystActivation)) {
+        templates.push(HypothesisTemplate {
+            key: "catalyst_repricing".into(),
+            family_label: "Catalyst Repricing".into(),
+            thesis: "thematic catalyst-driven repricing".into(),
+        });
+    }
+    if let Some(gate) = family_gate {
+        templates.retain(|template| gate.allows(&template.family_label));
+    }
+
+    // Suppress propagation/spillover templates for sectors with repeated absence
+    if let ReasoningScope::Sector(sector_id) = current_scope {
+        templates.retain(|template| {
+            let is_propagation = matches!(
+                template.key.as_str(),
+                "propagation"
+                    | "shared_holder_spillover"
+                    | "institution_relay"
+                    | "sector_rotation_spillover"
+                    | "sector_symbol_spillover"
+                    | "cross_mechanism_chain"
+                    | "stress_feedback_loop"
+            );
+            if is_propagation {
+                !absence_memory.should_suppress(sector_id, &template.family_label)
+            } else {
+                true
+            }
+        });
+    }
+
+    // Block stress_feedback_loop in stabilizing regime
+    if let Some(ws) = world_state {
+        let is_stabilizing = ws.entities.iter().any(|e| {
+            matches!(e.scope, ReasoningScope::Market(_)) && e.regime == "stabilizing"
+        });
+        if is_stabilizing {
+            templates.retain(|t| t.key != "stress_feedback_loop");
+        }
+    }
 
     let mut seen = HashSet::new();
     templates.retain(|template| seen.insert(template.key.clone()));
     templates
+}
+
+
+fn attribution_allows_template(
+    relevant_events: &[&crate::ontology::Event<crate::pipeline::signals::MarketEventRecord>],
+    template_key: &str,
+) -> bool {
+    let strongest_scope = relevant_events
+        .iter()
+        .filter_map(|event| event_propagation_scope(event))
+        .max();
+
+    let Some(scope) = strongest_scope else {
+        // No attribution data → allow everything (cold start).
+        return true;
+    };
+
+    match template_key {
+        // Pure local templates: always allowed regardless of attribution.
+        "flow"
+        | "liquidity"
+        | "risk"
+        | "catalyst_repricing"
+        | "institution_reversal"
+        | "breakout_contagion" => true,
+
+        // Sector-level templates: need at least Sector attribution.
+        "sector_rotation_spillover"
+        | "sector_symbol_spillover"
+        | "stress_concentration"
+        | "stress_feedback_loop" => {
+            matches!(
+                scope,
+                EventPropagationScope::Sector | EventPropagationScope::Market
+            )
+        }
+
+        // Cross-scope / institutional templates: need at least Sector attribution.
+        // A company_specific event should not trigger institution relay or shared-holder spillover
+        // because those hypothesize broader structural moves.
+        "shared_holder_spillover"
+        | "institution_relay"
+        | "cross_mechanism_chain"
+        | "propagation" => {
+            matches!(
+                scope,
+                EventPropagationScope::Sector | EventPropagationScope::Market
+            )
+        }
+
+        _ => true,
+    }
 }
 
 pub(super) fn scope_matches_event(scope: &ReasoningScope, event_scope: &SignalScope) -> bool {
@@ -242,15 +380,32 @@ pub(super) fn event_polarity(
         ("propagation", K::OrderBookDislocation) => C,
         ("risk", K::MarketStressElevated | K::StressRegimeShift | K::InstitutionalFlip) => S,
         ("risk", K::CandlestickBreakout) => C,
+        ("catalyst_repricing", K::CatalystActivation) => S,
+        ("catalyst_repricing", K::ManualReviewRequired) => C,
         ("shared_holder_spillover", K::SharedHolderAnomaly) => S,
         ("shared_holder_spillover", K::InstitutionalFlip) => C,
+        ("institution_relay", K::InstitutionalFlip | K::SharedHolderAnomaly) => S,
+        ("institution_relay", K::ManualReviewRequired) => C,
         ("sector_rotation_spillover", K::StressRegimeShift | K::CompositeAcceleration) => S,
         ("sector_rotation_spillover", K::ManualReviewRequired) => C,
+        ("stress_feedback_loop", K::MarketStressElevated | K::StressRegimeShift) => S,
+        ("stress_feedback_loop", K::CandlestickBreakout) => C,
         ("stress_concentration", K::MarketStressElevated | K::StressRegimeShift) => S,
         ("stress_concentration", K::CandlestickBreakout) => C,
         ("sector_symbol_spillover", K::SharedHolderAnomaly | K::VolumeDislocation) => S,
         ("sector_symbol_spillover", K::ManualReviewRequired) => C,
-        ("cross_mechanism_chain", K::SharedHolderAnomaly | K::StressRegimeShift | K::CompositeAcceleration) => S,
+        (
+            "propagation"
+            | "sector_rotation_spillover"
+            | "sector_symbol_spillover"
+            | "cross_mechanism_chain"
+            | "catalyst_repricing",
+            K::PropagationAbsence,
+        ) => C,
+        (
+            "cross_mechanism_chain",
+            K::SharedHolderAnomaly | K::StressRegimeShift | K::CompositeAcceleration,
+        ) => S,
         ("cross_mechanism_chain", K::ManualReviewRequired) => C,
         ("institution_reversal", K::InstitutionalFlip | K::ManualReviewRequired) => S,
         ("institution_reversal", K::CandlestickBreakout) => C,
@@ -265,8 +420,8 @@ pub(super) fn signal_polarity(
     template: &HypothesisTemplate,
     kind: &DerivedSignalKind,
 ) -> Option<EvidencePolarity> {
-    use EvidencePolarity::{Contradicts as C, Supports as S};
     use DerivedSignalKind as K;
+    use EvidencePolarity::{Contradicts as C, Supports as S};
 
     let polarity = match (template.key.as_str(), kind) {
         ("flow", K::Convergence | K::SmartMoneyPressure | K::ActivityMomentum) => S,
@@ -279,8 +434,12 @@ pub(super) fn signal_polarity(
         ("risk", K::ActivityMomentum) => C,
         ("shared_holder_spillover", K::Convergence | K::SmartMoneyPressure) => S,
         ("shared_holder_spillover", K::MarketStress) => C,
+        ("institution_relay", K::SmartMoneyPressure | K::Convergence) => S,
+        ("institution_relay", K::MarketStress) => C,
         ("sector_rotation_spillover", K::Convergence | K::StructuralComposite) => S,
         ("sector_rotation_spillover", K::MarketStress) => C,
+        ("stress_feedback_loop", K::MarketStress | K::StructuralComposite) => S,
+        ("stress_feedback_loop", K::CandlestickConviction) => C,
         ("stress_concentration", K::MarketStress) => S,
         ("stress_concentration", K::ActivityMomentum) => C,
         ("sector_symbol_spillover", K::StructuralComposite | K::Convergence) => S,
@@ -301,7 +460,9 @@ pub(super) fn path_polarity(template: &HypothesisTemplate) -> EvidencePolarity {
         "propagation"
         | "risk"
         | "shared_holder_spillover"
+        | "institution_relay"
         | "sector_rotation_spillover"
+        | "stress_feedback_loop"
         | "stress_concentration"
         | "sector_symbol_spillover"
         | "cross_mechanism_chain"
@@ -313,14 +474,29 @@ pub(super) fn path_polarity(template: &HypothesisTemplate) -> EvidencePolarity {
 pub(super) fn template_statement(template: &HypothesisTemplate, scope: &ReasoningScope) -> String {
     match scope {
         ReasoningScope::Market(_) => format!("the market may be governed by {}", template.thesis),
-        ReasoningScope::Symbol(symbol) => format!("{} may currently reflect {}", symbol, template.thesis),
-        ReasoningScope::Sector(sector) => format!("sector {} may currently reflect {}", sector, template.thesis),
-        ReasoningScope::Institution(institution) => {
-            format!("institution {} may currently reflect {}", institution, template.thesis)
+        ReasoningScope::Symbol(symbol) => {
+            format!("{} may currently reflect {}", symbol, template.thesis)
         }
-        ReasoningScope::Theme(theme) => format!("theme {} may currently reflect {}", theme, template.thesis),
-        ReasoningScope::Region(region) => format!("region {} may currently reflect {}", region, template.thesis),
-        ReasoningScope::Custom(value) => format!("{} may currently reflect {}", value, template.thesis),
+        ReasoningScope::Sector(sector) => format!(
+            "sector {} may currently reflect {}",
+            sector, template.thesis
+        ),
+        ReasoningScope::Institution(institution) => {
+            format!(
+                "institution {} may currently reflect {}",
+                institution, template.thesis
+            )
+        }
+        ReasoningScope::Theme(theme) => {
+            format!("theme {} may currently reflect {}", theme, template.thesis)
+        }
+        ReasoningScope::Region(region) => format!(
+            "region {} may currently reflect {}",
+            region, template.thesis
+        ),
+        ReasoningScope::Custom(value) => {
+            format!("{} may currently reflect {}", value, template.thesis)
+        }
     }
 }
 
@@ -331,7 +507,9 @@ pub(super) fn template_invalidation(template: &HypothesisTemplate) -> Vec<Invali
         "propagation" => "connected scopes stop co-moving or the path breaks",
         "risk" => "market stress and risk-sensitive events revert",
         "shared_holder_spillover" => "shared-holder crowding link weakens or peers decouple",
+        "institution_relay" => "institution relay loses synchronization or affinity breaks",
         "sector_rotation_spillover" => "sector rotation stalls or reverses",
+        "stress_feedback_loop" => "stress stops feeding back through the rotation complex",
         "stress_concentration" => "market stress diffuses and sectors decouple",
         "sector_symbol_spillover" => "sector-symbol spillover stops transmitting",
         "cross_mechanism_chain" => "one leg of the cross-mechanism chain breaks",
@@ -352,12 +530,28 @@ pub(super) fn template_expected_observations(template: &HypothesisTemplate) -> V
         "liquidity" => vec!["local imbalance should remain visible in depth or candles".into()],
         "propagation" => vec!["linked scopes should start repricing in sequence".into()],
         "risk" => vec!["stress-sensitive assets should move coherently".into()],
-        "shared_holder_spillover" => vec!["peer names should move with shared-holder pressure".into()],
-        "sector_rotation_spillover" => vec!["sector beneficiaries and victims should diverge further".into()],
-        "stress_concentration" => vec!["market stress should cluster into the same vulnerable sectors".into()],
+        "shared_holder_spillover" => {
+            vec!["peer names should move with shared-holder pressure".into()]
+        }
+        "institution_relay" => {
+            vec!["institution-linked scopes should relay the move in sequence".into()]
+        }
+        "sector_rotation_spillover" => {
+            vec!["sector beneficiaries and victims should diverge further".into()]
+        }
+        "stress_feedback_loop" => {
+            vec!["stress and rotation should keep reinforcing each other".into()]
+        }
+        "stress_concentration" => {
+            vec!["market stress should cluster into the same vulnerable sectors".into()]
+        }
         "sector_symbol_spillover" => vec!["sector move should leak into linked symbols".into()],
-        "cross_mechanism_chain" => vec!["multiple mechanisms should reinforce the same direction".into()],
-        "institution_reversal" => vec!["institutional flow should continue flipping the same way".into()],
+        "cross_mechanism_chain" => {
+            vec!["multiple mechanisms should reinforce the same direction".into()]
+        }
+        "institution_reversal" => {
+            vec!["institutional flow should continue flipping the same way".into()]
+        }
         "breakout_contagion" => vec!["breakout leaders should drag peers along".into()],
         _ => vec!["supporting evidence should persist".into()],
     }
@@ -384,6 +578,31 @@ pub(super) fn competing_hypothesis_confidence(evidence: &[ReasoningEvidence]) ->
     .clamp(Decimal::ZERO, Decimal::ONE)
 }
 
+/// Build a one-sentence causal narrative: why does this case exist at the reasoning level?
+/// Uses the strongest supporting evidence to ground the explanation.
+pub(super) fn build_causal_narrative(
+    scope: &ReasoningScope,
+    family_label: &str,
+    evidence: &[ReasoningEvidence],
+) -> String {
+    let strongest_support = evidence
+        .iter()
+        .filter(|item| item.polarity == EvidencePolarity::Supports)
+        .max_by(|a, b| a.weight.cmp(&b.weight));
+
+    let scope_name = scope_title(scope);
+    match strongest_support {
+        Some(item) => format!(
+            "{} triggered a {} hypothesis because {}",
+            scope_name, family_label, item.statement
+        ),
+        None => format!(
+            "{} is under investigation for {} based on structural signals",
+            scope_name, family_label
+        ),
+    }
+}
+
 pub(super) fn derived_provenance(
     observed_at: OffsetDateTime,
     confidence: Decimal,
@@ -403,6 +622,7 @@ pub(super) fn convert_scope(scope: &SignalScope) -> ReasoningScope {
         SignalScope::Symbol(symbol) => ReasoningScope::Symbol(symbol.clone()),
         SignalScope::Institution(institution) => ReasoningScope::Institution(institution.clone()),
         SignalScope::Sector(sector) => ReasoningScope::Sector(sector.clone()),
+        SignalScope::Theme(theme) => ReasoningScope::Theme(theme.clone()),
     }
 }
 
@@ -445,6 +665,7 @@ pub(super) fn scope_matches_signal(scope: &ReasoningScope, signal_scope: &Signal
             | (ReasoningScope::Symbol(_), SignalScope::Symbol(_))
             | (ReasoningScope::Institution(_), SignalScope::Institution(_))
             | (ReasoningScope::Sector(_), SignalScope::Sector(_))
+            | (ReasoningScope::Theme(_), SignalScope::Theme(_))
     ) && scope_id(scope) == scope_id(&convert_scope(signal_scope))
 }
 
@@ -453,3 +674,15 @@ pub(super) fn path_relevant_to_scope(path: &PropagationPath, scope: &ReasoningSc
         .iter()
         .any(|step| step.from == *scope || step.to == *scope)
 }
+
+pub(crate) fn hk_session_label(timestamp: OffsetDateTime) -> &'static str {
+    let hk = timestamp.to_offset(time::UtcOffset::from_hms(8, 0, 0).expect("valid hk offset"));
+    let minutes = u16::from(hk.hour()) * 60 + u16::from(hk.minute());
+    match minutes {
+        570..=630 => "opening",
+        631..=870 => "midday",
+        871..=970 => "closing",
+        _ => "offhours",
+    }
+}
+

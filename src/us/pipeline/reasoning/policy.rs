@@ -5,23 +5,30 @@ use time::OffsetDateTime;
 
 use crate::ontology::domain::{ProvenanceMetadata, ProvenanceSource};
 use crate::ontology::objects::Symbol;
-use crate::ontology::reasoning::{DecisionLineage, Hypothesis, InvestigationSelection, ReasoningScope, TacticalSetup};
+use crate::ontology::reasoning::{
+    DecisionLineage, Hypothesis, InvestigationSelection, ReasoningScope, TacticalSetup,
+};
+use crate::pipeline::reasoning::ReviewerDoctrinePressure;
 use crate::us::graph::decision::UsMarketRegimeBias;
 use crate::us::temporal::lineage::{classify_us_session, UsLineageStats};
 
 use super::{
     scope_id, scope_label, UsStructuralRankMetrics, TEMPLATE_CROSS_MARKET_ARBITRAGE,
-    TEMPLATE_MOMENTUM_CONTINUATION, TEMPLATE_PRE_MARKET_POSITIONING,
-    TEMPLATE_SECTOR_ROTATION, TEMPLATE_STRUCTURAL_DIFFUSION,
+    TEMPLATE_CROSS_MARKET_DIFFUSION, TEMPLATE_CROSS_MECHANISM_CHAIN,
+    TEMPLATE_MOMENTUM_CONTINUATION, TEMPLATE_PEER_RELAY, TEMPLATE_PRE_MARKET_POSITIONING,
+    TEMPLATE_SECTOR_DIFFUSION, TEMPLATE_SECTOR_ROTATION, TEMPLATE_STRUCTURAL_DIFFUSION,
 };
 
 pub(super) fn derive_investigation_selections(
     hypotheses: &[Hypothesis],
+    tick_number: u64,
     previous_setups: &[TacticalSetup],
     timestamp: OffsetDateTime,
     market_regime: Option<UsMarketRegimeBias>,
     lineage_stats: Option<&UsLineageStats>,
+    multi_horizon_gate: Option<&crate::temporal::lineage::MultiHorizonGate>,
     structural_metrics: Option<&HashMap<Symbol, UsStructuralRankMetrics>>,
+    reviewer_doctrine: Option<&ReviewerDoctrinePressure>,
 ) -> Vec<InvestigationSelection> {
     let previous_lookup: HashMap<&str, &TacticalSetup> = previous_setups
         .iter()
@@ -49,6 +56,7 @@ pub(super) fn derive_investigation_selections(
         ranked.sort_by(|left, right| {
             effective_us_hypothesis_score(
                 right,
+                tick_number,
                 timestamp,
                 market_regime,
                 lineage_stats,
@@ -56,6 +64,7 @@ pub(super) fn derive_investigation_selections(
             )
             .cmp(&effective_us_hypothesis_score(
                 left,
+                tick_number,
                 timestamp,
                 market_regime,
                 lineage_stats,
@@ -69,6 +78,7 @@ pub(super) fn derive_investigation_selections(
         let runner_up = ranked.get(1).copied();
         let winner_confidence = effective_us_hypothesis_score(
             winner,
+            tick_number,
             timestamp,
             market_regime,
             lineage_stats,
@@ -78,6 +88,7 @@ pub(super) fn derive_investigation_selections(
             .map(|item| {
                 effective_us_hypothesis_score(
                     item,
+                    tick_number,
                     timestamp,
                     market_regime,
                     lineage_stats,
@@ -112,6 +123,28 @@ pub(super) fn derive_investigation_selections(
             .map(describe_us_lineage_prior)
             .unwrap_or_else(|| "lineage prior unavailable".into());
 
+        let doctrine_pressure = reviewer_doctrine
+            .map(|item| item.pressure_for_family(Some(winner.family_key.as_str())))
+            .unwrap_or(Decimal::ZERO);
+        let doctrine_active = doctrine_pressure > Decimal::ZERO;
+        let alpha_boost = prior.map(compute_us_alpha_boost).unwrap_or(Decimal::ZERO);
+        let enter_confidence_threshold = Decimal::new(72, 2)
+            + doctrine_pressure * Decimal::new(6, 2)
+            - alpha_boost * Decimal::new(3, 2);
+        let enter_gap_threshold = Decimal::new(20, 2) + doctrine_pressure * Decimal::new(4, 2)
+            - alpha_boost * Decimal::new(3, 2);
+        let review_confidence_threshold = Decimal::new(66, 2)
+            + doctrine_pressure * Decimal::new(4, 2)
+            - alpha_boost * Decimal::new(2, 2);
+        let review_gap_threshold = Decimal::new(15, 2) + doctrine_pressure * Decimal::new(4, 2)
+            - alpha_boost * Decimal::new(2, 2);
+        let positive_prior_review_confidence = Decimal::new(74, 2)
+            + doctrine_pressure * Decimal::new(4, 2)
+            - alpha_boost * Decimal::new(3, 2);
+        let positive_prior_review_gap = Decimal::new(18, 2)
+            + doctrine_pressure * Decimal::new(3, 2)
+            - alpha_boost * Decimal::new(2, 2);
+
         let attention_hint = if previous_action == Some("enter")
             && previous_same_hypothesis.is_some()
             && winner_confidence >= Decimal::new(60, 2)
@@ -122,27 +155,38 @@ pub(super) fn derive_investigation_selections(
         } else if prior_signal == UsPriorSignal::Negative && previous_action != Some("enter") {
             "observe"
         } else if previous_same_hypothesis.is_some()
-            && winner_confidence >= Decimal::new(72, 2)
-            && gap >= Decimal::new(20, 2)
+            && winner_confidence >= enter_confidence_threshold
+            && gap >= enter_gap_threshold
             && confidence_change >= Decimal::new(2, 2)
             && gap_change >= Decimal::ZERO
             && prior_signal != UsPriorSignal::Negative
         {
             "enter"
         } else if previous_same_scope.is_some()
-            && winner_confidence >= Decimal::new(66, 2)
-            && gap >= Decimal::new(15, 2)
+            && winner_confidence >= review_confidence_threshold
+            && gap >= review_gap_threshold
             && confidence_change >= Decimal::ZERO
             && prior_signal != UsPriorSignal::Negative
         {
             "review"
         } else if prior_signal == UsPriorSignal::Positive
-            && winner_confidence >= Decimal::new(74, 2)
-            && gap >= Decimal::new(18, 2)
+            && winner_confidence >= positive_prior_review_confidence
+            && gap >= positive_prior_review_gap
         {
             "review"
         } else {
             "observe"
+        };
+        let multi_horizon_supported = multi_horizon_gate
+            .map(|gate| gate.allows(winner.family_key.as_str()))
+            .unwrap_or(true);
+        let attention_hint = if matches!(attention_hint, "enter" | "review")
+            && !multi_horizon_supported
+            && previous_action != Some("enter")
+        {
+            "observe"
+        } else {
+            attention_hint
         };
 
         let lineage_adjustment = prior
@@ -153,7 +197,8 @@ pub(super) fn derive_investigation_selections(
         let priority_score = (gap * winner_confidence
             + propagation_bonus.max(Decimal::ZERO)
             + structural_bonus.max(Decimal::ZERO))
-        .clamp(Decimal::ZERO, Decimal::ONE);
+            * opening_bootstrap_priority_scale(winner.family_key.as_str(), tick_number)
+                .clamp(Decimal::ZERO, Decimal::ONE);
 
         let mut notes = winner
             .invalidation_conditions
@@ -162,6 +207,35 @@ pub(super) fn derive_investigation_selections(
             .collect::<Vec<_>>();
         notes.insert(0, format!("lineage_prior={}", prior_note));
         notes.insert(0, format!("family={}", winner.family_key));
+        if winner.family_key == TEMPLATE_CROSS_MARKET_ARBITRAGE && tick_number <= 5 {
+            notes.insert(
+                0,
+                format!(
+                    "opening_bootstrap_penalty={}",
+                    (Decimal::ONE
+                        - opening_bootstrap_priority_scale(
+                            winner.family_key.as_str(),
+                            tick_number
+                        ))
+                    .round_dp(3)
+                ),
+            );
+        }
+        if !multi_horizon_supported {
+            notes.insert(
+                0,
+                "multi_horizon_gate=blocked: no positive 5m/30m/session lineage yet".into(),
+            );
+        }
+        if doctrine_active {
+            notes.insert(
+                0,
+                format!(
+                    "reviewer_doctrine_pressure={}",
+                    doctrine_pressure.round_dp(3)
+                ),
+            );
+        }
         notes.insert(
             0,
             format!("lineage_adjustment={}", lineage_adjustment.round_dp(4)),
@@ -198,6 +272,7 @@ pub(super) fn derive_investigation_selections(
             priority_score,
             attention_hint: attention_hint.into(),
             rationale: winner.statement.clone(),
+            review_reason_code: None,
             notes,
         });
     }
@@ -263,9 +338,16 @@ pub(super) fn derive_tactical_setups(
                 confidence_gap: selection.confidence_gap,
                 heuristic_edge: selection.priority_score.clamp(Decimal::ZERO, Decimal::ONE),
                 convergence_score: None,
+                convergence_detail: None,
                 workflow_id: None,
                 entry_rationale: selection.rationale.clone(),
+                causal_narrative: Some(super::support::build_causal_narrative_us(
+                    &selection.scope,
+                    &selection.family_label,
+                    &hypothesis.evidence,
+                )),
                 risk_notes: selection.notes.clone(),
+                review_reason_code: selection.review_reason_code,
                 policy_verdict: None,
             })
         })
@@ -343,6 +425,7 @@ fn best_us_lineage_prior<'a>(
 
 fn effective_us_hypothesis_confidence(
     hypothesis: &Hypothesis,
+    tick_number: u64,
     timestamp: OffsetDateTime,
     market_regime: Option<UsMarketRegimeBias>,
     lineage_stats: Option<&UsLineageStats>,
@@ -355,21 +438,55 @@ fn effective_us_hypothesis_confidence(
     )
     .map(lineage_confidence_adjustment)
     .unwrap_or(Decimal::ZERO);
-    (hypothesis.confidence + adjustment).clamp(Decimal::ZERO, Decimal::ONE)
+    ((hypothesis.confidence + adjustment)
+        * opening_bootstrap_confidence_scale(hypothesis.family_key.as_str(), tick_number))
+    .clamp(Decimal::ZERO, Decimal::ONE)
 }
 
 fn effective_us_hypothesis_score(
     hypothesis: &Hypothesis,
+    tick_number: u64,
     timestamp: OffsetDateTime,
     market_regime: Option<UsMarketRegimeBias>,
     lineage_stats: Option<&UsLineageStats>,
     structural_metrics: Option<&HashMap<Symbol, UsStructuralRankMetrics>>,
 ) -> Decimal {
-    let base =
-        effective_us_hypothesis_confidence(hypothesis, timestamp, market_regime, lineage_stats);
+    let base = effective_us_hypothesis_confidence(
+        hypothesis,
+        tick_number,
+        timestamp,
+        market_regime,
+        lineage_stats,
+    );
     let propagation_bonus = propagation_rank_adjustment(hypothesis);
     let structural_bonus = structural_rank_adjustment(hypothesis, structural_metrics);
     (base + propagation_bonus + structural_bonus).clamp(Decimal::ZERO, Decimal::ONE)
+}
+
+fn opening_bootstrap_confidence_scale(family_key: &str, tick_number: u64) -> Decimal {
+    if family_key != TEMPLATE_CROSS_MARKET_ARBITRAGE {
+        return Decimal::ONE;
+    }
+    if tick_number <= 2 {
+        Decimal::new(15, 2)
+    } else if tick_number <= 5 {
+        Decimal::new(35, 2)
+    } else {
+        Decimal::ONE
+    }
+}
+
+fn opening_bootstrap_priority_scale(family_key: &str, tick_number: u64) -> Decimal {
+    if family_key != TEMPLATE_CROSS_MARKET_ARBITRAGE {
+        return Decimal::ONE;
+    }
+    if tick_number <= 2 {
+        Decimal::new(10, 2)
+    } else if tick_number <= 5 {
+        Decimal::new(30, 2)
+    } else {
+        Decimal::ONE
+    }
 }
 
 fn propagation_rank_adjustment(hypothesis: &Hypothesis) -> Decimal {
@@ -427,10 +544,18 @@ fn structural_rank_adjustment(
     {
         (Decimal::ZERO - intensity.max(Decimal::ZERO) * Decimal::new(75, 2))
             .clamp(Decimal::new(-24, 2), Decimal::ZERO)
+    } else if hypothesis.family_key == TEMPLATE_CROSS_MARKET_DIFFUSION {
+        (intensity * Decimal::new(75, 2)).clamp(Decimal::new(-10, 2), Decimal::new(26, 2))
+    } else if hypothesis.family_key == TEMPLATE_SECTOR_DIFFUSION {
+        (intensity * Decimal::new(80, 2)).clamp(Decimal::new(-10, 2), Decimal::new(28, 2))
+    } else if hypothesis.family_key == TEMPLATE_PEER_RELAY {
+        (intensity * Decimal::new(72, 2)).clamp(Decimal::new(-10, 2), Decimal::new(24, 2))
+    } else if hypothesis.family_key == TEMPLATE_CROSS_MECHANISM_CHAIN {
+        (intensity * Decimal::new(90, 2)).clamp(Decimal::new(-10, 2), Decimal::new(30, 2))
     } else if hypothesis.family_key == TEMPLATE_STRUCTURAL_DIFFUSION {
         intensity
     } else if hypothesis.family_key == TEMPLATE_CROSS_MARKET_ARBITRAGE {
-        (intensity * Decimal::new(55, 2)).clamp(Decimal::new(-10, 2), Decimal::new(22, 2))
+        (intensity * Decimal::new(30, 2)).clamp(Decimal::new(-10, 2), Decimal::new(14, 2))
     } else if hypothesis.family_key == TEMPLATE_SECTOR_ROTATION {
         (intensity * Decimal::new(65, 2)).clamp(Decimal::new(-10, 2), Decimal::new(24, 2))
     } else if hypothesis
@@ -479,16 +604,61 @@ fn lineage_confidence_adjustment(
 fn classify_us_lineage_prior(
     prior: &crate::us::temporal::lineage::UsLineageContextStats,
 ) -> UsPriorSignal {
-    if prior.resolved < 3 {
+    if prior.resolved < 5 {
         return UsPriorSignal::Neutral;
     }
-    if prior.mean_return <= Decimal::ZERO || prior.hit_rate < Decimal::new(45, 2) {
-        UsPriorSignal::Negative
-    } else if prior.mean_return > Decimal::ZERO && prior.hit_rate >= Decimal::new(55, 2) {
+
+    // Tier 1: catastrophic — strongly negative net AND poor hit rate
+    if prior.mean_return < Decimal::new(-1, 2) && prior.hit_rate < Decimal::new(30, 2) {
+        return UsPriorSignal::Negative;
+    }
+
+    // Tier 2: sustained underperformance with sufficient data
+    if prior.resolved >= 30
+        && prior.mean_return < Decimal::ZERO
+        && prior.hit_rate < Decimal::new(40, 2)
+    {
+        return UsPriorSignal::Negative;
+    }
+
+    // Tier 3: large sample, clearly losing money regardless of hit rate
+    if prior.resolved >= 80 && prior.mean_return < Decimal::new(-2, 2) {
+        return UsPriorSignal::Negative;
+    }
+
+    if prior.mean_return > Decimal::ZERO && prior.hit_rate >= Decimal::new(55, 2) {
         UsPriorSignal::Positive
     } else {
         UsPriorSignal::Neutral
     }
+}
+
+fn compute_us_alpha_boost(prior: &crate::us::temporal::lineage::UsLineageContextStats) -> Decimal {
+    if prior.resolved < 15 {
+        return Decimal::ZERO;
+    }
+    let has_positive_return = prior.mean_return > Decimal::new(5, 3);
+    let has_good_hit_rate = prior.hit_rate >= Decimal::new(50, 2);
+    if !has_positive_return || !has_good_hit_rate {
+        return Decimal::ZERO;
+    }
+    let mut boost = Decimal::new(2, 1);
+    if prior.resolved >= 30 {
+        boost = Decimal::new(5, 1);
+    }
+    if prior.resolved >= 60
+        && prior.mean_return > Decimal::new(1, 2)
+        && prior.hit_rate >= Decimal::new(55, 2)
+    {
+        boost = Decimal::new(8, 1);
+    }
+    if prior.resolved >= 100
+        && prior.mean_return > Decimal::new(15, 3)
+        && prior.hit_rate >= Decimal::new(60, 2)
+    {
+        boost = Decimal::ONE;
+    }
+    boost
 }
 
 fn describe_us_lineage_prior(
@@ -587,6 +757,66 @@ pub(crate) fn apply_us_case_budget(
     diversify_us_case_surface(setups, lineage_stats)
 }
 
+pub(crate) fn prune_us_stale_cases(
+    setups: Vec<TacticalSetup>,
+    previous_setups: &[TacticalSetup],
+    previous_tracks: &[crate::ontology::reasoning::HypothesisTrack],
+) -> Vec<TacticalSetup> {
+    let previous_setup_map = previous_setups
+        .iter()
+        .map(|setup| (scope_id(&setup.scope), setup))
+        .collect::<HashMap<_, _>>();
+    let previous_track_map = previous_tracks
+        .iter()
+        .map(|track| (scope_id(&track.scope), track))
+        .collect::<HashMap<_, _>>();
+
+    setups
+        .into_iter()
+        .filter(|setup| {
+            let scope_key = scope_id(&setup.scope);
+            let Some(previous_setup) = previous_setup_map.get(&scope_key) else {
+                return true;
+            };
+            let Some(previous_track) = previous_track_map.get(&scope_key) else {
+                return true;
+            };
+            !should_expire_us_observe_case(setup, previous_setup, previous_track)
+        })
+        .collect()
+}
+
+fn should_expire_us_observe_case(
+    setup: &TacticalSetup,
+    previous_setup: &TacticalSetup,
+    previous_track: &crate::ontology::reasoning::HypothesisTrack,
+) -> bool {
+    if setup.action != "observe" || previous_setup.action != "observe" {
+        return false;
+    }
+
+    let low_quality =
+        setup.confidence_gap < Decimal::new(10, 2) && setup.heuristic_edge <= Decimal::new(5, 2);
+    if low_quality && previous_track.age_ticks >= 2 {
+        return true;
+    }
+
+    let ttl_ticks = if setup.workflow_id.is_some() { 8 } else { 4 };
+    if previous_track.age_ticks < ttl_ticks {
+        return false;
+    }
+
+    let stable_confidence =
+        (setup.confidence - previous_setup.confidence).abs() <= Decimal::new(5, 2);
+    let no_edge = setup.heuristic_edge <= Decimal::new(10, 2);
+    let not_strengthening = previous_track.confidence_change <= Decimal::new(2, 2)
+        && previous_track.confidence_gap_change <= Decimal::new(2, 2);
+
+    let signals = [stable_confidence, no_edge, not_strengthening];
+    let active_signals = signals.iter().filter(|&&v| v).count();
+    active_signals >= 2
+}
+
 pub(crate) fn setup_family_key<'a>(setup: &'a TacticalSetup) -> Option<&'a str> {
     setup
         .risk_notes
@@ -618,7 +848,12 @@ fn family_attention_cap(family_key: &str, lineage_stats: Option<&UsLineageStats>
 fn family_surface_cap(family_key: &str, lineage_stats: Option<&UsLineageStats>) -> usize {
     if family_key.starts_with(TEMPLATE_PRE_MARKET_POSITIONING) {
         2
-    } else if family_key == TEMPLATE_CROSS_MARKET_ARBITRAGE
+    } else if family_key == TEMPLATE_CROSS_MARKET_ARBITRAGE {
+        1
+    } else if family_key == TEMPLATE_CROSS_MARKET_DIFFUSION
+        || family_key == TEMPLATE_SECTOR_DIFFUSION
+        || family_key == TEMPLATE_PEER_RELAY
+        || family_key == TEMPLATE_CROSS_MECHANISM_CHAIN
         || family_key == TEMPLATE_STRUCTURAL_DIFFUSION
     {
         3

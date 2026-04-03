@@ -16,14 +16,14 @@ use crate::ontology::{
     Market, TacticalSetup, WorldStateSnapshot,
 };
 
-#[path = "agent_graph/records.rs"]
-mod records;
-#[path = "agent_graph/runtime.rs"]
-mod runtime;
 #[path = "agent_graph/nodes.rs"]
 mod nodes;
 #[path = "agent_graph/reasoning.rs"]
 mod reasoning;
+#[path = "agent_graph/records.rs"]
+mod records;
+#[path = "agent_graph/runtime.rs"]
+mod runtime;
 
 pub use nodes::build_knowledge_node_records;
 pub use reasoning::{reasoning_knowledge_events, reasoning_knowledge_links};
@@ -42,8 +42,8 @@ mod tests {
     use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
 
-use super::*;
-use crate::action::workflow::{ActionExecutionPolicy, ActionGovernanceContract};
+    use super::*;
+    use crate::action::workflow::{ActionExecutionPolicy, ActionGovernanceContract};
     use crate::agent::{AgentDecision, AgentRecommendation};
     use crate::ontology::{
         ActionDirection, ActionNode, ActionNodeStage, AgentEventImpact, AgentKnowledgeNodeRef,
@@ -162,9 +162,12 @@ use crate::action::workflow::{ActionExecutionPolicy, ActionGovernanceContract};
             confidence_gap: dec!(0.15),
             heuristic_edge: dec!(0.08),
             convergence_score: Some(dec!(0.33)),
+            convergence_detail: None,
             workflow_id: Some("wf:1".into()),
             entry_rationale: "flow leads".into(),
+            causal_narrative: None,
             risk_notes: vec!["watch stress".into()],
+            review_reason_code: None,
             policy_verdict: None,
         };
         let case = CaseSummary {
@@ -195,6 +198,7 @@ use crate::action::workflow::{ActionExecutionPolicy, ActionGovernanceContract};
             confidence: setup.confidence,
             confidence_gap: setup.confidence_gap,
             heuristic_edge: setup.heuristic_edge,
+            review_reason_code: None,
             why_now: "why".into(),
             primary_lens: None,
             primary_driver: None,
@@ -269,6 +273,7 @@ use crate::action::workflow::{ActionExecutionPolicy, ActionGovernanceContract};
             governance_reason_code:
                 crate::action::workflow::ActionGovernanceReasonCode::SeverityRequiresReview,
             governance_reason: "execution requires review before it can advance".into(),
+            matched_success_pattern_signature: None,
         });
 
         let (history, _) = build_knowledge_node_records(
@@ -320,6 +325,7 @@ use crate::action::workflow::{ActionExecutionPolicy, ActionGovernanceContract};
                 propagated_support: dec!(0.2),
                 drivers: vec!["depth confirms".into()],
             }],
+            vortices: vec![],
         };
         let backward = BackwardReasoningSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,

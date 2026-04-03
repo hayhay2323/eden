@@ -1,14 +1,23 @@
 use std::collections::HashMap;
 
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use time::UtcOffset;
 
 use crate::ontology::reasoning::ReasoningScope;
+use crate::temporal::lineage::HorizonLineageMetric;
 
 use super::buffer::UsTickHistory;
 use super::record::{UsSymbolSignals, UsTickRecord};
 use crate::us::graph::decision::UsMarketRegimeBias;
+#[path = "lineage/convergence_memory.rs"]
+mod convergence_memory;
+pub use convergence_memory::{
+    compute_us_convergence_success_patterns, compute_us_successful_convergence_fingerprints,
+    evaluate_us_candidate_mechanisms, us_convergence_hypothesis_matches_pattern,
+    UsConvergenceOutcomeFingerprint, UsConvergenceSuccessPattern,
+};
 
 /// US trading session classification.
 /// US sessions differ from HK: pre-market, opening, midday, closing, after-hours.
@@ -292,6 +301,77 @@ pub fn compute_us_lineage_stats(history: &UsTickHistory, resolution_lag: u64) ->
     }
 }
 
+pub fn estimate_us_tick_lag_for_minutes(history: &UsTickHistory, minutes: i64) -> Option<u64> {
+    let records = history.latest_n(history.len());
+    if records.len() < 2 || minutes <= 0 {
+        return None;
+    }
+    let first = records.first()?.timestamp;
+    let last = records.last()?.timestamp;
+    let elapsed_secs = (last - first).whole_seconds().max(1);
+    let avg_secs_per_tick = Decimal::from(elapsed_secs) / Decimal::from((records.len() - 1) as i64);
+    if avg_secs_per_tick <= Decimal::ZERO {
+        return None;
+    }
+    let target_secs = Decimal::from(minutes * 60);
+    let ticks = (target_secs / avg_secs_per_tick).round_dp(0);
+    ticks.to_u64().filter(|value| *value > 0)
+}
+
+pub fn compute_us_multi_horizon_lineage_metrics(
+    history: &UsTickHistory,
+) -> Vec<HorizonLineageMetric> {
+    let mut items = Vec::new();
+    items.extend(map_us_lineage_horizon(
+        "50t",
+        compute_us_lineage_stats(history, crate::us::common::SIGNAL_RESOLUTION_LAG),
+    ));
+    if let Some(lag_5m) = estimate_us_tick_lag_for_minutes(history, 5) {
+        items.extend(map_us_lineage_horizon(
+            "5m",
+            compute_us_lineage_stats(history, lag_5m),
+        ));
+    }
+    if let Some(lag_30m) = estimate_us_tick_lag_for_minutes(history, 30) {
+        items.extend(map_us_lineage_horizon(
+            "30m",
+            compute_us_lineage_stats(history, lag_30m),
+        ));
+    }
+    if let Some(lag_session) = estimate_us_tick_lag_for_minutes(history, 390) {
+        items.extend(map_us_lineage_horizon(
+            "session",
+            compute_us_lineage_stats(history, lag_session),
+        ));
+    }
+    items
+}
+
+fn map_us_lineage_horizon(horizon: &str, stats: UsLineageStats) -> Vec<HorizonLineageMetric> {
+    let mut items = stats
+        .by_template
+        .into_iter()
+        .map(|item| HorizonLineageMetric {
+            horizon: horizon.to_string(),
+            template: item.template,
+            total: item.total,
+            resolved: item.resolved,
+            hits: item.hits,
+            hit_rate: item.hit_rate,
+            mean_return: item.mean_return,
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|a, b| {
+        b.hit_rate
+            .cmp(&a.hit_rate)
+            .then_with(|| b.mean_return.cmp(&a.mean_return))
+            .then_with(|| b.resolved.cmp(&a.resolved))
+            .then_with(|| a.template.cmp(&b.template))
+    });
+    items.truncate(3);
+    items
+}
+
 // ── Helpers ──
 
 #[derive(Default)]
@@ -444,9 +524,12 @@ mod tests {
             confidence_gap: Decimal::ZERO,
             heuristic_edge: Decimal::ZERO,
             convergence_score: None,
+            convergence_detail: None,
             workflow_id: None,
             entry_rationale: String::new(),
+            causal_narrative: None,
             risk_notes: vec![],
+            review_reason_code: None,
             policy_verdict: None,
         }
     }

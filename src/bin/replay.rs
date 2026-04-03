@@ -19,23 +19,22 @@
 use std::collections::{HashMap, HashSet};
 
 use eden::action::narrative::NarrativeSnapshot;
+use eden::graph::decision::ConvergenceScore;
 use eden::graph::decision::{DecisionSnapshot, StructuralFingerprint};
 use eden::graph::graph::BrainGraph;
 use eden::graph::insights::{ConflictHistory, GraphInsights, StockPressure};
 use eden::graph::temporal::{TemporalBrokerRegistry, TemporalEdgeRegistry, TemporalNodeRegistry};
 use eden::graph::tracker::PositionTracker;
 use eden::live_snapshot::{
-    LiveBackwardChain, LiveEvent, LiveHypothesisTrack, LiveMarketRegime, LivePressure,
-    LiveSignal, LiveStressSnapshot, LiveTacticalCase,
+    LiveBackwardChain, LiveEvent, LiveHypothesisTrack, LiveMarketRegime, LivePressure, LiveSignal,
+    LiveStressSnapshot, LiveTacticalCase,
 };
 use eden::logic::tension::TensionSnapshot;
 use eden::ontology::links::LinkSnapshot;
 use eden::ontology::microstructure::TickArchive;
 use eden::ontology::objects::{Market, Symbol};
 use eden::ontology::store::ObjectStore;
-use eden::ontology::{
-    BackwardInvestigation, CaseReasoningProfile, ReasoningScope, TacticalSetup,
-};
+use eden::ontology::{BackwardInvestigation, CaseReasoningProfile, ReasoningScope, TacticalSetup};
 #[cfg(feature = "persistence")]
 use eden::persistence::store::EdenStore;
 use eden::pipeline::dimensions::{DimensionSnapshot, SymbolDimensions};
@@ -45,12 +44,12 @@ use eden::pipeline::reasoning::ReasoningSnapshot;
 use eden::pipeline::signals::{
     broker_events_from_delta, DerivedSignalSnapshot, EventSnapshot, ObservationSnapshot,
 };
-use eden::pipeline::world::WorldSnapshots;
 use eden::temporal::buffer::TickHistory;
 use eden::temporal::lineage::compute_family_context_outcomes;
 use eden::temporal::record::TickRecord;
 use eden::HypothesisTrackStatus;
 use rust_decimal::Decimal;
+use sha2::{Digest, Sha256};
 
 #[tokio::main]
 async fn main() {
@@ -98,7 +97,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut printed_candidate_symbols = HashSet::new();
     let mut printed_candidates = Vec::new();
     let mut seen_symbols = HashSet::new();
-    let mut current_store = object_store_from_symbols(&seen_symbols);
+    let mut regression_report = ReplayRegressionReport::new();
     let total_archives = archives.len();
     let first_tick = archives.first().map(|a| a.tick_number);
     let last_tick = archives.last().map(|a| a.tick_number);
@@ -106,7 +105,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for archive in &archives {
         collect_symbols_from_archive(&mut seen_symbols, archive);
     }
-    current_store = object_store_from_symbols(&seen_symbols);
+    let current_store = object_store_from_symbols(&seen_symbols);
     println!(
         "Archives tick {}..{}, known stocks={}",
         first_tick.unwrap_or_default(),
@@ -124,12 +123,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let dim_snapshot = DimensionSnapshot::compute(&links, &current_store);
             let tension_snapshot = TensionSnapshot::compute(&dim_snapshot);
             let narrative_snapshot = NarrativeSnapshot::compute(&tension_snapshot, &dim_snapshot);
-            let brain = BrainGraph::compute(
-                &narrative_snapshot,
-                &dim_snapshot,
-                &links,
-                &current_store,
-            );
+            let brain =
+                BrainGraph::compute(&narrative_snapshot, &dim_snapshot, &links, &current_store);
 
             let graph_temporal_delta = edge_registry.update(&brain, tick);
             let graph_node_delta = node_registry.update(&brain, tick);
@@ -176,22 +171,38 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .map(|record| record.hypothesis_tracks.as_slice())
                 .unwrap_or(&[]);
             let lineage_priors = compute_family_context_outcomes(&history, 300);
-            let reasoning_snapshot = ReasoningSnapshot::derive_with_policy(
+            let empty_convergence = std::collections::HashMap::new();
+            let absence_memory = eden::pipeline::reasoning::AbsenceMemory::default();
+            let family_boost = eden::pipeline::reasoning::FamilyBoostLedger::default();
+            let reasoning_ctx = eden::pipeline::reasoning::ReasoningContext {
+                lineage_priors: &lineage_priors,
+                multi_horizon_gate: None,
+                symbol_dimensions: Some(&dim_snapshot.dimensions),
+                reviewer_doctrine: None,
+                convergence_components: &empty_convergence,
+                market_regime: &decision.market_regime,
+                world_state: None,
+                absence_memory: &absence_memory,
+                family_boost: &family_boost,
+            };
+            let mut reasoning_snapshot = ReasoningSnapshot::derive_with_policy(
                 &event_snapshot,
                 &derived_signal_snapshot,
                 &graph_insights,
                 &decision,
                 previous_setups,
                 previous_tracks,
-                &lineage_priors,
+                &reasoning_ctx,
             );
             let previous_backward = history.latest().map(|record| &record.backward_reasoning);
-            let world_snapshots = WorldSnapshots::derive(
+            let world_snapshots = eden::pipeline::world::derive_with_backward_confirmation(
                 &event_snapshot,
                 &derived_signal_snapshot,
                 &graph_insights,
                 &decision,
-                &reasoning_snapshot,
+                &mut reasoning_snapshot,
+                previous_setups,
+                previous_tracks,
                 None,
                 previous_backward,
             );
@@ -210,83 +221,85 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let mut tick_printed = false;
 
             for (symbol, state) in &symbol_states {
-            if let Some(position) = positions.get(symbol) {
-                if let Some(reason) = exit_reason(state) {
-                    let position = position.clone();
-                    let exit_price = price_map
-                        .get(symbol)
-                        .copied()
-                        .unwrap_or(position.entry_price);
-                    let return_pct = directional_return(
-                        position.entry_price,
-                        exit_price,
-                        position.direction,
+                if let Some(position) = positions.get(symbol) {
+                    if let Some(reason) = exit_reason(state) {
+                        let position = position.clone();
+                        let exit_price = price_map
+                            .get(symbol)
+                            .copied()
+                            .unwrap_or(position.entry_price);
+                        let return_pct = directional_return(
+                            position.entry_price,
+                            exit_price,
+                            position.direction,
+                        );
+                        closed_positions.push(ClosedReplayPosition {
+                            symbol: symbol.0.clone(),
+                            setup_id: position.setup_id.clone(),
+                            entry_tick: position.entry_tick,
+                            exit_tick: tick,
+                            direction: direction_label(position.direction).into(),
+                            entry_price: position.entry_price,
+                            exit_price,
+                            return_pct,
+                            primary_mechanism: position.primary_mechanism.clone(),
+                            primary_driver: position.primary_driver.clone(),
+                            exit_reason: reason.clone(),
+                        });
+                        tracker.exit(symbol);
+                        positions.remove(symbol);
+                        if printed_chains < chains {
+                            print_exit_chain(
+                                tick, state, &position, exit_price, return_pct, &reason,
+                            );
+                            printed_chains += 1;
+                            tick_printed = true;
+                        }
+                    }
+                    continue;
+                }
+
+                if let Some(reason) = enter_reason(state) {
+                    let Some(entry_price) = price_map.get(symbol).copied() else {
+                        continue;
+                    };
+                    if let Some(mut fingerprint) =
+                        StructuralFingerprint::capture(symbol, &brain, tick, Some(entry_price))
+                    {
+                        fingerprint.entry_composite = state.signal.composite;
+                        tracker.enter(fingerprint);
+                    }
+                    positions.insert(
+                        symbol.clone(),
+                        ReplayPosition {
+                            setup_id: state.setup.setup_id.clone(),
+                            entry_tick: tick,
+                            entry_price,
+                            direction: setup_direction(&state.setup, state.signal.composite),
+                            primary_mechanism: state
+                                .reasoning_profile
+                                .primary_mechanism
+                                .as_ref()
+                                .map(|item| item.label.clone()),
+                            primary_driver: state
+                                .backward
+                                .as_ref()
+                                .and_then(|item| {
+                                    item.leading_cause
+                                        .as_ref()
+                                        .map(|cause| cause.explanation.clone())
+                                })
+                                .or_else(|| Some(state.setup.entry_rationale.clone())),
+                        },
                     );
-                    closed_positions.push(ClosedReplayPosition {
-                        symbol: symbol.0.clone(),
-                        setup_id: position.setup_id.clone(),
-                        entry_tick: position.entry_tick,
-                        exit_tick: tick,
-                        direction: direction_label(position.direction).into(),
-                        entry_price: position.entry_price,
-                        exit_price,
-                        return_pct,
-                        primary_mechanism: position.primary_mechanism.clone(),
-                        primary_driver: position.primary_driver.clone(),
-                        exit_reason: reason.clone(),
-                    });
-                    tracker.exit(symbol);
-                    positions.remove(symbol);
+                    enter_symbols.insert(symbol.clone());
                     if printed_chains < chains {
-                        print_exit_chain(tick, state, &position, exit_price, return_pct, &reason);
+                        print_entry_chain(tick, state, entry_price, &reason);
                         printed_chains += 1;
                         tick_printed = true;
                     }
                 }
-                continue;
             }
-
-            if let Some(reason) = enter_reason(state) {
-                let Some(entry_price) = price_map.get(symbol).copied() else {
-                    continue;
-                };
-                if let Some(mut fingerprint) =
-                    StructuralFingerprint::capture(symbol, &brain, tick, Some(entry_price))
-                {
-                    fingerprint.entry_composite = state.signal.composite;
-                    tracker.enter(fingerprint);
-                }
-                positions.insert(
-                    symbol.clone(),
-                    ReplayPosition {
-                        setup_id: state.setup.setup_id.clone(),
-                        entry_tick: tick,
-                        entry_price,
-                        direction: setup_direction(&state.setup, state.signal.composite),
-                        primary_mechanism: state
-                            .reasoning_profile
-                            .primary_mechanism
-                            .as_ref()
-                            .map(|item| item.label.clone()),
-                        primary_driver: state
-                            .backward
-                            .as_ref()
-                            .and_then(|item| {
-                                item.leading_cause
-                                    .as_ref()
-                                    .map(|cause| cause.explanation.clone())
-                            })
-                            .or_else(|| Some(state.setup.entry_rationale.clone())),
-                    },
-                );
-                enter_symbols.insert(symbol.clone());
-                if printed_chains < chains {
-                    print_entry_chain(tick, state, entry_price, &reason);
-                    printed_chains += 1;
-                    tick_printed = true;
-                }
-            }
-        }
 
             if !tick_printed && printed_chains < chains {
                 if let Some(candidate) =
@@ -343,7 +356,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 &graph_node_delta.transitions,
             );
             history.push(tick_record);
-            current_store.knowledge.write().unwrap().accumulate_institutional_memory(tick, &brain);
+            current_store
+                .knowledge
+                .write()
+                .unwrap()
+                .accumulate_institutional_memory(tick, &brain);
+
+            let regression_feed = build_replay_regression_feed(
+                tick,
+                &decision.convergence_scores,
+                &event_snapshot,
+                &derived_signal_snapshot,
+                &reasoning_snapshot,
+                &symbol_states,
+                &positions,
+                &closed_positions,
+            );
+            regression_report.record_feed(&regression_feed);
 
             if tick % 30 == 0 && tracker.active_count() > 0 {
                 tracker.refresh_all(&brain);
@@ -365,7 +394,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("=== Replay Results ===");
     println!("Total archives:    {}", total_archives);
     println!("Chains printed:    {}", printed_chains);
-    println!("Entries opened:    {}", positions.len() + closed_positions.len());
+    println!(
+        "Entries opened:    {}",
+        positions.len() + closed_positions.len()
+    );
     println!("Entries closed:    {}", closed_positions.len());
     println!("Entries still open:{}", positions.len());
     println!();
@@ -373,6 +405,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if !printed_candidates.is_empty() {
         print_candidate_outcomes(&printed_candidates);
     }
+
+    println!("Regression fingerprint: {}", regression_report.finish());
 
     if closed_positions.is_empty() {
         println!("No closed replay positions yet.");
@@ -389,13 +423,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .filter(|item| item.return_pct < Decimal::ZERO)
         .count();
     let flats = closed_positions.len() - wins - losses;
-    let avg_return = closed_positions.iter().map(|item| item.return_pct).sum::<Decimal>()
+    let avg_return = closed_positions
+        .iter()
+        .map(|item| item.return_pct)
+        .sum::<Decimal>()
         / Decimal::from(closed_positions.len() as i64);
 
     println!("Win rate:          {:.1}%", wins as f64 / total * 100.0);
     println!("Loss rate:         {:.1}%", losses as f64 / total * 100.0);
     println!("Flat rate:         {:.1}%", flats as f64 / total * 100.0);
-    println!("Avg directional:   {:+.4}%", avg_return * Decimal::new(100, 0));
+    println!(
+        "Avg directional:   {:+.4}%",
+        avg_return * Decimal::new(100, 0)
+    );
     println!();
 
     let mut by_symbol: HashMap<String, Vec<&ClosedReplayPosition>> = HashMap::new();
@@ -408,14 +448,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let count = items.len();
             let avg = items.iter().map(|item| item.return_pct).sum::<Decimal>()
                 / Decimal::from(count as i64);
-            let wins = items.iter().filter(|item| item.return_pct > Decimal::ZERO).count();
+            let wins = items
+                .iter()
+                .filter(|item| item.return_pct > Decimal::ZERO)
+                .count();
             (symbol, count, wins, avg)
         })
         .collect::<Vec<_>>();
     symbol_rows.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
 
     println!("--- Top Symbols ---");
-    println!("{:12} {:>6} {:>8} {:>12}", "Symbol", "Count", "WinRate", "AvgRet");
+    println!(
+        "{:12} {:>6} {:>8} {:>12}",
+        "Symbol", "Count", "WinRate", "AvgRet"
+    );
     for (symbol, count, wins, avg) in symbol_rows.iter().take(12) {
         println!(
             "{:12} {:>6} {:>7.1}% {:>+11.4}%",
@@ -559,7 +605,11 @@ fn build_symbol_states(
         .into_iter()
         .filter_map(|(symbol, setup)| {
             let convergence = decision.convergence_scores.get(&symbol)?;
-            let dims = dimensions.dimensions.get(&symbol).cloned().unwrap_or_default();
+            let dims = dimensions
+                .dimensions
+                .get(&symbol)
+                .cloned()
+                .unwrap_or_default();
             let sector = store
                 .stocks
                 .get(&symbol)
@@ -598,16 +648,12 @@ fn build_symbol_states(
                 stress: &stress,
                 market_regime: &market_regime,
                 all_signals: std::slice::from_ref(&signal),
-                all_pressures: pressure
-                    .as_ref()
-                    .map(std::slice::from_ref)
-                    .unwrap_or(&[]),
+                all_pressures: pressure.as_ref().map(std::slice::from_ref).unwrap_or(&[]),
                 events: &symbol_events,
                 cross_market_signals: &[],
                 cross_market_anomalies: &[],
             });
-            let reasoning_profile =
-                build_reasoning_profile(&predicates, &invalidation_rules, None);
+            let reasoning_profile = build_reasoning_profile(&predicates, &invalidation_rules, None);
 
             Some((
                 symbol.clone(),
@@ -677,7 +723,10 @@ fn build_live_track(track: &eden::HypothesisTrack) -> LiveHypothesisTrack {
     }
 }
 
-fn build_live_backward_chain(symbol: &Symbol, investigation: &BackwardInvestigation) -> LiveBackwardChain {
+fn build_live_backward_chain(
+    symbol: &Symbol,
+    investigation: &BackwardInvestigation,
+) -> LiveBackwardChain {
     LiveBackwardChain {
         symbol: symbol.0.clone(),
         conclusion: investigation.leaf_label.clone(),
@@ -691,11 +740,13 @@ fn build_live_backward_chain(symbol: &Symbol, investigation: &BackwardInvestigat
             .as_ref()
             .map(|cause| cause.competitive_score.max(cause.net_conviction))
             .unwrap_or(Decimal::ZERO),
+        freshness: None,
         evidence: investigation
             .leading_cause
             .as_ref()
             .map(|cause| {
-                cause.supporting_evidence
+                cause
+                    .supporting_evidence
                     .iter()
                     .map(|evidence| eden::live_snapshot::LiveEvidence {
                         source: evidence.channel.clone(),
@@ -714,12 +765,16 @@ fn build_live_events(symbol: &Symbol, events: &EventSnapshot) -> Vec<LiveEvent> 
         .events
         .iter()
         .filter_map(|event| match &event.value.scope {
-            eden::pipeline::signals::SignalScope::Symbol(event_symbol) if event_symbol == symbol => {
+            eden::pipeline::signals::SignalScope::Symbol(event_symbol)
+                if event_symbol == symbol =>
+            {
                 Some(LiveEvent {
                     kind: format!("{:?}", event.value.kind),
                     symbol: Some(symbol.0.clone()),
                     magnitude: event.value.magnitude,
                     summary: event.value.summary.clone(),
+                    age_secs: None,
+                    freshness: None,
                 })
             }
             _ => None,
@@ -737,8 +792,15 @@ fn build_live_tactical_case(setup: &TacticalSetup, symbol: &Symbol) -> LiveTacti
         confidence_gap: setup.confidence_gap,
         heuristic_edge: setup.heuristic_edge,
         entry_rationale: setup.entry_rationale.clone(),
+        review_reason_code: setup
+            .review_reason_code
+            .map(|code| code.as_str().to_string()),
+        policy_primary: None,
+        policy_reason: None,
+        multi_horizon_gate_reason: None,
         family_label: None,
         counter_label: None,
+        matched_success_pattern_signature: None,
     }
 }
 
@@ -814,7 +876,11 @@ fn exit_reason(state: &ReplaySymbolState) -> Option<String> {
         return Some("hypothesis invalidated".into());
     }
     if !state.reasoning_profile.automated_invalidations.is_empty() {
-        return Some(state.reasoning_profile.automated_invalidations[0].reason.clone());
+        return Some(
+            state.reasoning_profile.automated_invalidations[0]
+                .reason
+                .clone(),
+        );
     }
     if let Some(backward) = state.backward.as_ref() {
         if matches!(
@@ -823,7 +889,10 @@ fn exit_reason(state: &ReplaySymbolState) -> Option<String> {
                 | eden::CausalContestState::Contested
                 | eden::CausalContestState::Eroding
         ) {
-            return Some(format!("backward contest moved to {}", backward.contest_state));
+            return Some(format!(
+                "backward contest moved to {}",
+                backward.contest_state
+            ));
         }
     }
     None
@@ -875,9 +944,11 @@ fn update_candidate_outcomes(
             continue;
         }
         for horizon in HORIZONS {
-            if tick == candidate.tick + horizon && !candidate.horizon_returns.contains_key(&horizon) {
+            if tick == candidate.tick + horizon && !candidate.horizon_returns.contains_key(&horizon)
+            {
                 if let Some(exit_price) = price_map.get(&candidate.symbol).copied() {
-                    let pnl = directional_return(candidate.entry_price, exit_price, candidate.direction);
+                    let pnl =
+                        directional_return(candidate.entry_price, exit_price, candidate.direction);
                     candidate.horizon_returns.insert(horizon, pnl);
                 }
             }
@@ -901,10 +972,7 @@ fn print_candidate_outcomes(candidates: &[CandidateReplayObservation]) {
             direction_label(candidate.direction),
             candidate.action,
             candidate.track_status.as_deref().unwrap_or("none"),
-            candidate
-                .primary_mechanism
-                .as_deref()
-                .unwrap_or("none"),
+            candidate.primary_mechanism.as_deref().unwrap_or("none"),
         );
         if let Some(reason) = &candidate.policy_reason {
             println!("  policy_reason={}", reason);
@@ -1039,12 +1107,7 @@ fn candidate_reason(state: &ReplaySymbolState) -> String {
     blockers.join(", ")
 }
 
-fn print_entry_chain(
-    tick: u64,
-    state: &ReplaySymbolState,
-    entry_price: Decimal,
-    reason: &str,
-) {
+fn print_entry_chain(tick: u64, state: &ReplaySymbolState, entry_price: Decimal, reason: &str) {
     println!();
     println!("=== ENTRY {} @ tick {} ===", state.symbol, tick);
     println!("[Observation]");
@@ -1067,9 +1130,7 @@ fn print_entry_chain(
     println!("[Convergence]");
     println!(
         "  composite={:+.3} sector={:+?} cross_stock={:+?}",
-        state.signal.composite,
-        state.signal.sector_coherence,
-        state.signal.cross_stock_correlation,
+        state.signal.composite, state.signal.sector_coherence, state.signal.cross_stock_correlation,
     );
     println!("[Hypothesis]");
     if let Some(track) = &state.track {
@@ -1116,7 +1177,11 @@ fn print_entry_chain(
         println!("  contest=none");
     }
     println!("[Decision]");
-    println!("  enter_price={} reason={}", entry_price.round_dp(4), reason);
+    println!(
+        "  enter_price={} reason={}",
+        entry_price.round_dp(4),
+        reason
+    );
 }
 
 fn print_candidate_chain(tick: u64, state: &ReplaySymbolState) {
@@ -1142,9 +1207,7 @@ fn print_candidate_chain(tick: u64, state: &ReplaySymbolState) {
     println!("[Convergence]");
     println!(
         "  composite={:+.3} sector={:+?} cross_stock={:+?}",
-        state.signal.composite,
-        state.signal.sector_coherence,
-        state.signal.cross_stock_correlation,
+        state.signal.composite, state.signal.sector_coherence, state.signal.cross_stock_correlation,
     );
     println!("[Hypothesis]");
     if let Some(track) = &state.track {
@@ -1227,7 +1290,10 @@ fn print_policy_verdict(setup: &TacticalSetup) {
         return;
     };
     println!("[Verdict]");
-    println!("  primary={} rationale={}", verdict.primary, verdict.rationale);
+    println!(
+        "  primary={} rationale={}",
+        verdict.primary, verdict.rationale
+    );
     if let Some(conflict) = &verdict.conflict_reason {
         println!("  conflict_reason={}", conflict);
     }
@@ -1240,6 +1306,288 @@ fn print_policy_verdict(setup: &TacticalSetup) {
             .join(" | ");
         println!("  horizons={}", summary);
     }
+}
+
+struct ReplayRegressionFeed {
+    tick: u64,
+    reasoning_counts: String,
+    convergence_lines: Vec<String>,
+    event_lines: Vec<String>,
+    derived_signal_lines: Vec<String>,
+    symbol_lines: Vec<String>,
+    open_position_lines: Vec<String>,
+    closed_position_lines: Vec<String>,
+}
+
+impl ReplayRegressionFeed {
+    fn canonical_text(&self) -> String {
+        let mut lines = vec![format!("tick={}", self.tick), self.reasoning_counts.clone()];
+
+        let mut convergence_lines = self.convergence_lines.clone();
+        convergence_lines.sort();
+        lines.extend(convergence_lines);
+
+        let mut event_lines = self.event_lines.clone();
+        event_lines.sort();
+        lines.extend(event_lines);
+
+        let mut derived_signal_lines = self.derived_signal_lines.clone();
+        derived_signal_lines.sort();
+        lines.extend(derived_signal_lines);
+
+        let mut symbol_lines = self.symbol_lines.clone();
+        symbol_lines.sort();
+        lines.extend(symbol_lines);
+
+        let mut open_position_lines = self.open_position_lines.clone();
+        open_position_lines.sort();
+        lines.extend(open_position_lines);
+
+        let mut closed_position_lines = self.closed_position_lines.clone();
+        closed_position_lines.sort();
+        lines.extend(closed_position_lines);
+
+        lines.join("\n")
+    }
+}
+
+struct ReplayRegressionReport {
+    hasher: Sha256,
+    ticks: usize,
+}
+
+impl ReplayRegressionReport {
+    fn new() -> Self {
+        Self {
+            hasher: Sha256::new(),
+            ticks: 0,
+        }
+    }
+
+    fn record_feed(&mut self, feed: &ReplayRegressionFeed) {
+        let signature = feed.canonical_text();
+        self.hasher.update(signature.as_bytes());
+        self.hasher.update(b"\n");
+        self.ticks += 1;
+    }
+
+    fn finish(self) -> String {
+        let digest = self.hasher.finalize();
+        let mut hex = String::with_capacity(digest.len() * 2);
+        use std::fmt::Write as _;
+        for byte in digest {
+            let _ = write!(&mut hex, "{:02x}", byte);
+        }
+        format!("sha256:{} ticks={}", hex, self.ticks)
+    }
+}
+
+fn build_replay_regression_feed(
+    tick: u64,
+    convergence_scores: &HashMap<Symbol, ConvergenceScore>,
+    event_snapshot: &EventSnapshot,
+    derived_signal_snapshot: &DerivedSignalSnapshot,
+    reasoning_snapshot: &ReasoningSnapshot,
+    symbol_states: &HashMap<Symbol, ReplaySymbolState>,
+    positions: &HashMap<Symbol, ReplayPosition>,
+    closed_positions: &[ClosedReplayPosition],
+) -> ReplayRegressionFeed {
+    ReplayRegressionFeed {
+        tick,
+        reasoning_counts: format!(
+            "reasoning_counts|hypotheses={}|propagation_paths={}|investigation_selections={}|tactical_setups={}|hypothesis_tracks={}|case_clusters={}",
+            reasoning_snapshot.hypotheses.len(),
+            reasoning_snapshot.propagation_paths.len(),
+            reasoning_snapshot.investigation_selections.len(),
+            reasoning_snapshot.tactical_setups.len(),
+            reasoning_snapshot.hypothesis_tracks.len(),
+            reasoning_snapshot.case_clusters.len(),
+        ),
+        convergence_lines: convergence_scores
+            .iter()
+            .map(|(symbol, score)| {
+                format!(
+                    "convergence|{}|institutional_alignment={}|sector_coherence={}|cross_stock_correlation={}|composite={}|edge_stability={}|institutional_edge_age={}|new_edge_fraction={}|microstructure_confirmation={}|component_spread={}|temporal_weight={}",
+                    symbol.0,
+                    fmt_decimal(score.institutional_alignment),
+                    fmt_opt_decimal(score.sector_coherence),
+                    fmt_decimal(score.cross_stock_correlation),
+                    fmt_decimal(score.composite),
+                    fmt_opt_decimal(score.edge_stability),
+                    fmt_opt_decimal(score.institutional_edge_age),
+                    fmt_opt_decimal(score.new_edge_fraction),
+                    fmt_opt_decimal(score.microstructure_confirmation),
+                    fmt_opt_decimal(score.component_spread),
+                    fmt_opt_decimal(score.temporal_weight),
+                )
+            })
+            .collect(),
+        event_lines: event_snapshot
+            .events
+            .iter()
+            .map(|event| {
+                format!(
+                    "event|{:?}|{:?}|{}|{}",
+                    event.value.kind,
+                    event.value.scope,
+                    sanitize_line(&event.value.summary),
+                    fmt_decimal(event.value.magnitude),
+                )
+            })
+            .collect(),
+        derived_signal_lines: derived_signal_snapshot
+            .signals
+            .iter()
+            .map(|signal| {
+                format!(
+                    "derived|{:?}|{:?}|{}|{}",
+                    signal.value.kind,
+                    signal.value.scope,
+                    sanitize_line(&signal.value.summary),
+                    fmt_decimal(signal.value.strength),
+                )
+            })
+            .collect(),
+        symbol_lines: symbol_states
+            .iter()
+            .map(|(symbol, state)| {
+                let primary = state
+                    .reasoning_profile
+                    .primary_mechanism
+                    .as_ref()
+                    .map(|item| format!("{}@{}", sanitize_line(&item.label), fmt_decimal(item.score)))
+                    .unwrap_or_else(|| "-".into());
+                let invalidation = state
+                    .reasoning_profile
+                    .automated_invalidations
+                    .first()
+                    .map(|item| sanitize_line(&item.reason))
+                    .unwrap_or_else(|| "-".into());
+                let track = state
+                    .track
+                    .as_ref()
+                    .map(|track| {
+                        format!(
+                            "{}|streak={}|conf={}|gap={}|reason={}",
+                            track.status,
+                            track.status_streak,
+                            fmt_decimal(track.confidence),
+                            fmt_decimal(track.confidence_gap),
+                            sanitize_line(&track.policy_reason),
+                        )
+                    })
+                    .unwrap_or_else(|| "-".into());
+                let _backward = state
+                    .backward
+                    .as_ref()
+                    .map(|item| {
+                        let leading = item
+                            .leading_cause
+                            .as_ref()
+                            .map(|cause| sanitize_line(&cause.explanation))
+                            .unwrap_or_else(|| "-".into());
+                        format!(
+                            "{}|streak={}|leading={}",
+                            item.contest_state, item.leading_cause_streak, leading
+                        )
+                    })
+                    .unwrap_or_else(|| "-".into());
+                let pressure = state
+                    .pressure
+                    .as_ref()
+                    .map(|item| {
+                        format!(
+                            "pressure={}|delta={}|duration={}|accelerating={}",
+                            fmt_decimal(item.capital_flow_pressure),
+                            fmt_decimal(item.pressure_delta),
+                            item.pressure_duration,
+                            item.accelerating
+                        )
+                    })
+                    .unwrap_or_else(|| "-".into());
+
+                format!(
+                    "symbol|{}|setup={}@{}|gap={}|edge={}|signal={}@{}|pressure={}|track={}|primary={}|invalid={}",
+                    symbol.0,
+                    sanitize_line(&state.setup.action),
+                    fmt_decimal(state.setup.confidence),
+                    fmt_decimal(state.setup.confidence_gap),
+                    fmt_decimal(state.setup.heuristic_edge),
+                    fmt_decimal(state.signal.composite),
+                    fmt_decimal(state.signal.price_momentum),
+                    pressure,
+                    track,
+                    primary,
+                    invalidation,
+                )
+            })
+            .collect(),
+        open_position_lines: positions
+            .iter()
+            .map(|(symbol, position)| {
+                format!(
+                    "open|{}|setup={}|dir={}|entry_tick={}|entry={}|primary_mech={}|primary_driver={}",
+                    symbol.0,
+                    sanitize_line(&position.setup_id),
+                    position.direction,
+                    position.entry_tick,
+                    fmt_decimal(position.entry_price),
+                    position
+                        .primary_mechanism
+                        .as_deref()
+                        .map(sanitize_line)
+                        .unwrap_or_else(|| "-".into()),
+                    position
+                        .primary_driver
+                        .as_deref()
+                        .map(sanitize_line)
+                        .unwrap_or_else(|| "-".into()),
+                )
+            })
+            .collect(),
+        closed_position_lines: closed_positions
+            .iter()
+            .map(|position| {
+                format!(
+                    "closed|{}|setup={}|entry_tick={}|exit_tick={}|dir={}|entry={}|exit={}|return={}|primary_mech={}|primary_driver={}|reason={}",
+                    sanitize_line(&position.symbol),
+                    sanitize_line(&position.setup_id),
+                    position.entry_tick,
+                    position.exit_tick,
+                    sanitize_line(&position.direction),
+                    fmt_decimal(position.entry_price),
+                    fmt_decimal(position.exit_price),
+                    fmt_decimal(position.return_pct),
+                    position
+                        .primary_mechanism
+                        .as_deref()
+                        .map(sanitize_line)
+                        .unwrap_or_else(|| "-".into()),
+                    position
+                        .primary_driver
+                        .as_deref()
+                        .map(sanitize_line)
+                        .unwrap_or_else(|| "-".into()),
+                    sanitize_line(&position.exit_reason),
+                )
+            })
+            .collect(),
+    }
+}
+
+fn fmt_decimal(value: Decimal) -> String {
+    value.round_dp(6).to_string()
+}
+
+fn fmt_opt_decimal(value: Option<Decimal>) -> String {
+    value.map(fmt_decimal).unwrap_or_else(|| "-".into())
+}
+
+fn sanitize_line(value: &str) -> String {
+    value
+        .replace('\n', " ")
+        .replace('\r', " ")
+        .replace('|', " ")
 }
 
 async fn load_archives(
@@ -1289,8 +1637,7 @@ async fn load_archives(
         #[cfg(feature = "persistence")]
         {
             let chunk_size: usize = parse_flag(args, "--chunk-size").unwrap_or(100).max(1);
-            let db_path =
-                parse_flag_str(args, "--db").unwrap_or_else(|| "data/eden.db".into());
+            let db_path = parse_flag_str(args, "--db").unwrap_or_else(|| "data/eden.db".into());
 
             println!("=== Eden Replay (SurrealDB) ===");
             println!("db:      {db_path}");
@@ -1305,8 +1652,9 @@ async fn load_archives(
             let mut remaining = limit;
 
             loop {
-                let batch_limit =
-                    remaining.map(|left| left.min(chunk_size)).unwrap_or(chunk_size);
+                let batch_limit = remaining
+                    .map(|left| left.min(chunk_size))
+                    .unwrap_or(chunk_size);
                 if batch_limit == 0 {
                     break;
                 }
@@ -1347,4 +1695,81 @@ fn parse_flag_str(args: &[String], name: &str) -> Option<String> {
     args.windows(2)
         .find(|window| window[0] == name)
         .map(|window| window[1].clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_feed() -> ReplayRegressionFeed {
+        ReplayRegressionFeed {
+            tick: 42,
+            reasoning_counts: "reasoning_counts|hypotheses=1|propagation_paths=0|investigation_selections=1|tactical_setups=1|hypothesis_tracks=1|case_clusters=0".into(),
+            convergence_lines: vec![
+                "convergence|700.HK|institutional_alignment=0.1|sector_coherence=0.2|cross_stock_correlation=0.3|composite=0.4|edge_stability=-|institutional_edge_age=-|new_edge_fraction=-|microstructure_confirmation=-|component_spread=-|temporal_weight=-".into(),
+                "convergence|9988.HK|institutional_alignment=-0.1|sector_coherence=-0.2|cross_stock_correlation=-0.3|composite=-0.4|edge_stability=-|institutional_edge_age=-|new_edge_fraction=-|microstructure_confirmation=-|component_spread=-|temporal_weight=-".into(),
+            ],
+            event_lines: vec![
+                "event|CompositeAcceleration|Symbol(Symbol(\"700.HK\"))|momentum is building|0.12".into(),
+                "event|MarketStressElevated|Market|stress elevated|0.8".into(),
+            ],
+            derived_signal_lines: vec![
+                "derived|StructuralComposite|Symbol(Symbol(\"700.HK\"))|composite rising|0.55".into(),
+            ],
+            symbol_lines: vec![
+                "symbol|700.HK|setup=enter@0.6|gap=0.1|edge=0.05|signal=0.4@0.2|pressure=pressure=0.3|delta=0.1|duration=4|accelerating=true|track=-|primary=Momentum@0.7|invalid=none".into(),
+                "symbol|9988.HK|setup=observe@0.4|gap=0.2|edge=0.03|signal=-0.4@-0.1|pressure=-|track=-|primary=-|invalid=-".into(),
+            ],
+            open_position_lines: vec![
+                "open|700.HK|setup=setup:700:enter|dir=1|entry_tick=42|entry=10.5|primary_mech=Momentum|primary_driver=trend".into(),
+            ],
+            closed_position_lines: vec![
+                "closed|9988.HK|setup=setup:9988:observe|entry_tick=21|exit_tick=42|dir=neutral|entry=18|exit=17.5|return=-0.027778|primary_mech=-|primary_driver=-|reason=policy exit".into(),
+            ],
+        }
+    }
+
+    #[test]
+    fn canonical_text_is_order_independent() {
+        let feed_a = sample_feed();
+        let mut feed_b = sample_feed();
+        feed_b.convergence_lines.reverse();
+        feed_b.event_lines.reverse();
+        feed_b.derived_signal_lines.reverse();
+        feed_b.symbol_lines.reverse();
+        feed_b.open_position_lines.reverse();
+        feed_b.closed_position_lines.reverse();
+
+        assert_eq!(feed_a.canonical_text(), feed_b.canonical_text());
+
+        let mut report_a = ReplayRegressionReport::new();
+        report_a.record_feed(&feed_a);
+        let mut report_b = ReplayRegressionReport::new();
+        report_b.record_feed(&feed_b);
+        assert_eq!(report_a.finish(), report_b.finish());
+    }
+
+    #[test]
+    fn canonical_text_changes_on_semantic_drift() {
+        let feed_a = sample_feed();
+        let mut feed_b = sample_feed();
+        feed_b.symbol_lines[0] = feed_b.symbol_lines[0].replace("Momentum@0.7", "Momentum@0.8");
+
+        assert_ne!(feed_a.canonical_text(), feed_b.canonical_text());
+
+        let mut report_a = ReplayRegressionReport::new();
+        report_a.record_feed(&feed_a);
+        let mut report_b = ReplayRegressionReport::new();
+        report_b.record_feed(&feed_b);
+        assert_ne!(report_a.finish(), report_b.finish());
+    }
+
+    #[test]
+    fn tick_number_participates_in_signature() {
+        let feed_a = sample_feed();
+        let mut feed_b = sample_feed();
+        feed_b.tick = 43;
+
+        assert_ne!(feed_a.canonical_text(), feed_b.canonical_text());
+    }
 }

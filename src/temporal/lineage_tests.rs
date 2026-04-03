@@ -69,10 +69,13 @@
             confidence_gap: Decimal::ZERO,
             heuristic_edge: Decimal::ZERO,
             convergence_score: None,
+            convergence_detail: None,
             workflow_id: None,
             entry_rationale: String::new(),
             risk_notes: vec![],
             policy_verdict: None,
+            causal_narrative: None,
+            review_reason_code: None,
         };
         let mut signals = HashMap::<Symbol, SymbolSignals>::new();
         signals.insert(Symbol("700.HK".into()), make_signal(Decimal::from(100)));
@@ -93,6 +96,7 @@
             world_state: WorldStateSnapshot {
                 timestamp: OffsetDateTime::UNIX_EPOCH,
                 entities: vec![],
+                vortices: vec![],
             },
             backward_reasoning: BackwardReasoningSnapshot {
                 timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -121,6 +125,7 @@
             world_state: WorldStateSnapshot {
                 timestamp: OffsetDateTime::UNIX_EPOCH,
                 entities: vec![],
+                vortices: vec![],
             },
             backward_reasoning: BackwardReasoningSnapshot {
                 timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -162,10 +167,13 @@
             confidence_gap: Decimal::ZERO,
             heuristic_edge: Decimal::ZERO,
             convergence_score: None,
+            convergence_detail: None,
             workflow_id: None,
             entry_rationale: String::new(),
             risk_notes: vec![],
             policy_verdict: None,
+            causal_narrative: None,
+            review_reason_code: None,
         };
         let mut signals = HashMap::<Symbol, SymbolSignals>::new();
         signals.insert(Symbol("700.HK".into()), make_signal(Decimal::from(100)));
@@ -186,6 +194,7 @@
             world_state: WorldStateSnapshot {
                 timestamp: OffsetDateTime::UNIX_EPOCH,
                 entities: vec![],
+                vortices: vec![],
             },
             backward_reasoning: BackwardReasoningSnapshot {
                 timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -214,6 +223,7 @@
             world_state: WorldStateSnapshot {
                 timestamp: OffsetDateTime::UNIX_EPOCH,
                 entities: vec![],
+                vortices: vec![],
             },
             backward_reasoning: BackwardReasoningSnapshot {
                 timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -312,10 +322,13 @@
             confidence_gap: Decimal::ZERO,
             heuristic_edge: Decimal::ZERO,
             convergence_score: None,
+            convergence_detail: None,
             workflow_id: None,
             entry_rationale: "700.HK directed flow repricing".into(),
             risk_notes: vec![],
             policy_verdict: None,
+            causal_narrative: None,
+            review_reason_code: None,
         };
 
         assert_eq!(setup_direction(&setup, Some(dec!(-0.2))), -1);
