@@ -1,5 +1,12 @@
 use super::*;
 
+fn attribution_inputs(driver: &str, scope: &str) -> Vec<String> {
+    vec![
+        format!("attr:driver={}", driver),
+        format!("attr:scope={}", scope),
+    ]
+}
+
 impl EventSnapshot {
     pub fn detect(
         history: &TickHistory,
@@ -36,12 +43,16 @@ impl EventSnapshot {
                     magnitude: ratio,
                     summary: format!("{} book imbalance widened", order_book.symbol),
                 },
-                provenance(
-                    ProvenanceSource::Computed,
-                    links.timestamp,
-                    Some(ratio),
-                    [format!("order_book:{}", order_book.symbol)],
-                ),
+                {
+                    let mut p = provenance(
+                        ProvenanceSource::Computed,
+                        links.timestamp,
+                        Some(ratio),
+                        [format!("order_book:{}", order_book.symbol)],
+                    );
+                    p.inputs.extend(attribution_inputs("company_specific", "local"));
+                    p
+                },
             ));
         }
 
@@ -67,12 +78,16 @@ impl EventSnapshot {
                     magnitude,
                     summary: format!("{} volume ratio elevated to {}", calc.symbol, volume_ratio),
                 },
-                provenance(
-                    ProvenanceSource::Computed,
-                    links.timestamp,
-                    Some(magnitude),
-                    [format!("calc_index:{}", calc.symbol)],
-                ),
+                {
+                    let mut p = provenance(
+                        ProvenanceSource::Computed,
+                        links.timestamp,
+                        Some(magnitude),
+                        [format!("calc_index:{}", calc.symbol)],
+                    );
+                    p.inputs.extend(attribution_inputs("company_specific", "local"));
+                    p
+                },
             ));
         }
 
@@ -95,15 +110,19 @@ impl EventSnapshot {
                     magnitude,
                     summary: format!("{} candle conviction confirms short-term move", symbol),
                 },
-                provenance(
-                    ProvenanceSource::Computed,
-                    links.timestamp,
-                    Some(magnitude),
-                    [
-                        format!("dimension:candlestick_conviction:{}", symbol),
-                        format!("dimension:activity_momentum:{}", symbol),
-                    ],
-                ),
+                {
+                    let mut p = provenance(
+                        ProvenanceSource::Computed,
+                        links.timestamp,
+                        Some(magnitude),
+                        [
+                            format!("dimension:candlestick_conviction:{}", symbol),
+                            format!("dimension:activity_momentum:{}", symbol),
+                        ],
+                    );
+                    p.inputs.extend(attribution_inputs("company_specific", "local"));
+                    p
+                },
             ));
         }
 
@@ -126,12 +145,16 @@ impl EventSnapshot {
                     magnitude,
                     summary: format!("{} smart-money pressure remains elevated", pressure.symbol),
                 },
-                provenance(
-                    ProvenanceSource::Computed,
-                    links.timestamp,
-                    Some(magnitude),
-                    [format!("graph_pressure:{}", pressure.symbol)],
-                ),
+                {
+                    let mut p = provenance(
+                        ProvenanceSource::Computed,
+                        links.timestamp,
+                        Some(magnitude),
+                        [format!("graph_pressure:{}", pressure.symbol)],
+                    );
+                    p.inputs.extend(attribution_inputs("company_specific", "local"));
+                    p
+                },
             ));
         }
 
@@ -146,12 +169,16 @@ impl EventSnapshot {
                     magnitude: insights.stress.composite_stress,
                     summary: "market stress composite elevated".into(),
                 },
-                provenance(
-                    ProvenanceSource::Computed,
-                    links.timestamp,
-                    Some(insights.stress.composite_stress),
-                    ["graph_stress".to_string()],
-                ),
+                {
+                    let mut p = provenance(
+                        ProvenanceSource::Computed,
+                        links.timestamp,
+                        Some(insights.stress.composite_stress),
+                        ["graph_stress".to_string()],
+                    );
+                    p.inputs.extend(attribution_inputs("macro_wide", "market"));
+                    p
+                },
             ));
         }
 
@@ -171,15 +198,19 @@ impl EventSnapshot {
                                 composite_delta.round_dp(3)
                             ),
                         },
-                        provenance(
-                            ProvenanceSource::Computed,
-                            links.timestamp,
-                            Some(composite_delta.abs()),
-                            [
-                                format!("history:previous_tick:{}", symbol),
-                                format!("convergence:{}", symbol),
-                            ],
-                        ),
+                        {
+                            let mut p = provenance(
+                                ProvenanceSource::Computed,
+                                links.timestamp,
+                                Some(composite_delta.abs()),
+                                [
+                                    format!("history:previous_tick:{}", symbol),
+                                    format!("convergence:{}", symbol),
+                                ],
+                            );
+                            p.inputs.extend(attribution_inputs("sector_wide", "sector"));
+                            p
+                        },
                     ));
                 }
 
@@ -201,15 +232,19 @@ impl EventSnapshot {
                                 curr_inst.round_dp(2)
                             ),
                         },
-                        provenance(
-                            ProvenanceSource::Computed,
-                            links.timestamp,
-                            Some((curr_inst - prev_inst).abs()),
-                            [
-                                format!("history:previous_tick:{}", symbol),
-                                format!("institutional_alignment:{}", symbol),
-                            ],
-                        ),
+                        {
+                            let mut p = provenance(
+                                ProvenanceSource::Computed,
+                                links.timestamp,
+                                Some((curr_inst - prev_inst).abs()),
+                                [
+                                    format!("history:previous_tick:{}", symbol),
+                                    format!("institutional_alignment:{}", symbol),
+                                ],
+                            );
+                            p.inputs.extend(attribution_inputs("sector_wide", "sector"));
+                            p
+                        },
                     ));
                 }
             }
@@ -225,15 +260,19 @@ impl EventSnapshot {
                         magnitude: stress_delta.abs(),
                         summary: format!("market stress shifted by {:+}", stress_delta.round_dp(3)),
                     },
-                    provenance(
-                        ProvenanceSource::Computed,
-                        links.timestamp,
-                        Some(stress_delta.abs()),
-                        [
-                            "history:market_stress".to_string(),
-                            "graph_stress".to_string(),
-                        ],
-                    ),
+                    {
+                        let mut p = provenance(
+                            ProvenanceSource::Computed,
+                            links.timestamp,
+                            Some(stress_delta.abs()),
+                            [
+                                "history:market_stress".to_string(),
+                                "graph_stress".to_string(),
+                            ],
+                        );
+                        p.inputs.extend(attribution_inputs("macro_wide", "market"));
+                        p
+                    },
                 ));
             }
         }
@@ -247,15 +286,19 @@ impl EventSnapshot {
                         magnitude: suggestion.convergence.composite.abs(),
                         summary: format!("{} order suggestion requires review", suggestion.symbol),
                     },
-                    provenance(
-                        ProvenanceSource::Computed,
-                        links.timestamp,
-                        Some(suggestion.convergence.composite.abs()),
-                        [
-                            format!("decision:{}", suggestion.symbol),
-                            format!("convergence:{}", suggestion.symbol),
-                        ],
-                    ),
+                    {
+                        let mut p = provenance(
+                            ProvenanceSource::Computed,
+                            links.timestamp,
+                            Some(suggestion.convergence.composite.abs()),
+                            [
+                                format!("decision:{}", suggestion.symbol),
+                                format!("convergence:{}", suggestion.symbol),
+                            ],
+                        );
+                        p.inputs.extend(attribution_inputs("macro_wide", "market"));
+                        p
+                    },
                 ));
             }
         }
@@ -271,15 +314,19 @@ impl EventSnapshot {
                         shared.symbol_a, shared.symbol_b
                     ),
                 },
-                provenance(
-                    ProvenanceSource::Computed,
-                    links.timestamp,
-                    Some(shared.jaccard),
-                    [
-                        format!("shared_holder:{}", shared.symbol_a),
-                        format!("shared_holder:{}", shared.symbol_b),
-                    ],
-                ),
+                {
+                    let mut p = provenance(
+                        ProvenanceSource::Computed,
+                        links.timestamp,
+                        Some(shared.jaccard),
+                        [
+                            format!("shared_holder:{}", shared.symbol_a),
+                            format!("shared_holder:{}", shared.symbol_b),
+                        ],
+                    );
+                    p.inputs.extend(attribution_inputs("sector_wide", "sector"));
+                    p
+                },
             ));
         }
 
@@ -392,7 +439,11 @@ pub fn broker_events_from_delta(
                             depth_recovery,
                         ),
                     },
-                    ProvenanceMetadata::new(ProvenanceSource::Computed, timestamp),
+                    {
+                        let mut p = ProvenanceMetadata::new(ProvenanceSource::Computed, timestamp);
+                        p.inputs = attribution_inputs("company_specific", "local");
+                        p
+                    },
                 ));
             }
             BrokerTransitionKind::SideFlipped => {
@@ -403,7 +454,11 @@ pub fn broker_events_from_delta(
                         magnitude: Decimal::new(3, 1),
                         summary: format!("B{} flipped side in {}", broker_id, symbol_str),
                     },
-                    ProvenanceMetadata::new(ProvenanceSource::Computed, timestamp),
+                    {
+                        let mut p = ProvenanceMetadata::new(ProvenanceSource::Computed, timestamp);
+                        p.inputs = attribution_inputs("company_specific", "local");
+                        p
+                    },
                 ));
             }
             BrokerTransitionKind::Appeared => {
@@ -432,7 +487,11 @@ pub fn broker_events_from_delta(
                             symbols.len()
                         ),
                     },
-                    ProvenanceMetadata::new(ProvenanceSource::Computed, timestamp),
+                    {
+                        let mut p = ProvenanceMetadata::new(ProvenanceSource::Computed, timestamp);
+                        p.inputs = attribution_inputs("company_specific", "local");
+                        p
+                    },
                 ));
             }
         }
