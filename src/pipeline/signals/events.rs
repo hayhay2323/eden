@@ -391,6 +391,160 @@ fn previous_market_stress(tick: &crate::temporal::record::TickRecord) -> Option<
     })
 }
 
+pub fn enrich_attribution_with_evidence(
+    snapshot: &mut EventSnapshot,
+    cross_stock_presences: &[crate::ontology::links::CrossStockPresence],
+    _macro_events: &[crate::ontology::knowledge::AgentMacroEvent],
+) {
+    let cross_stock_symbols: std::collections::HashSet<crate::ontology::objects::Symbol> =
+        cross_stock_presences
+            .iter()
+            .flat_map(|p| p.symbols.iter().cloned())
+            .collect();
+
+    for event in &mut snapshot.events {
+        let event_symbol = match &event.value.scope {
+            SignalScope::Symbol(s) => Some(s),
+            _ => None,
+        };
+        let Some(symbol) = event_symbol else {
+            continue;
+        };
+        if !cross_stock_symbols.contains(symbol) {
+            continue;
+        }
+        // Symbol appears in cross-stock presence → upgrade from local to sector
+        let has_local_scope = event
+            .provenance
+            .inputs
+            .iter()
+            .any(|i| i == "attr:scope=local");
+        if has_local_scope {
+            event.provenance.inputs.retain(|i| {
+                !i.starts_with("attr:scope=") && !i.starts_with("attr:driver=")
+            });
+            event
+                .provenance
+                .inputs
+                .extend(attribution_inputs("sector_wide", "sector"));
+        }
+    }
+}
+
+pub fn detect_propagation_absences(
+    snapshot: &mut EventSnapshot,
+    dimensions: &crate::pipeline::dimensions::DimensionSnapshot,
+    sector_map: &std::collections::HashMap<
+        crate::ontology::objects::Symbol,
+        crate::ontology::objects::SectorId,
+    >,
+) {
+    use std::collections::HashMap;
+
+    // Group existing event symbols by sector
+    let mut sectors_with_events: HashMap<
+        crate::ontology::objects::SectorId,
+        Vec<crate::ontology::objects::Symbol>,
+    > = HashMap::new();
+    for event in &snapshot.events {
+        if let SignalScope::Symbol(symbol) = &event.value.scope {
+            if let Some(sector) = sector_map.get(symbol) {
+                sectors_with_events
+                    .entry(sector.clone())
+                    .or_default()
+                    .push(symbol.clone());
+            }
+        }
+    }
+
+    // For each sector with events, check if peers are silent
+    for (sector, _event_symbols) in &sectors_with_events {
+        let sector_symbols: Vec<&crate::ontology::objects::Symbol> = sector_map
+            .iter()
+            .filter(|(_, s)| *s == sector)
+            .map(|(sym, _)| sym)
+            .collect();
+        if sector_symbols.len() < 2 {
+            continue;
+        }
+        let silent_count = sector_symbols
+            .iter()
+            .filter(|sym| {
+                dimensions
+                    .dimensions
+                    .get(*sym)
+                    .map(|d| d.activity_momentum == Decimal::ZERO)
+                    .unwrap_or(true)
+            })
+            .count();
+        let silent_ratio =
+            Decimal::from(silent_count as i64) / Decimal::from(sector_symbols.len() as i64);
+        if silent_ratio > Decimal::new(5, 1) {
+            snapshot.events.push(Event::new(
+                MarketEventRecord {
+                    scope: SignalScope::Sector(sector.clone()),
+                    kind: MarketEventKind::PropagationAbsence,
+                    magnitude: silent_ratio,
+                    summary: format!(
+                        "sector {} has events but {:.0}% of peers are silent",
+                        sector,
+                        silent_ratio * Decimal::from(100)
+                    ),
+                },
+                provenance(
+                    ProvenanceSource::Computed,
+                    snapshot.timestamp,
+                    Some(silent_ratio),
+                    [format!("sector_absence:{}", sector)],
+                ),
+            ));
+        }
+    }
+}
+
+pub fn catalyst_events_from_macro_events(
+    macro_events: &[crate::ontology::knowledge::AgentMacroEvent],
+    timestamp: OffsetDateTime,
+) -> Vec<Event<MarketEventRecord>> {
+    macro_events
+        .iter()
+        .filter(|e| is_thematic_catalyst(&e.event_type))
+        .map(|e| {
+            let magnitude = e.confidence.clamp(Decimal::ZERO, Decimal::ONE);
+            Event::new(
+                MarketEventRecord {
+                    scope: SignalScope::Market,
+                    kind: MarketEventKind::CatalystActivation,
+                    magnitude,
+                    summary: e.headline.clone(),
+                },
+                {
+                    let mut p = provenance(
+                        ProvenanceSource::Computed,
+                        timestamp,
+                        Some(magnitude),
+                        [format!("macro_event:{}", e.event_id)],
+                    );
+                    p.inputs
+                        .extend(attribution_inputs("sector_wide", "sector"));
+                    p
+                },
+            )
+        })
+        .collect()
+}
+
+fn is_thematic_catalyst(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "thematic_catalyst"
+            | "sector_catalyst"
+            | "policy_catalyst"
+            | "earnings_catalyst"
+            | "macro_catalyst"
+    )
+}
+
 pub fn broker_events_from_delta(
     delta: &crate::graph::temporal::BrokerTemporalDelta,
     timestamp: OffsetDateTime,

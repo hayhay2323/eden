@@ -460,7 +460,16 @@ pub async fn run() {
                 &previous_agent_snapshot.macro_events,
             );
         }
-        crate::pipeline::signals::detect_propagation_absences(&mut event_snapshot, &dim_snapshot);
+        let sector_map: std::collections::HashMap<_, _> = store
+            .stocks
+            .iter()
+            .filter_map(|(sym, stock)| stock.sector_id.as_ref().map(|s| (sym.clone(), s.clone())))
+            .collect();
+        crate::pipeline::signals::detect_propagation_absences(
+            &mut event_snapshot,
+            &dim_snapshot,
+            &sector_map,
+        );
         let derived_signal_snapshot = DerivedSignalSnapshot::compute(
             &dim_snapshot,
             &graph_insights,

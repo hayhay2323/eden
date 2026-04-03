@@ -29,6 +29,10 @@ mod observations;
 mod types;
 
 // Re-export attribution types from types.rs (previously in events.rs, now rebuilt)
+pub use events::broker_events_from_delta;
+pub use events::catalyst_events_from_macro_events;
+pub(crate) use events::detect_propagation_absences;
+pub(crate) use events::enrich_attribution_with_evidence;
 pub use types::{
     event_driver_kind, event_propagation_scope, EventDriverKind, EventPropagationScope,
 };
