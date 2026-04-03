@@ -1,8 +1,8 @@
-use super::*;
-use crate::action::workflow::{ActionExecutionPolicy, ActionGovernanceContract};
 use super::attention::{build_sector_flows, build_wake_state};
 use super::builders::build_broker_state;
 use super::shared::extract_symbols;
+use super::*;
+use crate::action::workflow::{ActionExecutionPolicy, ActionGovernanceContract};
 use crate::ontology::{
     ActionDirection, ActionNodeStage, BackwardCause, CausalContestState, Market,
     ProvenanceMetadata, ProvenanceSource, WorldLayer,
@@ -103,6 +103,7 @@ fn base_snapshot(symbols: Vec<AgentSymbolState>, bias: &str) -> AgentSnapshot {
         notices: vec![],
         active_structures: vec![],
         recent_transitions: vec![],
+        investigation_selections: vec![],
         sector_flows: vec![],
         symbols,
         events: vec![],
@@ -173,6 +174,31 @@ fn trending_snapshot() -> AgentSnapshot {
     snapshot
 }
 
+fn sample_investigation_selection(
+    symbol: &str,
+    family_label: &str,
+    attention_hint: &str,
+) -> InvestigationSelection {
+    InvestigationSelection {
+        investigation_id: format!("investigation:{symbol}"),
+        hypothesis_id: format!("hypothesis:{symbol}"),
+        runner_up_hypothesis_id: None,
+        provenance: ProvenanceMetadata::new(ProvenanceSource::Computed, OffsetDateTime::UNIX_EPOCH)
+            .with_trace_id(format!("investigation:{symbol}")),
+        scope: crate::ontology::ReasoningScope::Symbol(crate::ontology::Symbol(symbol.into())),
+        title: format!("{symbol} — {family_label}"),
+        family_key: family_label.to_ascii_lowercase().replace(' ', "_"),
+        family_label: family_label.into(),
+        confidence: dec!(0.82),
+        confidence_gap: dec!(0.21),
+        priority_score: dec!(0.78),
+        attention_hint: attention_hint.into(),
+        rationale: format!("{symbol} is leading in {family_label}"),
+        review_reason_code: None,
+        notes: vec![format!("family={family_label}")],
+    }
+}
+
 #[test]
 fn build_broker_state_detects_entries_exits_and_side_switches() {
     let previous = AgentBrokerState {
@@ -237,6 +263,7 @@ fn extract_symbols_finds_hk_and_us_tokens() {
 #[test]
 fn wake_state_prefers_current_tick_transitions() {
     let wake = build_wake_state(
+        LiveMarket::Hk,
         10,
         &[AgentNotice {
             notice_id: "n1".into(),
@@ -356,9 +383,14 @@ fn tool_catalog_includes_core_queries() {
         compat_query_allowlist().len(),
         "compat allowlist and compat catalog should stay in sync"
     );
-    let names = catalog.iter().map(|item| item.name.as_str()).collect::<Vec<_>>();
-    assert!(names.iter().position(|item| *item == "recommendations")
-        < names.iter().position(|item| *item == "active_structures"));
+    let names = catalog
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        names.iter().position(|item| *item == "recommendations")
+            < names.iter().position(|item| *item == "active_structures")
+    );
 }
 
 #[test]
@@ -400,6 +432,7 @@ fn wake_suggested_tools_prefer_primary_surfaces_before_compat_queries() {
         latest_events: vec![],
     }];
     let wake = build_wake_state(
+        LiveMarket::Hk,
         10,
         &[],
         &[AgentTransition {
@@ -436,8 +469,10 @@ fn wake_suggested_tools_prefer_primary_surfaces_before_compat_queries() {
     assert!(names.contains(&"market_session"));
     assert!(names.contains(&"symbol_contract"));
     assert!(names.contains(&"sector_flow"));
-    assert!(names.iter().position(|item| *item == "transitions_since")
-        < names.iter().position(|item| *item == "symbol_contract"));
+    assert!(
+        names.iter().position(|item| *item == "transitions_since")
+            < names.iter().position(|item| *item == "symbol_contract")
+    );
 }
 
 #[test]
@@ -477,6 +512,7 @@ fn execute_tool_reads_symbol_contract() {
         notices: vec![],
         active_structures: vec![],
         recent_transitions: vec![],
+        investigation_selections: vec![],
         sector_flows: vec![],
         symbols: vec![symbol_state("700.HK", "Technology", dec!(0.4))],
         events: vec![],
@@ -503,6 +539,41 @@ fn execute_tool_reads_symbol_contract() {
     match output {
         AgentToolOutput::SymbolContract(state) => assert_eq!(state.symbol, "700.HK"),
         other => panic!("expected symbol contract, got {other:?}"),
+    }
+}
+
+#[test]
+fn execute_tool_reads_investigations() {
+    let mut snapshot = base_snapshot(
+        vec![symbol_state("700.HK", "Technology", dec!(0.4))],
+        "neutral",
+    );
+    snapshot.investigation_selections = vec![sample_investigation_selection(
+        "700.HK",
+        "Peer Relay",
+        "review",
+    )];
+
+    let output = execute_tool(
+        &snapshot,
+        None,
+        &AgentToolRequest {
+            tool: "investigations".into(),
+            symbol: Some("700.HK".into()),
+            sector: None,
+            since_tick: None,
+            limit: None,
+        },
+    )
+    .expect("investigations");
+
+    match output {
+        AgentToolOutput::Investigations(items) => {
+            assert!(!items.items.is_empty());
+            assert_eq!(items.items[0].object_id, "700.HK");
+            assert!(items.items[0].summary.contains("queued for review_desk"));
+        }
+        other => panic!("expected investigations, got {other:?}"),
     }
 }
 
@@ -543,6 +614,7 @@ fn execute_tool_reads_market_session_contract() {
         notices: vec![],
         active_structures: vec![],
         recent_transitions: vec![],
+        investigation_selections: vec![],
         sector_flows: vec![],
         symbols: vec![symbol_state("700.HK", "Technology", dec!(0.4))],
         events: vec![],
@@ -560,6 +632,8 @@ fn execute_tool_reads_market_session_contract() {
         active_thread_count: 0,
         focus_symbols: vec!["700.HK".into()],
         active_threads: vec![],
+        current_investigations: vec![],
+        current_judgments: vec![],
         recent_turns: vec![],
     };
 
@@ -622,6 +696,7 @@ fn execute_tool_reads_macro_event_contracts() {
         notices: vec![],
         active_structures: vec![],
         recent_transitions: vec![],
+        investigation_selections: vec![],
         sector_flows: vec![],
         symbols: vec![],
         events: vec![],
@@ -713,6 +788,7 @@ fn execute_tool_reads_graph_macro_event_candidates() {
         notices: vec![],
         active_structures: vec![],
         recent_transitions: vec![],
+        investigation_selections: vec![],
         sector_flows: vec![],
         symbols: vec![],
         events: vec![],
@@ -806,6 +882,7 @@ fn execute_tool_reads_graph_knowledge_links() {
         notices: vec![],
         active_structures: vec![],
         recent_transitions: vec![],
+        investigation_selections: vec![],
         sector_flows: vec![],
         symbols: vec![],
         events: vec![],
@@ -883,6 +960,7 @@ fn execute_tool_reads_symbol_state() {
         notices: vec![],
         active_structures: vec![],
         recent_transitions: vec![],
+        investigation_selections: vec![],
         sector_flows: vec![],
         symbols: vec![symbol_state("700.HK", "Technology", dec!(0.4))],
         events: vec![],
@@ -953,6 +1031,7 @@ fn build_briefing_uses_suggested_tool_previews() {
         notices: vec![],
         active_structures: vec![],
         recent_transitions: vec![],
+        investigation_selections: vec![],
         sector_flows: vec![],
         symbols: vec![symbol_state("9988.HK", "Technology", dec!(0.7))],
         events: vec![],
@@ -970,6 +1049,36 @@ fn build_briefing_uses_suggested_tool_previews() {
         .iter()
         .any(|item| item.tool == "symbol_state"));
     assert!(briefing.spoken_message.unwrap().contains("9988.HK"));
+}
+
+#[test]
+fn build_briefing_carries_current_investigations() {
+    let mut snapshot = base_snapshot(
+        vec![symbol_state("9988.HK", "Technology", dec!(0.7))],
+        "neutral",
+    );
+    snapshot.wake.should_speak = true;
+    snapshot.wake.suggested_tools = vec![AgentSuggestedToolCall {
+        tool: "investigations".into(),
+        args: json!({"limit":5}),
+        reason: "inspect".into(),
+    }];
+    snapshot.investigation_selections = vec![sample_investigation_selection(
+        "9988.HK",
+        "Peer Relay",
+        "review",
+    )];
+
+    let briefing = build_briefing(&snapshot);
+    assert!(briefing
+        .current_investigations
+        .iter()
+        .any(|item| item.object_id == "9988.HK"));
+    assert!(briefing
+        .headline
+        .as_deref()
+        .unwrap_or_default()
+        .contains("queued for review_desk"));
 }
 
 #[test]
@@ -1030,6 +1139,7 @@ fn build_session_creates_active_thread_for_focus_symbol() {
             summary: "Tencent action review -> enter".into(),
             transition_reason: None,
         }],
+        investigation_selections: vec![],
         sector_flows: vec![],
         symbols: vec![symbol_state("700.HK", "Technology", dec!(0.6))],
         events: vec![],
@@ -1046,6 +1156,106 @@ fn build_session_creates_active_thread_for_focus_symbol() {
     assert_eq!(session.active_threads[0].symbol, "700.HK");
     assert_eq!(session.active_threads[0].status, "escalated");
     assert_eq!(session.recent_turns.len(), 1);
+}
+
+#[test]
+fn build_session_creates_thread_from_investigation_without_judgment() {
+    let snapshot = base_snapshot(
+        vec![symbol_state("700.HK", "Technology", dec!(0.6))],
+        "neutral",
+    );
+    let briefing = AgentBriefing {
+        tick: 11,
+        timestamp: "2026-03-23T00:00:00Z".into(),
+        market: LiveMarket::Hk,
+        should_speak: true,
+        priority: dec!(0.8),
+        headline: Some("700.HK is queued for review_desk in Peer Relay".into()),
+        summary: vec!["700.HK is queued for review_desk in Peer Relay".into()],
+        spoken_message: None,
+        focus_symbols: vec!["700.HK".into()],
+        reasons: vec![],
+        current_investigations: vec![AgentInvestigation {
+            rank: 1,
+            object_kind: "symbol".into(),
+            object_id: "700.HK".into(),
+            title: "700.HK — Peer Relay".into(),
+            summary: "700.HK is queued for review_desk in Peer Relay".into(),
+            priority: dec!(0.78),
+            attention_hint: "review".into(),
+            family_key: Some("peer_relay".into()),
+            family_label: Some("Peer Relay".into()),
+            rationale: Some("700.HK is leading in Peer Relay".into()),
+            review_reason_code: None,
+            hypothesis_id: Some("hypothesis:700.HK".into()),
+            runner_up_hypothesis_id: None,
+            backward_investigation_id: None,
+            recommendation_id: None,
+            reasons: vec!["700.HK is leading in Peer Relay".into()],
+            reference_symbols: vec!["700.HK".into()],
+        }],
+        current_judgments: vec![],
+        executed_tools: vec![],
+    };
+
+    let session = build_session(&snapshot, &briefing, None);
+    assert_eq!(session.active_thread_count, 1);
+    assert_eq!(session.active_threads[0].symbol, "700.HK");
+    assert_eq!(session.active_threads[0].status, "escalated");
+    assert_eq!(
+        session.active_threads[0].headline.as_deref(),
+        Some("700.HK is queued for review_desk in Peer Relay")
+    );
+    assert_eq!(session.active_threads[0].workflow_stage, None);
+    assert_eq!(
+        session.active_threads[0].workflow_next_step.as_deref(),
+        Some("review_desk")
+    );
+}
+
+#[test]
+fn build_session_surfaces_active_position_workflow_stage() {
+    let mut state = symbol_state("700.HK", "Technology", dec!(0.6));
+    state.active_position = Some(ActionNode {
+        workflow_id: "wf:700.HK".into(),
+        symbol: crate::ontology::Symbol("700.HK".into()),
+        market: crate::ontology::Market::Hk,
+        sector: Some("Technology".into()),
+        stage: ActionNodeStage::Monitoring,
+        direction: crate::ontology::ActionDirection::Long,
+        entry_confidence: dec!(0.8),
+        current_confidence: dec!(0.7),
+        entry_price: Some(dec!(300)),
+        pnl: Some(dec!(12.5)),
+        age_ticks: 4,
+        degradation_score: None,
+        exit_forming: false,
+    });
+    let snapshot = base_snapshot(vec![state], "neutral");
+    let briefing = AgentBriefing {
+        tick: 11,
+        timestamp: "2026-03-23T00:00:00Z".into(),
+        market: LiveMarket::Hk,
+        should_speak: true,
+        priority: dec!(0.8),
+        headline: Some("700.HK active".into()),
+        summary: vec!["700.HK active".into()],
+        spoken_message: None,
+        focus_symbols: vec!["700.HK".into()],
+        reasons: vec![],
+        current_investigations: vec![],
+        current_judgments: vec![],
+        executed_tools: vec![],
+    };
+    let session = build_session(&snapshot, &briefing, None);
+    assert_eq!(
+        session.active_threads[0].workflow_stage.as_deref(),
+        Some("monitoring")
+    );
+    assert_eq!(
+        session.active_threads[0].workflow_next_step.as_deref(),
+        Some("monitor")
+    );
 }
 
 #[test]
@@ -1072,8 +1282,16 @@ fn execute_tool_reads_session_threads() {
             last_transition: Some("enter".into()),
             current_leader: None,
             invalidation_status: None,
+            workflow_stage: None,
+            workflow_next_step: None,
+            execution_policy: None,
+            governance_reason: None,
+            blocked_reason: None,
+            unlock_condition: None,
             reasons: vec!["reason".into()],
         }],
+        current_investigations: vec![],
+        current_judgments: vec![],
         recent_turns: vec![],
     };
     let snapshot = AgentSnapshot {
@@ -1111,6 +1329,7 @@ fn execute_tool_reads_session_threads() {
         notices: vec![],
         active_structures: vec![],
         recent_transitions: vec![],
+        investigation_selections: vec![],
         sector_flows: vec![],
         symbols: vec![symbol_state("700.HK", "Technology", dec!(0.4))],
         events: vec![],
@@ -1269,6 +1488,73 @@ fn recommendations_allow_confirmed_short_entry_in_risk_off() {
 
     assert_eq!(recommendation.action, "enter");
     assert_eq!(recommendation.bias, "short");
+}
+
+#[test]
+fn recommendations_do_not_count_directionless_entered_brokers_as_short_confirmation() {
+    let mut state = symbol_state("9988.HK", "Technology", dec!(-0.11));
+    state.structure = Some(AgentStructureState {
+        symbol: "9988.HK".into(),
+        sector: Some("Technology".into()),
+        setup_id: Some("setup:9988.HK:review".into()),
+        title: "Short 9988.HK".into(),
+        action: "review".into(),
+        status: Some("strengthening".into()),
+        age_ticks: Some(10),
+        status_streak: Some(2),
+        confidence: dec!(0.11),
+        confidence_change: Some(dec!(0.02)),
+        confidence_gap: Some(dec!(1)),
+        transition_reason: None,
+        contest_state: None,
+        current_leader: None,
+        leader_streak: None,
+        leader_transition_summary: None,
+        thesis_family: Some("Directed Flow".into()),
+        action_expectancies: action_expectancies(Some(dec!(0.025)), Some(dec!(-0.03))),
+        expected_net_alpha: Some(dec!(0.04)),
+        alpha_horizon: Some("intraday:10t".into()),
+        invalidation_rule: Some("depth no longer confirms".into()),
+    });
+    state.depth = Some(AgentDepthState {
+        imbalance: dec!(-0.2),
+        imbalance_change: dec!(-0.1),
+        bid_best_ratio: dec!(0.1),
+        bid_best_ratio_change: dec!(0),
+        ask_best_ratio: dec!(0.2),
+        ask_best_ratio_change: dec!(0.1),
+        bid_top3_ratio: dec!(0.1),
+        bid_top3_ratio_change: dec!(0),
+        ask_top3_ratio: dec!(0.3),
+        ask_top3_ratio_change: dec!(0.1),
+        spread: Some(dec!(0.01)),
+        spread_change: Some(dec!(0)),
+        bid_total_volume: 80,
+        ask_total_volume: 100,
+        bid_total_volume_change: 0,
+        ask_total_volume_change: 10,
+        summary: "ask heavy".into(),
+    });
+    state.brokers = Some(AgentBrokerState {
+        current: vec![AgentBrokerInstitution {
+            institution_id: 1,
+            name: "BrokerX".into(),
+            bid_positions: vec![101],
+            ask_positions: vec![],
+            seat_count: 1,
+        }],
+        entered: vec!["BrokerX".into()],
+        exited: vec![],
+        switched_to_bid: vec![],
+        switched_to_ask: vec![],
+    });
+
+    let snapshot = base_snapshot(vec![state], "risk_off");
+    let recommendations = build_recommendations(&snapshot, None);
+    let recommendation = &recommendations.items[0];
+
+    assert_eq!(recommendation.bias, "short");
+    assert_eq!(recommendation.action, "review");
 }
 
 #[test]
@@ -1491,6 +1777,8 @@ fn recommendations_compose_lens_fragments_for_hk_symbol() {
         symbol: Some("700.HK".into()),
         magnitude: dec!(0.72),
         summary: "broker replenished quickly".into(),
+        age_secs: None,
+        freshness: None,
     }];
 
     let mut snapshot = base_snapshot(vec![state], "neutral");
@@ -1540,11 +1828,19 @@ fn recommendations_compose_lens_fragments_for_hk_symbol() {
 
     assert!(recommendation.why.contains("偵測到1次冰山回補"));
     assert!(recommendation.why.contains("結構 strengthening (streak=3)"));
-    assert!(recommendation.why.contains("主因: institutional flow dominates (連續4t領先)"));
+    assert!(recommendation
+        .why
+        .contains("主因: institutional flow dominates (連續4t領先)"));
     assert!(recommendation.why.contains("歷史先驗: Directed Flow"));
-    assert_eq!(recommendation.invalidation_rule.as_deref(), Some("冰山回補停止"));
+    assert_eq!(
+        recommendation.invalidation_rule.as_deref(),
+        Some("冰山回補停止")
+    );
     assert_eq!(recommendation.primary_lens.as_deref(), Some("iceberg"));
-    assert_eq!(recommendation.supporting_lenses, vec!["structural", "causal", "lineage_prior"]);
+    assert_eq!(
+        recommendation.supporting_lenses,
+        vec!["structural", "causal", "lineage_prior"]
+    );
 }
 
 #[test]
@@ -1773,6 +2069,7 @@ fn recommendation_resolution_marks_wait_as_miss_when_follow_wins() {
         fragility: vec![],
         transition: None,
         thesis_family: Some("Directed Flow".into()),
+        matched_success_pattern_signature: None,
         state_transition: None,
         best_action: "wait".into(),
         action_expectancies: action_expectancies(Some(dec!(0.03)), Some(dec!(-0.02))),
@@ -1787,7 +2084,8 @@ fn recommendation_resolution_marks_wait_as_miss_when_follow_wins() {
         governance: ActionGovernanceContract::for_recommendation(
             ActionExecutionPolicy::ReviewRequired,
         ),
-        governance_reason_code: crate::action::workflow::ActionGovernanceReasonCode::SeverityRequiresReview,
+        governance_reason_code:
+            crate::action::workflow::ActionGovernanceReasonCode::SeverityRequiresReview,
         governance_reason: "execution requires review before it can advance".into(),
     };
 
@@ -1831,6 +2129,7 @@ fn recommendation_and_watchlist_keep_governance_metadata() {
         fragility: vec![],
         transition: None,
         thesis_family: Some("Flow".into()),
+        matched_success_pattern_signature: None,
         state_transition: None,
         best_action: "follow".into(),
         action_expectancies: AgentActionExpectancies::default(),
@@ -1884,6 +2183,7 @@ fn recommendation_and_watchlist_keep_governance_metadata() {
         do_not: recommendation.do_not.clone(),
         recommendation_id: recommendation.recommendation_id.clone(),
         thesis_family: recommendation.thesis_family.clone(),
+        matched_success_pattern_signature: recommendation.matched_success_pattern_signature.clone(),
         state_transition: recommendation.state_transition.clone(),
         best_action: recommendation.best_action.clone(),
         action_expectancies: recommendation.action_expectancies.clone(),
@@ -1928,10 +2228,7 @@ fn recommendation_and_watchlist_keep_governance_metadata() {
         ActionGovernanceContract::for_recommendation(ActionExecutionPolicy::ReviewRequired);
     recommendation.governance_reason_code =
         crate::action::workflow::ActionGovernanceReasonCode::SeverityRequiresReview;
-    assert_eq!(
-        recommendation.governance_contract().review_required,
-        true
-    );
+    assert_eq!(recommendation.governance_contract().review_required, true);
     recommendation.governance_reason = crate::agent::governance_reason_for_signal_action(
         recommendation.best_action.as_str(),
         recommendation.severity.as_str(),
@@ -2001,6 +2298,7 @@ fn journal_update_backfills_recommendation_resolution() {
             fragility: vec![],
             transition: None,
             thesis_family: None,
+            matched_success_pattern_signature: None,
             state_transition: None,
             best_action: "wait".into(),
             action_expectancies: action_expectancies(Some(dec!(0.03)), Some(dec!(-0.02))),

@@ -4,7 +4,7 @@
 - [x] resolved_tick/net_return 語義統一 (`src/temporal/lineage/outcomes.rs`)
 - [x] 刪除 `evaluation/` 死碼分叉
 - [x] `RwLock` unwrap → recoverable handling (`runtime.rs`, `graph.rs`)
-- [ ] broker_confirms_bias short 方向 (`agent/recommendations/symbol.rs`)
+- [x] broker_confirms_bias short 方向 (`agent/recommendations/symbol.rs`)
 - [ ] governance_reason_code 統一 (`agent/types/recommendation.rs`)
 - [ ] `query.rs` impl block 斷裂
 - [ ] confidence 二次 boost (`us/pipeline/reasoning.rs`)
@@ -35,3 +35,4 @@
 - 2026-04-03 | resolved_tick/net_return 語義統一 | `src/temporal/lineage/outcomes.rs`, `src/runtime_loop.rs` | adaptive outcome 改成以 peak tick 為邊界重算 outcome，確保 `resolved_tick` 與 `net_return`/`return_pct` 同 horizon；同時修正 runtime loop 測試以移除對 Tokio `test-util` 的隱性依賴，讓驗證鏈可在當前配置下跑通。
 - 2026-04-03 | 刪除 `evaluation/` 死碼分叉 | `src/temporal/lineage/outcomes/evaluation/context.rs`, `src/temporal/lineage/outcomes/evaluation/outcome.rs` | 移除未被編譯路徑使用的重複 outcome evaluation 實作，避免未來修改誤落在錯誤分支。
 - 2026-04-03 | `RwLock` unwrap → recoverable handling | `src/ontology/store/object_store.rs`, `src/graph/graph.rs`, `src/hk/runtime.rs`, `src/hk/runtime/startup.rs`, `src/us/runtime/startup.rs` | 在 `ObjectStore` 提供 poisoned `RwLock` 恢復入口，並把 graph/HK/US 活躍路徑改成走單一恢復邏輯，避免 poisoned lock 直接把 runtime 打崩。
+- 2026-04-03 | `broker_confirms_bias` short 方向修正 | `src/agent/recommendations/symbol.rs`, `src/agent/tests.rs` | broker confirmation 改成只把帶有對應方向持倉的 newly-entered broker 算入確認，不再把 `entered` 本身當成 short confirmation；補了回歸測試保證 directionless entered broker 不會直接觸發 short entry。

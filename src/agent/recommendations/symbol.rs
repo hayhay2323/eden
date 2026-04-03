@@ -1,7 +1,7 @@
-use super::*;
 use super::decision_model::{
     expectancy_for_action, recommendation_best_action, recommendation_decision_model,
 };
+use super::*;
 use crate::agent::{
     governance_for_signal_action, governance_reason_code_for_signal_action,
     governance_reason_for_signal_action,
@@ -50,6 +50,7 @@ pub(super) fn build_symbol_recommendation(
         .structure
         .as_ref()
         .and_then(|item| item.thesis_family.clone());
+    let matched_success_pattern_signature = super::shared::matched_success_pattern_signature(state);
     let state_transition = current_transition
         .map(|item| item.summary.clone())
         .or_else(|| {
@@ -69,6 +70,10 @@ pub(super) fn build_symbol_recommendation(
                 .as_ref()
                 .and_then(|item| item.rules.first().cloned())
         });
+    let gate_reason = super::shared::multi_horizon_gate_reason(state);
+    let policy_primary = super::shared::policy_primary(state);
+    let policy_reason = super::shared::policy_reason(state);
+    let review_reason_code = super::shared::review_reason_code(state);
 
     if matches!(structure_action, Some("observe"))
         && current_transition.is_none()
@@ -178,6 +183,15 @@ pub(super) fn build_symbol_recommendation(
     if broker_confirms {
         why_parts.push("broker flow confirms".into());
     }
+    if let Some(primary) = &policy_primary {
+        why_parts.push(format!("policy={primary}"));
+    }
+    if let Some(reason) = &gate_reason {
+        why_parts.push(format!("gate={reason}"));
+    }
+    if let Some(signature) = &matched_success_pattern_signature {
+        why_parts.push(format!("pattern={signature}"));
+    }
 
     let mut watch_next = Vec::new();
     if matches!(status.as_deref(), Some("strengthening")) && streak < 2 {
@@ -191,6 +205,9 @@ pub(super) fn build_symbol_recommendation(
     }
     if current_transition.is_some() {
         watch_next.push("看下一個 tick 是否有 follow-through".into());
+    }
+    if let Some(reason) = &gate_reason {
+        watch_next.insert(0, format!("等 multi-horizon gate 解鎖: {reason}"));
     }
     dedupe_strings(&mut watch_next);
     watch_next.truncate(3);
@@ -211,6 +228,9 @@ pub(super) fn build_symbol_recommendation(
     if invalidated {
         do_not.push("不要把失效結構當成新進場".into());
     }
+    if let Some(reason) = &policy_reason {
+        do_not.insert(0, reason.clone());
+    }
     dedupe_strings(&mut do_not);
     do_not.truncate(3);
 
@@ -224,6 +244,15 @@ pub(super) fn build_symbol_recommendation(
     }
     if confidence < Decimal::new(4, 2) {
         fragility.push("confidence 偏低".into());
+    }
+    if let Some(code) = &review_reason_code {
+        fragility.insert(0, format!("review_reason_code={code}"));
+    }
+    if let Some(reason) = &policy_reason {
+        fragility.insert(0, format!("policy_gate: {reason}"));
+    }
+    if let Some(reason) = &gate_reason {
+        fragility.insert(0, format!("multi_horizon_gate: {reason}"));
     }
     dedupe_strings(&mut fragility);
     fragility.truncate(3);
@@ -350,6 +379,7 @@ pub(super) fn build_symbol_recommendation(
         fragility,
         transition: current_transition.map(|item| item.summary.clone()),
         thesis_family,
+        matched_success_pattern_signature,
         state_transition,
         best_action,
         action_expectancies: decision_model.final_expectancies.clone(),
@@ -426,7 +456,8 @@ fn lens_hierarchy(bundle: &LensBundle) -> (Option<String>, Vec<String>) {
         .iter()
         .filter_map(|item| {
             let lens_name = item.lens_name.trim();
-            (!lens_name.is_empty() && seen.insert(lens_name.to_string())).then(|| lens_name.to_string())
+            (!lens_name.is_empty() && seen.insert(lens_name.to_string()))
+                .then(|| lens_name.to_string())
         })
         .collect::<Vec<_>>();
     let primary = lenses.first().cloned();
@@ -678,9 +709,22 @@ fn broker_confirms_bias(state: &AgentSymbolState, bias: &str) -> bool {
         return false;
     };
 
+    let entered_supports = |supports: fn(&AgentBrokerInstitution) -> bool| {
+        brokers
+            .current
+            .iter()
+            .any(|institution| brokers.entered.contains(&institution.name) && supports(institution))
+    };
+
     match bias {
-        "long" => !brokers.switched_to_bid.is_empty() || !brokers.entered.is_empty(),
-        "short" => !brokers.switched_to_ask.is_empty() || !brokers.entered.is_empty(),
+        "long" => {
+            !brokers.switched_to_bid.is_empty()
+                || entered_supports(|institution| !institution.bid_positions.is_empty())
+        }
+        "short" => {
+            !brokers.switched_to_ask.is_empty()
+                || entered_supports(|institution| !institution.ask_positions.is_empty())
+        }
         _ => false,
     }
 }

@@ -7,7 +7,8 @@
 2026-04-03 note: 刪除 `src/temporal/lineage/outcomes/evaluation/context.rs` 與 `src/temporal/lineage/outcomes/evaluation/outcome.rs` 兩個未使用的重複實作，只保留 `outcomes/evaluation.rs` 作為單一路徑。驗證已通過：`cargo check --lib -q` 與 `cargo test --lib adaptive_peak_tick --jobs 1`。
 - [x] P0-3: RwLock unwrap
 2026-04-03 note: 在 `ObjectStore` 新增 `knowledge_read/knowledge_write` poisoned lock 恢復入口，並把 `graph.rs`、`hk/runtime.rs`、`hk/runtime/startup.rs`、`us/runtime/startup.rs` 的活躍路徑全部改成統一恢復邏輯。驗證已通過：`cargo check --lib -q`、`cargo test --lib knowledge_read_recovers --jobs 1`、`cargo test --lib knowledge_write_recovers --jobs 1`。
-- [ ] P0-4: broker_confirms_bias short
+- [x] P0-4: broker_confirms_bias short
+2026-04-03 note: `broker_confirms_bias` 不再把 `entered` 本身視為 short confirmation；只有 `switched_to_ask` 或 newly-entered broker 確實帶有 ask positions 才算空方確認。驗證已通過：`cargo check --lib -q`、`cargo test --lib recommendations_allow_confirmed_short_entry_in_risk_off --jobs 1`、`cargo test --lib recommendations_do_not_count_directionless_entered_brokers_as_short_confirmation --jobs 1`。
 - [ ] P0-5: governance_reason_code
 - [ ] P0-6: market_why_not_single_name
 - [ ] P0-7: query.rs impl block
@@ -30,3 +31,4 @@
 2026-04-03 | P0-1 完成 | `src/temporal/lineage/outcomes.rs`, `src/runtime_loop.rs`, `BACKLOG.md`, `PROGRESS.md` | adaptive outcome 現在以 peak tick 為 resolved horizon 重新計算 outcome；runtime loop 測試移除 Tokio `test-util` 依賴。驗證通過：`cargo check --lib -q`、`cargo test --lib adaptive_peak_tick --jobs 1`。
 2026-04-03 | P0-2 完成 | `src/temporal/lineage/outcomes/evaluation/context.rs`, `src/temporal/lineage/outcomes/evaluation/outcome.rs`, `BACKLOG.md`, `PROGRESS.md` | 移除 dead fork evaluation 實作，避免相同行為在兩套檔案上分叉。驗證通過：`cargo check --lib -q`、`cargo test --lib adaptive_peak_tick --jobs 1`。
 2026-04-03 | P0-3 完成 | `src/ontology/store/object_store.rs`, `src/graph/graph.rs`, `src/hk/runtime.rs`, `src/hk/runtime/startup.rs`, `src/us/runtime/startup.rs`, `BACKLOG.md`, `PROGRESS.md` | poisoned knowledge lock 改成統一恢復入口，graph/HK/US 活躍路徑不再直接 `unwrap()`。驗證通過：`cargo check --lib -q`、`cargo test --lib knowledge_read_recovers --jobs 1`、`cargo test --lib knowledge_write_recovers --jobs 1`。
+2026-04-03 | P0-4 完成 | `src/agent/recommendations/symbol.rs`, `src/agent/tests.rs`, `BACKLOG.md`, `PROGRESS.md` | short broker confirmation 改成方向敏感，不再把 directionless `entered` broker 視為空方確認。驗證通過：`cargo check --lib -q`、`cargo test --lib recommendations_allow_confirmed_short_entry_in_risk_off --jobs 1`、`cargo test --lib recommendations_do_not_count_directionless_entered_brokers_as_short_confirmation --jobs 1`。
