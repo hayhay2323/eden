@@ -3,7 +3,8 @@
 ## P0
 - [x] P0-1: resolved_tick/net_return 語義混亂
 2026-04-03 note: `src/temporal/lineage/outcomes.rs` 改成先找 peak tick，再以 bounded records 重算 outcome，避免 `resolved_tick` 與 `net_return` 來自不同 horizon。驗證已通過：`cargo check --lib -q` 與 `cargo test --lib adaptive_peak_tick --jobs 1`。
-- [ ] P0-2: evaluation/ 死碼分叉
+- [x] P0-2: evaluation/ 死碼分叉
+2026-04-03 note: 刪除 `src/temporal/lineage/outcomes/evaluation/context.rs` 與 `src/temporal/lineage/outcomes/evaluation/outcome.rs` 兩個未使用的重複實作，只保留 `outcomes/evaluation.rs` 作為單一路徑。驗證已通過：`cargo check --lib -q` 與 `cargo test --lib adaptive_peak_tick --jobs 1`。
 - [ ] P0-3: RwLock unwrap
 - [ ] P0-4: broker_confirms_bias short
 - [ ] P0-5: governance_reason_code
@@ -26,3 +27,4 @@
 ## Notes
 2026-04-03 | 初始化工作流文件 | `CODEX.md`, `BACKLOG.md`, `PROGRESS.md` | 建立持續開發循環與 review fix 追蹤格式。
 2026-04-03 | P0-1 完成 | `src/temporal/lineage/outcomes.rs`, `src/runtime_loop.rs`, `BACKLOG.md`, `PROGRESS.md` | adaptive outcome 現在以 peak tick 為 resolved horizon 重新計算 outcome；runtime loop 測試移除 Tokio `test-util` 依賴。驗證通過：`cargo check --lib -q`、`cargo test --lib adaptive_peak_tick --jobs 1`。
+2026-04-03 | P0-2 完成 | `src/temporal/lineage/outcomes/evaluation/context.rs`, `src/temporal/lineage/outcomes/evaluation/outcome.rs`, `BACKLOG.md`, `PROGRESS.md` | 移除 dead fork evaluation 實作，避免相同行為在兩套檔案上分叉。驗證通過：`cargo check --lib -q`、`cargo test --lib adaptive_peak_tick --jobs 1`。
