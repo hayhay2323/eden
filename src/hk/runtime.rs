@@ -201,6 +201,7 @@ pub async fn run() {
         }
     }
     let mut hidden_force_state = eden::pipeline::residual::HiddenForceVerificationState::default();
+    let mut absence_memory = eden::pipeline::reasoning::AbsenceMemory::default();
 
     loop {
         let mut rest_updated = false;
@@ -576,7 +577,7 @@ pub async fn run() {
             convergence_components: &deep_reasoning_decision.convergence_scores,
             market_regime: &deep_reasoning_decision.market_regime,
             world_state: None,
-            absence_memory: &eden::pipeline::reasoning::AbsenceMemory::default(),
+            absence_memory: &absence_memory,
             family_boost: &family_boost,
         };
         let mut reasoning_snapshot = ReasoningSnapshot::derive_with_diffusion(
@@ -636,6 +637,22 @@ pub async fn run() {
                     .clamp(Decimal::ZERO, Decimal::ONE)
                     .round_dp(4);
             }
+        }
+
+        // Update absence memory for next tick
+        {
+            let absence_sectors = eden::pipeline::reasoning::propagation_absence_sectors(
+                &deep_reasoning_event_snapshot,
+            );
+            for sector in &absence_sectors {
+                absence_memory.record_absence(
+                    sector,
+                    "propagation",
+                    tick,
+                    deep_reasoning_decision.timestamp,
+                );
+            }
+            absence_memory.decay(deep_reasoning_decision.timestamp);
         }
 
         // Crystallize confirmed forces → attention boosts + emergent paths + graph edges

@@ -116,6 +116,8 @@ impl ReasoningSnapshot {
             derived_signals,
             &propagation_paths,
             family_gate.as_ref(),
+            ctx.absence_memory,
+            ctx.world_state,
         );
         let mut investigation_selections = derive_investigation_selections(decision, &hypotheses);
         let baseline_setups = derive_tactical_setups(
@@ -204,6 +206,8 @@ impl ReasoningSnapshot {
             derived_signals,
             &propagation_paths,
             family_gate.as_ref(),
+            ctx.absence_memory,
+            ctx.world_state,
         );
         let mut investigation_selections = derive_investigation_selections(decision, &hypotheses);
         let baseline_setups = derive_tactical_setups(
@@ -300,7 +304,7 @@ pub(crate) fn cap_observe_budget(mut setups: Vec<TacticalSetup>) -> Vec<Tactical
     non_observe
 }
 
-fn propagation_absence_sectors(events: &EventSnapshot) -> Vec<crate::ontology::objects::SectorId> {
+pub(crate) fn propagation_absence_sectors(events: &EventSnapshot) -> Vec<crate::ontology::objects::SectorId> {
     use crate::pipeline::signals::{MarketEventKind, SignalScope};
 
     events

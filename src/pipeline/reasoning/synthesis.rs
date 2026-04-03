@@ -97,6 +97,8 @@ pub(super) fn derive_hypotheses(
     derived_signals: &DerivedSignalSnapshot,
     propagation_paths: &[PropagationPath],
     family_gate: Option<&FamilyAlphaGate>,
+    absence_memory: &crate::pipeline::reasoning::AbsenceMemory,
+    world_state: Option<&crate::ontology::world::WorldStateSnapshot>,
 ) -> Vec<Hypothesis> {
     let mut scopes = events
         .events
@@ -135,8 +137,8 @@ pub(super) fn derive_hypotheses(
             &relevant_signals,
             &relevant_paths,
             family_gate,
-            &crate::pipeline::reasoning::AbsenceMemory::default(),
-            None,
+            absence_memory,
+            world_state,
             &scope,
         );
         if let Some(hypothesis) = derive_convergence_hypothesis(

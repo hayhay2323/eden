@@ -12,24 +12,27 @@ use crate::ontology::domain::{
     DerivedSignal, Event, Observation, ProvenanceMetadata, ProvenanceSource,
 };
 use crate::ontology::links::LinkSnapshot;
-use crate::ontology::objects::{InstitutionId, SectorId, Symbol};
+use crate::ontology::objects::{InstitutionId, SectorId, Symbol, ThemeId};
 use crate::temporal::buffer::TickHistory;
 
 use super::dimensions::{DimensionSnapshot, SymbolDimensions};
 
-#[path = "signals/types.rs"]
-mod types;
+#[path = "signals/derived.rs"]
+mod derived;
+#[path = "signals/events.rs"]
+mod events;
 #[path = "signals/helpers.rs"]
 mod helpers;
 #[path = "signals/observations.rs"]
 mod observations;
-#[path = "signals/events.rs"]
-mod events;
-#[path = "signals/derived.rs"]
-mod derived;
+#[path = "signals/types.rs"]
+mod types;
 
+// Re-export attribution types from types.rs (previously in events.rs, now rebuilt)
+pub use types::{
+    event_driver_kind, event_propagation_scope, EventDriverKind, EventPropagationScope,
+};
 use helpers::*;
-pub use events::broker_events_from_delta;
 pub use types::*;
 
 #[cfg(test)]
@@ -120,6 +123,7 @@ mod tests {
             world_state: WorldStateSnapshot {
                 timestamp: OffsetDateTime::UNIX_EPOCH,
                 entities: vec![],
+                vortices: vec![],
             },
             backward_reasoning: BackwardReasoningSnapshot {
                 timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -209,6 +213,7 @@ mod tests {
                 post_market: None,
             }],
             trade_activities: vec![],
+            intraday: vec![],
         };
 
         let snapshot = ObservationSnapshot::from_links(&links);
@@ -309,6 +314,7 @@ mod tests {
             order_books: vec![],
             quotes: vec![],
             trade_activities: vec![],
+            intraday: vec![],
         };
         let dimensions = DimensionSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -391,6 +397,7 @@ mod tests {
             order_books: vec![],
             quotes: vec![],
             trade_activities: vec![],
+            intraday: vec![],
         };
         let dimensions = DimensionSnapshot {
             timestamp: links.timestamp,
@@ -483,6 +490,13 @@ mod tests {
                     dividend_ratio_ttm: None,
                     amplitude: None,
                     five_minutes_change_rate: None,
+                    ytd_change_rate: None,
+                    five_day_change_rate: None,
+                    ten_day_change_rate: None,
+                    half_year_change_rate: None,
+                    total_market_value: None,
+                    capital_flow: None,
+                    change_rate: None,
                 },
                 CalcIndexObservation {
                     symbol: sym("B.HK"),
@@ -493,6 +507,13 @@ mod tests {
                     dividend_ratio_ttm: None,
                     amplitude: None,
                     five_minutes_change_rate: None,
+                    ytd_change_rate: None,
+                    five_day_change_rate: None,
+                    ten_day_change_rate: None,
+                    half_year_change_rate: None,
+                    total_market_value: None,
+                    capital_flow: None,
+                    change_rate: None,
                 },
                 CalcIndexObservation {
                     symbol: sym("C.HK"),
@@ -503,6 +524,13 @@ mod tests {
                     dividend_ratio_ttm: None,
                     amplitude: None,
                     five_minutes_change_rate: None,
+                    ytd_change_rate: None,
+                    five_day_change_rate: None,
+                    ten_day_change_rate: None,
+                    half_year_change_rate: None,
+                    total_market_value: None,
+                    capital_flow: None,
+                    change_rate: None,
                 },
             ],
             candlesticks: vec![],
@@ -519,6 +547,7 @@ mod tests {
             ],
             quotes: vec![],
             trade_activities: vec![],
+            intraday: vec![],
         };
         let dimensions = DimensionSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -654,5 +683,241 @@ mod tests {
             .events
             .iter()
             .any(|event| matches!(event.value.kind, MarketEventKind::MarketStressElevated)));
+    }
+
+    #[test]
+    fn isolated_symbol_pressure_does_not_force_sector_propagation() {
+        let history = empty_history();
+        let links = LinkSnapshot {
+            timestamp: OffsetDateTime::UNIX_EPOCH,
+            broker_queues: vec![],
+            calc_indexes: vec![],
+            candlesticks: vec![],
+            institution_activities: vec![],
+            cross_stock_presences: vec![],
+            capital_flows: vec![],
+            capital_flow_series: vec![],
+            capital_breakdowns: vec![],
+            market_temperature: None,
+            order_books: vec![],
+            quotes: vec![QuoteObservation {
+                symbol: sym("700.HK"),
+                last_done: dec!(350),
+                prev_close: dec!(348),
+                open: dec!(349),
+                high: dec!(351),
+                low: dec!(347),
+                volume: 100,
+                turnover: dec!(35000),
+                timestamp: OffsetDateTime::UNIX_EPOCH,
+                market_status: MarketStatus::Normal,
+                pre_market: None,
+                post_market: None,
+            }],
+            trade_activities: vec![],
+            intraday: vec![],
+        };
+        let dimensions = DimensionSnapshot {
+            timestamp: OffsetDateTime::UNIX_EPOCH,
+            dimensions: HashMap::new(),
+        };
+        let insights = GraphInsights {
+            pressures: vec![StockPressure {
+                symbol: sym("700.HK"),
+                net_pressure: dec!(0.7),
+                institution_count: 1,
+                buy_inst_count: 1,
+                sell_inst_count: 0,
+                pressure_delta: Decimal::ZERO,
+                pressure_duration: 1,
+                accelerating: false,
+            }],
+            rotations: vec![],
+            clusters: vec![],
+            conflicts: vec![],
+            inst_rotations: vec![],
+            inst_exoduses: vec![],
+            shared_holders: vec![],
+            stress: MarketStressIndex {
+                sector_synchrony: Decimal::ZERO,
+                pressure_consensus: Decimal::ZERO,
+                conflict_intensity_mean: Decimal::ZERO,
+                market_temperature_stress: Decimal::ZERO,
+                composite_stress: Decimal::ZERO,
+            },
+            institution_stock_counts: HashMap::new(),
+            edge_profiles: vec![],
+        };
+        let decision = DecisionSnapshot {
+            timestamp: OffsetDateTime::UNIX_EPOCH,
+            convergence_scores: HashMap::new(),
+            market_regime: MarketRegimeFilter::neutral(),
+            order_suggestions: vec![],
+            degradations: HashMap::new(),
+        };
+
+        let snapshot =
+            EventSnapshot::detect(&history, 1, &links, &dimensions, &insights, &decision);
+
+        assert!(!snapshot.events.iter().any(|event| {
+            matches!(event.value.kind, MarketEventKind::CompositeAcceleration)
+                && matches!(event.value.scope, SignalScope::Sector(_))
+        }));
+    }
+
+    #[test]
+    fn corroborated_symbol_pressure_emits_sector_propagation() {
+        let history = empty_history();
+        let links = LinkSnapshot {
+            timestamp: OffsetDateTime::UNIX_EPOCH,
+            broker_queues: vec![],
+            calc_indexes: vec![],
+            candlesticks: vec![],
+            institution_activities: vec![],
+            cross_stock_presences: vec![],
+            capital_flows: vec![],
+            capital_flow_series: vec![],
+            capital_breakdowns: vec![],
+            market_temperature: None,
+            order_books: vec![],
+            quotes: vec![
+                QuoteObservation {
+                    symbol: sym("700.HK"),
+                    last_done: dec!(350),
+                    prev_close: dec!(348),
+                    open: dec!(349),
+                    high: dec!(351),
+                    low: dec!(347),
+                    volume: 100,
+                    turnover: dec!(35000),
+                    timestamp: OffsetDateTime::UNIX_EPOCH,
+                    market_status: MarketStatus::Normal,
+                    pre_market: None,
+                    post_market: None,
+                },
+                QuoteObservation {
+                    symbol: sym("9988.HK"),
+                    last_done: dec!(90),
+                    prev_close: dec!(88),
+                    open: dec!(89),
+                    high: dec!(91),
+                    low: dec!(87),
+                    volume: 100,
+                    turnover: dec!(9000),
+                    timestamp: OffsetDateTime::UNIX_EPOCH,
+                    market_status: MarketStatus::Normal,
+                    pre_market: None,
+                    post_market: None,
+                },
+                QuoteObservation {
+                    symbol: sym("5.HK"),
+                    last_done: dec!(70),
+                    prev_close: dec!(69),
+                    open: dec!(69),
+                    high: dec!(71),
+                    low: dec!(68),
+                    volume: 100,
+                    turnover: dec!(7000),
+                    timestamp: OffsetDateTime::UNIX_EPOCH,
+                    market_status: MarketStatus::Normal,
+                    pre_market: None,
+                    post_market: None,
+                },
+                QuoteObservation {
+                    symbol: sym("939.HK"),
+                    last_done: dec!(40),
+                    prev_close: dec!(39),
+                    open: dec!(39),
+                    high: dec!(41),
+                    low: dec!(38),
+                    volume: 100,
+                    turnover: dec!(4000),
+                    timestamp: OffsetDateTime::UNIX_EPOCH,
+                    market_status: MarketStatus::Normal,
+                    pre_market: None,
+                    post_market: None,
+                },
+            ],
+            trade_activities: vec![],
+            intraday: vec![],
+        };
+        let dimensions = DimensionSnapshot {
+            timestamp: OffsetDateTime::UNIX_EPOCH,
+            dimensions: HashMap::new(),
+        };
+        let insights = GraphInsights {
+            pressures: vec![
+                StockPressure {
+                    symbol: sym("700.HK"),
+                    net_pressure: dec!(0.7),
+                    institution_count: 1,
+                    buy_inst_count: 1,
+                    sell_inst_count: 0,
+                    pressure_delta: Decimal::ZERO,
+                    pressure_duration: 1,
+                    accelerating: false,
+                },
+                StockPressure {
+                    symbol: sym("9988.HK"),
+                    net_pressure: dec!(0.68),
+                    institution_count: 1,
+                    buy_inst_count: 1,
+                    sell_inst_count: 0,
+                    pressure_delta: Decimal::ZERO,
+                    pressure_duration: 1,
+                    accelerating: false,
+                },
+                StockPressure {
+                    symbol: sym("5.HK"),
+                    net_pressure: dec!(0.2),
+                    institution_count: 1,
+                    buy_inst_count: 1,
+                    sell_inst_count: 0,
+                    pressure_delta: Decimal::ZERO,
+                    pressure_duration: 1,
+                    accelerating: false,
+                },
+                StockPressure {
+                    symbol: sym("939.HK"),
+                    net_pressure: dec!(0.18),
+                    institution_count: 1,
+                    buy_inst_count: 1,
+                    sell_inst_count: 0,
+                    pressure_delta: Decimal::ZERO,
+                    pressure_duration: 1,
+                    accelerating: false,
+                },
+            ],
+            rotations: vec![],
+            clusters: vec![],
+            conflicts: vec![],
+            inst_rotations: vec![],
+            inst_exoduses: vec![],
+            shared_holders: vec![],
+            stress: MarketStressIndex {
+                sector_synchrony: Decimal::ZERO,
+                pressure_consensus: Decimal::ZERO,
+                conflict_intensity_mean: Decimal::ZERO,
+                market_temperature_stress: Decimal::ZERO,
+                composite_stress: Decimal::ZERO,
+            },
+            institution_stock_counts: HashMap::new(),
+            edge_profiles: vec![],
+        };
+        let decision = DecisionSnapshot {
+            timestamp: OffsetDateTime::UNIX_EPOCH,
+            convergence_scores: HashMap::new(),
+            market_regime: MarketRegimeFilter::neutral(),
+            order_suggestions: vec![],
+            degradations: HashMap::new(),
+        };
+
+        let snapshot =
+            EventSnapshot::detect(&history, 1, &links, &dimensions, &insights, &decision);
+
+        assert!(snapshot.events.iter().any(|event| {
+            matches!(event.value.kind, MarketEventKind::CompositeAcceleration)
+                && matches!(event.value.scope, SignalScope::Sector(_))
+        }));
     }
 }

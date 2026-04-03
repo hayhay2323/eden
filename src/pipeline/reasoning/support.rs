@@ -8,7 +8,8 @@ use crate::ontology::reasoning::{
     ReasoningEvidenceKind, ReasoningScope,
 };
 use crate::pipeline::signals::{
-    event_propagation_scope, DerivedSignalKind, EventPropagationScope, MarketEventKind, SignalScope,
+    event_driver_kind, event_propagation_scope, DerivedSignalKind, EventDriverKind,
+    EventPropagationScope, MarketEventKind, SignalScope,
 };
 pub(super) use super::family_gate::FamilyAlphaGate;
 
@@ -315,7 +316,7 @@ fn attribution_allows_template(
         return true;
     };
 
-    match template_key {
+    let scope_allowed = match template_key {
         // Pure local templates: always allowed regardless of attribution.
         "flow"
         | "liquidity"
@@ -336,8 +337,6 @@ fn attribution_allows_template(
         }
 
         // Cross-scope / institutional templates: need at least Sector attribution.
-        // A company_specific event should not trigger institution relay or shared-holder spillover
-        // because those hypothesize broader structural moves.
         "shared_holder_spillover"
         | "institution_relay"
         | "cross_mechanism_chain"
@@ -349,7 +348,39 @@ fn attribution_allows_template(
         }
 
         _ => true,
+    };
+
+    if !scope_allowed {
+        return false;
     }
+
+    // Driver-kind gate: if ALL events are company_specific, block cross-scope templates.
+    let all_company_specific = relevant_events
+        .iter()
+        .filter_map(|e| event_driver_kind(e))
+        .all(|dk| dk == EventDriverKind::CompanySpecific);
+    let has_any_driver = relevant_events
+        .iter()
+        .any(|e| event_driver_kind(e).is_some());
+
+    if has_any_driver && all_company_specific {
+        let is_cross_scope = matches!(
+            template_key,
+            "shared_holder_spillover"
+                | "institution_relay"
+                | "cross_mechanism_chain"
+                | "propagation"
+                | "sector_rotation_spillover"
+                | "sector_symbol_spillover"
+                | "stress_feedback_loop"
+                | "stress_concentration"
+        );
+        if is_cross_scope {
+            return false;
+        }
+    }
+
+    true
 }
 
 pub(super) fn scope_matches_event(scope: &ReasoningScope, event_scope: &SignalScope) -> bool {

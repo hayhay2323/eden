@@ -4,6 +4,7 @@ use petgraph::graph::DiGraph;
 use rust_decimal_macros::dec;
 use time::OffsetDateTime;
 
+use super::context::AbsenceMemory;
 use super::propagation::canonicalize_paths;
 use super::support::{summarize_evidence_weights, FamilyAlphaGate};
 use super::synthesis::derive_hypotheses;
@@ -318,7 +319,7 @@ fn family_alpha_gate_blocks_negative_risk_repricing_hypotheses() {
         "neutral",
     );
 
-    let hypotheses = derive_hypotheses(&events, &signals, &[], Some(&gate));
+    let hypotheses = derive_hypotheses(&events, &signals, &[], Some(&gate), &AbsenceMemory::default(), None);
 
     assert!(hypotheses
         .iter()
@@ -344,7 +345,7 @@ fn catalyst_activation_emits_catalyst_repricing_hypothesis() {
         signals: vec![],
     };
 
-    let hypotheses = derive_hypotheses(&events, &signals, &[], None);
+    let hypotheses = derive_hypotheses(&events, &signals, &[], None, &AbsenceMemory::default(), None);
 
     assert!(hypotheses
         .iter()
@@ -448,7 +449,7 @@ fn convergence_hypothesis_emerges_from_vortex_topology() {
         },
     ];
 
-    let hypotheses = derive_hypotheses(&events, &signals, &paths, None);
+    let hypotheses = derive_hypotheses(&events, &signals, &paths, None, &AbsenceMemory::default(), None);
     let convergence = hypotheses
         .iter()
         .find(|hypothesis| {
@@ -514,7 +515,7 @@ fn convergence_hypothesis_requires_three_channels() {
         }],
     }];
 
-    let hypotheses = derive_hypotheses(&events, &signals, &paths, None);
+    let hypotheses = derive_hypotheses(&events, &signals, &paths, None, &AbsenceMemory::default(), None);
 
     assert!(hypotheses
         .iter()
@@ -870,7 +871,7 @@ fn shared_symbol_hypotheses_are_capped_to_top_three() {
         },
     ];
 
-    let hypotheses = derive_hypotheses(&events, &signals, &paths, None);
+    let hypotheses = derive_hypotheses(&events, &signals, &paths, None, &AbsenceMemory::default(), None);
     let symbol_hypotheses = hypotheses
         .iter()
         .filter(|hypothesis| hypothesis.scope == ReasoningScope::Symbol(symbol_scope.clone()))
@@ -2531,7 +2532,7 @@ fn sustained_underperformer_is_blocked_by_alpha_gate() {
         "neutral",
     );
 
-    let hypotheses = derive_hypotheses(&events, &signals, &[], Some(&gate));
+    let hypotheses = derive_hypotheses(&events, &signals, &[], Some(&gate), &AbsenceMemory::default(), None);
     assert!(
         hypotheses
             .iter()

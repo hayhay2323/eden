@@ -6,6 +6,7 @@ pub enum SignalScope {
     Symbol(Symbol),
     Institution(InstitutionId),
     Sector(SectorId),
+    Theme(ThemeId),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +50,12 @@ pub enum ObservationRecord {
         dividend_ratio_ttm: Option<Decimal>,
         amplitude: Option<Decimal>,
         five_minutes_change_rate: Option<Decimal>,
+        ytd_change_rate: Option<Decimal>,
+        five_day_change_rate: Option<Decimal>,
+        ten_day_change_rate: Option<Decimal>,
+        half_year_change_rate: Option<Decimal>,
+        total_market_value: Option<Decimal>,
+        change_rate: Option<Decimal>,
     },
     Candlestick {
         symbol: Symbol,
@@ -90,7 +97,7 @@ pub enum ObservationRecord {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MarketEventKind {
     OrderBookDislocation,
     VolumeDislocation,
@@ -102,9 +109,11 @@ pub enum MarketEventKind {
     StressRegimeShift,
     ManualReviewRequired,
     SharedHolderAnomaly,
+    CatalystActivation,
     IcebergDetected,
     BrokerClusterFormation,
     BrokerSideFlip,
+    PropagationAbsence,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,4 +159,106 @@ pub struct EventSnapshot {
 pub struct DerivedSignalSnapshot {
     pub timestamp: OffsetDateTime,
     pub signals: Vec<DerivedSignal<DerivedSignalRecord>>,
+}
+
+// ── Event Attribution ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EventPropagationScope {
+    Local,
+    Sector,
+    Market,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventDriverKind {
+    CompanySpecific,
+    SectorWide,
+    MacroWide,
+}
+
+const ATTR_SCOPE_PREFIX: &str = "attr:scope=";
+const ATTR_DRIVER_PREFIX: &str = "attr:driver=";
+
+pub fn event_propagation_scope(
+    event: &crate::ontology::domain::Event<MarketEventRecord>,
+) -> Option<EventPropagationScope> {
+    event.provenance.inputs.iter().find_map(|input| {
+        input
+            .strip_prefix(ATTR_SCOPE_PREFIX)
+            .and_then(|value| match value {
+                "local" => Some(EventPropagationScope::Local),
+                "sector" => Some(EventPropagationScope::Sector),
+                "market" => Some(EventPropagationScope::Market),
+                _ => None,
+            })
+    })
+}
+
+pub fn event_driver_kind(
+    event: &crate::ontology::domain::Event<MarketEventRecord>,
+) -> Option<EventDriverKind> {
+    event.provenance.inputs.iter().find_map(|input| {
+        input
+            .strip_prefix(ATTR_DRIVER_PREFIX)
+            .and_then(|value| match value {
+                "company_specific" => Some(EventDriverKind::CompanySpecific),
+                "sector_wide" => Some(EventDriverKind::SectorWide),
+                "macro_wide" => Some(EventDriverKind::MacroWide),
+                _ => None,
+            })
+    })
+}
+
+#[cfg(test)]
+mod attribution_tests {
+    use super::*;
+    use crate::ontology::domain::{Event, ProvenanceMetadata, ProvenanceSource};
+    use time::OffsetDateTime;
+
+    fn event_with_provenance(inputs: Vec<&str>) -> Event<MarketEventRecord> {
+        Event {
+            value: MarketEventRecord {
+                scope: SignalScope::Symbol(crate::ontology::objects::Symbol("700.HK".into())),
+                kind: MarketEventKind::SmartMoneyPressure,
+                magnitude: rust_decimal::Decimal::ONE,
+                summary: "test".into(),
+            },
+            provenance: ProvenanceMetadata::new(
+                ProvenanceSource::Computed,
+                OffsetDateTime::UNIX_EPOCH,
+            )
+            .with_inputs(inputs.into_iter().map(String::from).collect::<Vec<_>>()),
+        }
+    }
+
+    #[test]
+    fn hk_event_propagation_scope_from_provenance() {
+        let event = event_with_provenance(vec!["attr:scope=sector"]);
+        assert_eq!(
+            event_propagation_scope(&event),
+            Some(EventPropagationScope::Sector)
+        );
+    }
+
+    #[test]
+    fn hk_event_propagation_scope_none_when_missing() {
+        let event = event_with_provenance(vec!["other:data"]);
+        assert_eq!(event_propagation_scope(&event), None);
+    }
+
+    #[test]
+    fn hk_event_driver_kind_from_provenance() {
+        let event = event_with_provenance(vec!["attr:driver=company_specific"]);
+        assert_eq!(
+            event_driver_kind(&event),
+            Some(EventDriverKind::CompanySpecific)
+        );
+    }
+
+    #[test]
+    fn hk_event_driver_kind_none_when_missing() {
+        let event = event_with_provenance(vec![]);
+        assert_eq!(event_driver_kind(&event), None);
+    }
 }
