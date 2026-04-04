@@ -4,7 +4,7 @@ use petgraph::graph::DiGraph;
 use rust_decimal_macros::dec;
 use time::OffsetDateTime;
 
-use super::context::AbsenceMemory;
+use super::context::{AbsenceMemory, FamilyBoostLedger};
 use super::propagation::canonicalize_paths;
 use super::support::{summarize_evidence_weights, FamilyAlphaGate};
 use super::synthesis::derive_hypotheses;
@@ -1036,6 +1036,7 @@ fn track_policy_promotes_after_strengthening_streak() {
         &[],
         None,
         None,
+        &FamilyBoostLedger::default(),
     );
     assert_eq!(updated.len(), 1);
     assert_eq!(updated[0].action, "enter");
@@ -1109,6 +1110,7 @@ fn track_policy_blocks_low_edge_enter() {
         &[],
         None,
         None,
+        &FamilyBoostLedger::default(),
     );
     assert_eq!(updated[0].action, "review");
 }
@@ -1186,6 +1188,7 @@ fn track_policy_tightens_enter_under_reviewer_doctrine_pressure() {
         &[],
         None,
         Some(&doctrine),
+        &FamilyBoostLedger::default(),
     );
     assert_eq!(updated[0].action, "review");
 }
@@ -1469,6 +1472,7 @@ fn track_policy_blocks_long_enter_when_market_regime_is_risk_off() {
         &[],
         None,
         None,
+        &FamilyBoostLedger::default(),
     );
     assert_eq!(updated[0].action, "review");
     assert!(updated[0]
@@ -1542,6 +1546,7 @@ fn track_policy_reviews_stale_enter_without_fresh_confirmation() {
         &[],
         None,
         None,
+        &FamilyBoostLedger::default(),
     );
     assert_eq!(updated[0].action, "review");
     assert!(updated[0]
@@ -1615,6 +1620,7 @@ fn track_policy_reviews_conflicted_enter() {
         &[],
         None,
         None,
+        &FamilyBoostLedger::default(),
     );
     assert_eq!(updated[0].action, "review");
     assert!(updated[0]
@@ -2390,6 +2396,7 @@ fn cold_start_family_passes_track_action_policy() {
         &[],
         Some(&gate),
         None,
+        &FamilyBoostLedger::default(),
     );
     // Cold-start "Catalyst Repricing" (never attempted) should NOT be blocked
     assert_ne!(
@@ -2417,6 +2424,7 @@ fn cold_start_family_passes_track_action_policy() {
         &[],
         Some(&gate),
         None,
+        &FamilyBoostLedger::default(),
     );
     assert_eq!(
         updated_blocked[0].action, "observe",
