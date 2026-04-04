@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn family_boost_caps_at_1_25() {
-        let priors = vec![make_prior("Directed Flow", dec!(0.90), dec!(0.05))];
+        let priors = vec![make_prior("Directed Flow", dec!(1.00), dec!(0.05))];
         let ledger = FamilyBoostLedger::from_lineage_priors(&priors, "midday", "neutral");
         assert_eq!(
             ledger.boost_for_family("Directed Flow"),
