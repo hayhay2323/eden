@@ -171,6 +171,13 @@ pub struct CalcIndexObservation {
     pub dividend_ratio_ttm: Option<Decimal>,
     pub amplitude: Option<Decimal>,
     pub five_minutes_change_rate: Option<Decimal>,
+    pub change_rate: Option<Decimal>,
+    pub ytd_change_rate: Option<Decimal>,
+    pub five_day_change_rate: Option<Decimal>,
+    pub ten_day_change_rate: Option<Decimal>,
+    pub half_year_change_rate: Option<Decimal>,
+    pub total_market_value: Option<Decimal>,
+    pub capital_flow: Option<Decimal>,
 }
 
 #[derive(Debug, Clone)]
@@ -238,4 +245,40 @@ pub struct LinkSnapshot {
     pub order_books: Vec<OrderBookObservation>,
     pub quotes: Vec<QuoteObservation>,
     pub trade_activities: Vec<TradeActivity>,
+    pub intraday: Vec<IntradayObservation>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IntradayObservation {
+    pub symbol: Symbol,
+    pub avg_price: Decimal,
+    pub last_price: Decimal,
+    pub vwap_deviation: Decimal,
+    pub point_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct OptionSurfaceObservation {
+    pub underlying: Symbol,
+    pub expiry_label: String,
+    pub atm_call_iv: Option<Decimal>,
+    pub atm_put_iv: Option<Decimal>,
+    pub put_call_skew: Option<Decimal>,
+    pub total_call_oi: i64,
+    pub total_put_oi: i64,
+    pub put_call_oi_ratio: Option<Decimal>,
+    pub atm_delta: Option<Decimal>,
+    pub atm_vega: Option<Decimal>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WarrantSentimentObservation {
+    pub underlying: Symbol,
+    pub total_warrants: usize,
+    pub call_warrant_count: usize,
+    pub put_warrant_count: usize,
+    pub top_call_outstanding_ratio: Option<Decimal>,
+    pub top_put_outstanding_ratio: Option<Decimal>,
+    pub weighted_call_iv: Option<Decimal>,
+    pub weighted_put_iv: Option<Decimal>,
 }

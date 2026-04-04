@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime_tasks::RuntimeTaskHandle;
 #[cfg(feature = "persistence")]
 use super::persistence::{
     persist_market_knowledge_projection, persist_market_lineage_projection,
@@ -46,6 +47,7 @@ pub struct PreparedRuntimeContext {
     pub counters: RuntimeCounters,
     pub projection_state: ProjectionStateCache,
     pub artifacts: AgentArtifactPaths,
+    pub runtime_task: Option<RuntimeTaskHandle>,
     #[cfg(feature = "persistence")]
     pub store: Option<EdenStore>,
     #[cfg(feature = "persistence")]
@@ -199,6 +201,26 @@ impl ProjectionStateCache {
 impl PreparedRuntimeContext {
     pub fn log_monitoring_active(&self, label: &str) {
         log_runtime_monitoring_active(&self.config, label);
+    }
+
+    pub fn runtime_task_heartbeat(
+        &self,
+        detail: impl Into<String>,
+        metadata: serde_json::Value,
+    ) {
+        if let Some(handle) = &self.runtime_task {
+            let _ = handle.heartbeat(detail, metadata);
+        }
+    }
+
+    pub fn complete_runtime_task(
+        &self,
+        detail: impl Into<String>,
+        metadata: serde_json::Value,
+    ) {
+        if let Some(handle) = &self.runtime_task {
+            let _ = handle.complete(detail, metadata);
+        }
     }
 
     pub fn spawn_rest_refresh<U, F, Fut>(

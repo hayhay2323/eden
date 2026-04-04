@@ -1,4 +1,177 @@
 use super::*;
+use crate::pipeline::attention_budget::AttentionLevel;
+
+pub(super) struct ReasoningAttentionPlan {
+    pub(super) deep_symbols: HashSet<Symbol>,
+    pub(super) standard_symbols: HashSet<Symbol>,
+}
+
+impl ReasoningAttentionPlan {
+    pub(super) fn active_symbols(&self) -> HashSet<Symbol> {
+        self.deep_symbols
+            .iter()
+            .cloned()
+            .chain(self.standard_symbols.iter().cloned())
+            .collect()
+    }
+}
+
+pub(super) fn attention_reasoning_plan(
+    stock_nodes: impl Iterator<Item = Symbol>,
+    integration: &integration::RuntimeIntegration,
+    previous_setups: &[eden::ontology::TacticalSetup],
+    previous_tracks: &[eden::ontology::reasoning::HypothesisTrack],
+) -> ReasoningAttentionPlan {
+    let stock_nodes = stock_nodes.collect::<Vec<_>>();
+    let previously_active = previous_setups
+        .iter()
+        .filter_map(|setup| match &setup.scope {
+            eden::ontology::reasoning::ReasoningScope::Symbol(symbol) => Some(symbol.clone()),
+            _ => None,
+        })
+        .chain(
+            previous_tracks
+                .iter()
+                .filter_map(|track| match &track.scope {
+                    eden::ontology::reasoning::ReasoningScope::Symbol(symbol) => {
+                        Some(symbol.clone())
+                    }
+                    _ => None,
+                }),
+        )
+        .collect::<HashSet<_>>();
+
+    let mut deep_symbols = HashSet::new();
+    let mut standard_symbols = HashSet::new();
+
+    for symbol in &stock_nodes {
+        let base_attention = integration.attention_for(&symbol.0);
+        match base_attention {
+            AttentionLevel::Deep => {
+                deep_symbols.insert(symbol.clone());
+            }
+            AttentionLevel::Standard if previously_active.contains(symbol) => {
+                standard_symbols.insert(symbol.clone());
+            }
+            AttentionLevel::Standard | AttentionLevel::Scan | AttentionLevel::Skip => {}
+        }
+    }
+
+    if deep_symbols.is_empty() && standard_symbols.is_empty() {
+        deep_symbols.extend(stock_nodes);
+    }
+
+    ReasoningAttentionPlan {
+        deep_symbols,
+        standard_symbols,
+    }
+}
+
+pub(super) fn filter_event_snapshot_for_reasoning(
+    snapshot: &EventSnapshot,
+    active_symbols: &HashSet<Symbol>,
+) -> EventSnapshot {
+    let events = snapshot
+        .events
+        .iter()
+        .filter(|event| match &event.value.scope {
+            SignalScope::Symbol(symbol) => active_symbols.contains(symbol),
+            _ => true,
+        })
+        .cloned()
+        .collect();
+    EventSnapshot {
+        timestamp: snapshot.timestamp,
+        events,
+    }
+}
+
+pub(super) fn filter_derived_signal_snapshot_for_reasoning(
+    snapshot: &DerivedSignalSnapshot,
+    active_symbols: &HashSet<Symbol>,
+) -> DerivedSignalSnapshot {
+    let signals = snapshot
+        .signals
+        .iter()
+        .filter(|signal| match &signal.value.scope {
+            SignalScope::Symbol(symbol) => active_symbols.contains(symbol),
+            _ => true,
+        })
+        .cloned()
+        .collect();
+    DerivedSignalSnapshot {
+        timestamp: snapshot.timestamp,
+        signals,
+    }
+}
+
+pub(super) fn filter_decision_for_reasoning(
+    decision: &DecisionSnapshot,
+    active_symbols: &HashSet<Symbol>,
+) -> DecisionSnapshot {
+    let mut filtered = decision.clone();
+    filtered
+        .convergence_scores
+        .retain(|symbol, _| active_symbols.contains(symbol));
+    filtered
+        .order_suggestions
+        .retain(|suggestion| active_symbols.contains(&suggestion.symbol));
+    filtered
+}
+
+pub(super) fn merge_standard_attention_maintenance(
+    reasoning_snapshot: &mut ReasoningSnapshot,
+    previous_tick: Option<&TickRecord>,
+    standard_symbols: &HashSet<Symbol>,
+    previous_setups: &[eden::ontology::TacticalSetup],
+    previous_tracks: &[eden::ontology::reasoning::HypothesisTrack],
+    timestamp: time::OffsetDateTime,
+) {
+    if standard_symbols.is_empty() {
+        return;
+    }
+
+    let mut seen_hypotheses = reasoning_snapshot
+        .hypotheses
+        .iter()
+        .map(|item| item.hypothesis_id.clone())
+        .collect::<HashSet<_>>();
+    if let Some(previous_tick) = previous_tick {
+        for hypothesis in &previous_tick.hypotheses {
+            let carries_symbol_scope = matches!(
+                &hypothesis.scope,
+                eden::ontology::reasoning::ReasoningScope::Symbol(symbol)
+                    if standard_symbols.contains(symbol)
+            );
+            if carries_symbol_scope && seen_hypotheses.insert(hypothesis.hypothesis_id.clone()) {
+                reasoning_snapshot.hypotheses.push(hypothesis.clone());
+            }
+        }
+    }
+
+    let mut seen_setups = reasoning_snapshot
+        .tactical_setups
+        .iter()
+        .map(|item| item.setup_id.clone())
+        .collect::<HashSet<_>>();
+    for setup in previous_setups {
+        let carries_symbol_scope = matches!(
+            &setup.scope,
+            eden::ontology::reasoning::ReasoningScope::Symbol(symbol)
+                if standard_symbols.contains(symbol)
+        );
+        if carries_symbol_scope && seen_setups.insert(setup.setup_id.clone()) {
+            reasoning_snapshot.tactical_setups.push(setup.clone());
+        }
+    }
+
+    reasoning_snapshot.hypothesis_tracks = eden::pipeline::reasoning::derive_hypothesis_tracks(
+        timestamp,
+        &reasoning_snapshot.tactical_setups,
+        previous_setups,
+        previous_tracks,
+    );
+}
 
 pub(super) fn setup_action_priority(action: &str) -> i32 {
     match action {
