@@ -200,6 +200,35 @@ pub async fn run() {
             cached_causal_schemas = schemas;
         }
     }
+    // Backfill: generate auto-assessments from historical realized outcomes
+    // so that doctrine pressure has seed data on first boot.
+    #[cfg(feature = "persistence")]
+    if let Some(ref store) = runtime.store {
+        if let Ok(outcomes) = store.recent_case_realized_outcomes_by_market("hk", 500).await {
+            if !outcomes.is_empty() {
+                let auto_assessments =
+                    eden::persistence::case_reasoning_assessment::auto_assessments_from_outcomes(
+                        &outcomes,
+                    );
+                if !auto_assessments.is_empty() {
+                    let count = auto_assessments.len();
+                    if let Err(err) = store
+                        .write_case_reasoning_assessments(&auto_assessments)
+                        .await
+                    {
+                        eprintln!("[hk] failed to backfill doctrine assessments: {}", err);
+                    } else {
+                        eprintln!(
+                            "[hk] backfilled {} doctrine assessments from {} historical outcomes",
+                            count,
+                            outcomes.len()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     let mut hidden_force_state = eden::pipeline::residual::HiddenForceVerificationState::default();
     let mut absence_memory = eden::pipeline::reasoning::AbsenceMemory::default();
 

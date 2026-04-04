@@ -610,6 +610,22 @@ impl PreparedRuntimeContext {
         &self,
         records: Vec<CaseRealizedOutcomeRecord>,
     ) {
+        // Auto-generate assessments from realized outcomes to feed doctrine pressure
+        let auto_assessments =
+            crate::persistence::case_reasoning_assessment::auto_assessments_from_outcomes(&records);
+        if !auto_assessments.is_empty() {
+            self.schedule_store_operation(
+                "write auto-assessments from outcomes",
+                "write_auto_assessments_from_outcomes_failed",
+                "failed to write auto-assessments from realized outcomes",
+                move |store_ref| async move {
+                    store_ref
+                        .write_case_reasoning_assessments(&auto_assessments)
+                        .await
+                },
+            )
+            .await;
+        }
         self.schedule_store_operation(
             "write case realized outcomes",
             "write_hk_case_realized_outcomes_failed",

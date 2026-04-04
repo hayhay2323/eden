@@ -9,19 +9,19 @@ use crate::core::analyst_service::AnalystService;
 use crate::core::analyst_service::DefaultAnalystService;
 use crate::core::market::MarketId;
 use crate::core::projection::{project_us, UsProjectionInputs};
+use crate::core::runtime::prepare_runtime_context_or_exit;
 #[cfg(feature = "persistence")]
 use crate::core::runtime::PreparedRuntimeContext;
-use crate::core::runtime::prepare_runtime_context_or_exit;
 use crate::live_snapshot::{
-    LiveBackwardChain, LiveCausalLeader, LiveCrossMarketAnomaly, LiveCrossMarketSignal,
-    LiveEvent, LiveHypothesisTrack, LiveLineageMetric, LiveMarket, LiveMarketRegime,
-    LivePressure, LivePropagationSense, LiveScorecard, LiveSignal, LiveSnapshot,
-    LiveStressSnapshot, LiveStructuralDelta, LiveTacticalCase,
+    LiveBackwardChain, LiveCausalLeader, LiveCrossMarketAnomaly, LiveCrossMarketSignal, LiveEvent,
+    LiveHypothesisTrack, LiveLineageMetric, LiveMarket, LiveMarketRegime, LivePressure,
+    LivePropagationSense, LiveScorecard, LiveSignal, LiveSnapshot, LiveStressSnapshot,
+    LiveStructuralDelta, LiveTacticalCase,
 };
 use crate::math::clamp_signed_unit_interval;
 use crate::ontology::links::{
-    CalcIndexObservation, CandlestickObservation, CapitalFlow, MarketStatus, QuoteObservation,
-    YuanAmount,
+    CalcIndexObservation, CandlestickObservation, CapitalFlow, IntradayObservation, MarketStatus,
+    OptionSurfaceObservation, QuoteObservation, YuanAmount,
 };
 use crate::ontology::objects::{SectorId, Stock, Symbol};
 use crate::ontology::reasoning::TacticalSetup;
@@ -39,6 +39,7 @@ use crate::persistence::agent_graph::{
 };
 #[cfg(feature = "persistence")]
 use crate::persistence::store::EdenStore;
+use crate::pipeline::attention_budget::AttentionBudgetAllocator;
 #[cfg(feature = "persistence")]
 use crate::pipeline::learning_loop::{
     derive_learning_feedback, derive_outcome_learning_context_from_us_rows,
@@ -54,13 +55,16 @@ use crate::us::graph::insights::{compute_propagation_senses, UsGraphInsights};
 use crate::us::pipeline::dimensions::UsDimensionSnapshot;
 use crate::us::pipeline::reasoning::{UsReasoningSnapshot, UsStructuralRankMetrics};
 use crate::us::pipeline::signals::{
-    PreviousFlows, UsDerivedSignalSnapshot, UsEventSnapshot, UsObservationSnapshot,
+    PreviousFlows, UsDerivedSignalSnapshot, UsEventSnapshot, UsObservationSnapshot, UsSignalScope,
 };
 use crate::us::pipeline::world::derive_backward_snapshot;
 use crate::us::temporal::analysis::compute_us_dynamics;
 use crate::us::temporal::buffer::UsTickHistory;
 use crate::us::temporal::causality::compute_causal_timelines;
-use crate::us::temporal::lineage::{compute_us_lineage_stats, UsLineageStats};
+use crate::us::temporal::lineage::{
+    compute_us_convergence_success_patterns, compute_us_lineage_stats,
+    compute_us_multi_horizon_lineage_metrics, evaluate_us_candidate_mechanisms, UsLineageStats,
+};
 use crate::us::temporal::record::{UsSymbolSignals, UsTickRecord};
 use crate::us::watchlist::US_WATCHLIST;
 use chrono::{Datelike, NaiveDate, TimeZone, Utc, Weekday};
@@ -72,6 +76,7 @@ use longport::quote::{
 use longport::Config;
 use rust_decimal::prelude::Signed;
 use rust_decimal::Decimal;
+use serde_json::json;
 #[cfg(feature = "persistence")]
 use tokio::sync::Semaphore;
 #[path = "runtime/support.rs"]
@@ -121,9 +126,53 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         mut bootstrap_pending,
         #[cfg(feature = "persistence")]
         mut cached_us_learning_feedback,
+        #[cfg(feature = "persistence")]
+        mut cached_us_reviewer_doctrine,
     } = initialize_us_runtime().await?;
     #[cfg(feature = "persistence")]
     const US_LEARNING_FEEDBACK_REFRESH_INTERVAL: u64 = 30;
+    let mut attention = AttentionBudgetAllocator::from_universe_size(US_WATCHLIST.len());
+    let mut vortex_attention = UsVortexAttention::default();
+    let mut cached_us_candidate_mechanisms: Vec<
+        crate::persistence::candidate_mechanism::CandidateMechanismRecord,
+    > = Vec::new();
+    #[cfg(feature = "persistence")]
+    if let Some(ref store) = runtime.store {
+        if let Ok(mechs) = store.load_candidate_mechanisms("us").await {
+            eprintln!("[us] loaded {} candidate mechanisms from store", mechs.len());
+            cached_us_candidate_mechanisms = mechs;
+        }
+    }
+    // Backfill: generate auto-assessments from historical realized outcomes
+    #[cfg(feature = "persistence")]
+    if let Some(ref store) = runtime.store {
+        if let Ok(outcomes) = store.recent_case_realized_outcomes_by_market("us", 500).await {
+            if !outcomes.is_empty() {
+                let auto_assessments =
+                    eden::persistence::case_reasoning_assessment::auto_assessments_from_outcomes(
+                        &outcomes,
+                    );
+                if !auto_assessments.is_empty() {
+                    let count = auto_assessments.len();
+                    if let Err(err) = store
+                        .write_case_reasoning_assessments(&auto_assessments)
+                        .await
+                    {
+                        eprintln!("[us] failed to backfill doctrine assessments: {}", err);
+                    } else {
+                        eprintln!(
+                            "[us] backfilled {} doctrine assessments from {} historical outcomes",
+                            count,
+                            outcomes.len()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let mut us_hidden_force_state =
+        crate::pipeline::residual::HiddenForceVerificationState::default();
 
     loop {
         let Some(tick_advance) = ({
@@ -131,15 +180,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 live: &mut live,
                 rest: &mut rest,
             };
-            match runtime.begin_tick(
-                &mut bootstrap_pending,
-                &mut push_rx,
-                &mut rest_rx,
-                debounce,
-                &mut tick_state,
-                &mut tick,
-            )
-            .await
+            match runtime
+                .begin_tick(
+                    &mut bootstrap_pending,
+                    &mut push_rx,
+                    &mut rest_rx,
+                    debounce,
+                    &mut tick_state,
+                    &mut tick,
+                )
+                .await
             {
                 Some(result) => Some(result),
                 None => {
@@ -171,6 +221,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     close_minute,
                 );
             }
+            runtime.runtime_task_heartbeat(
+                "us runtime waiting for regular market hours",
+                json!({
+                    "market": "us",
+                    "tick": tick,
+                    "market_open": false,
+                    "quotes": live.quotes.len(),
+                    "candlesticks": live.candlesticks.len(),
+                    "workflows": workflows.len(),
+                }),
+            );
             continue;
         }
 
@@ -179,15 +240,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let capital_flows = build_capital_flows(&rest.capital_flows);
         let calc_indexes = build_calc_indexes(&rest.calc_indexes);
         let candlesticks = build_candlesticks(&live.candlesticks);
+        let intraday = build_intraday(&rest.intraday_lines);
 
-        // Build US dimensions
-        let dim_snapshot = UsDimensionSnapshot::compute(
+        // Build US dimensions (with VWAP from intraday)
+        let dim_snapshot = UsDimensionSnapshot::compute_with_intraday(
             &quotes,
             &capital_flows,
             &calc_indexes,
             &candlesticks,
             &store,
             now,
+            &intraday,
         );
 
         // Build US graph
@@ -283,7 +346,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         // 2. Event detection
-        let event_snapshot = UsEventSnapshot::detect(
+        let mut event_snapshot = UsEventSnapshot::detect(
             &quotes,
             &calc_indexes,
             &capital_flows,
@@ -291,6 +354,21 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             &hk_counterpart_moves,
             now,
         );
+        if let Some(previous_agent_snapshot) =
+            runtime.projection_state.previous_agent_snapshot.as_ref()
+        {
+            let catalyst_events = crate::us::pipeline::signals::catalyst_events_from_macro_events(
+                &previous_agent_snapshot.macro_events,
+                now,
+            );
+            event_snapshot.events.extend(catalyst_events);
+
+            crate::us::pipeline::signals::enrich_us_attribution_with_evidence(
+                &mut event_snapshot,
+                &previous_agent_snapshot.macro_events,
+            );
+            crate::us::pipeline::signals::detect_us_propagation_absences(&mut event_snapshot, now);
+        }
 
         // 3. Derived signals
         let hk_signal_map: HashMap<Symbol, Decimal> = cross_market_signals
@@ -304,17 +382,173 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
         // 5. Reasoning: hypotheses + tactical setups
         let lineage_prior = compute_us_lineage_stats(&tick_history, SIGNAL_RESOLUTION_LAG);
-        let reasoning = UsReasoningSnapshot::derive_with_diffusion(
-            &event_snapshot,
-            &derived_snapshot,
+        let multi_horizon_lineage = compute_us_multi_horizon_lineage_metrics(&tick_history);
+        let multi_horizon_gate =
+            crate::temporal::lineage::MultiHorizonGate::from_metrics(&multi_horizon_lineage);
+        let convergence_success_patterns =
+            compute_us_convergence_success_patterns(&tick_history, SIGNAL_RESOLUTION_LAG);
+        let attention_plan = attention_reasoning_plan(
+            graph.stock_nodes.keys().cloned(),
+            &attention,
             &previous_setups,
             &previous_tracks,
-            Some(decision.market_regime.bias),
+            &vortex_attention,
+        );
+        let reasoning_active_symbols = attention_plan.active_symbols();
+        let deep_reasoning_event_snapshot =
+            filter_us_event_snapshot_for_reasoning(&event_snapshot, &attention_plan.deep_symbols);
+        let reasoning_event_snapshot =
+            filter_us_event_snapshot_for_reasoning(&event_snapshot, &reasoning_active_symbols);
+        let deep_reasoning_derived_snapshot = filter_us_derived_signal_snapshot_for_reasoning(
+            &derived_snapshot,
+            &attention_plan.deep_symbols,
+        );
+        let reasoning_derived_snapshot = filter_us_derived_signal_snapshot_for_reasoning(
+            &derived_snapshot,
+            &reasoning_active_symbols,
+        );
+        let deep_reasoning_decision =
+            filter_us_decision_for_reasoning(&decision, &attention_plan.deep_symbols);
+        let reasoning_decision =
+            filter_us_decision_for_reasoning(&decision, &reasoning_active_symbols);
+        #[cfg(feature = "persistence")]
+        if let Some(ref store) = runtime.store {
+            if cached_us_reviewer_doctrine.is_none() || tick % 30 == 0 {
+                if let Ok(assessments) = store
+                    .recent_case_reasoning_assessments_by_market("us", 240)
+                    .await
+                {
+                    cached_us_reviewer_doctrine = Some(
+                        crate::pipeline::reasoning::ReviewerDoctrinePressure::from_assessments(
+                            &assessments,
+                        ),
+                    );
+                }
+            }
+        }
+        let mut reasoning = UsReasoningSnapshot::derive_with_diffusion(
+            &deep_reasoning_event_snapshot,
+            &deep_reasoning_derived_snapshot,
+            tick,
+            &previous_setups,
+            &previous_tracks,
+            Some(deep_reasoning_decision.market_regime.bias),
             Some(&lineage_prior),
+            Some(&multi_horizon_gate),
             Some(&structural_metrics),
             &graph,
             &cross_market_signals,
+            {
+                #[cfg(feature = "persistence")]
+                {
+                    cached_us_reviewer_doctrine.as_ref()
+                }
+                #[cfg(not(feature = "persistence"))]
+                {
+                    None
+                }
+            },
         );
+        merge_us_standard_attention_maintenance(
+            &mut reasoning,
+            tick_history.latest(),
+            &attention_plan.standard_symbols,
+            &previous_setups,
+            &previous_tracks,
+            now,
+        );
+        crate::us::pipeline::reasoning::apply_us_convergence_success_pattern_feedback(
+            &mut reasoning,
+            tick,
+            &previous_setups,
+            &previous_tracks,
+            Some(reasoning_decision.market_regime.bias),
+            Some(&lineage_prior),
+            Some(&multi_horizon_gate),
+            Some(&structural_metrics),
+            {
+                #[cfg(feature = "persistence")]
+                {
+                    cached_us_reviewer_doctrine.as_ref()
+                }
+                #[cfg(not(feature = "persistence"))]
+                {
+                    None
+                }
+            },
+            &convergence_success_patterns,
+        );
+
+        // 5b. Residual Field: compute, infer hidden forces, verify, cross-validate with options
+        let us_residual_field = crate::us::pipeline::residual::compute_us_residual_field(
+            &decision.convergence_scores,
+            &quotes,
+        );
+        if !us_residual_field.residuals.is_empty() {
+            eprintln!(
+                "[us] residual field: {} symbols, {} clusters, {} divergent pairs",
+                us_residual_field.residuals.len(),
+                us_residual_field.clustered_sectors.len(),
+                us_residual_field.divergent_pairs.len(),
+            );
+        }
+        // Infer hidden forces
+        let us_hidden_forces =
+            crate::pipeline::residual::infer_hidden_forces(&us_residual_field, now);
+        if !us_hidden_forces.is_empty() {
+            eprintln!("[us] injected {} hidden force hypotheses", us_hidden_forces.len());
+            reasoning.hypotheses.extend(us_hidden_forces);
+        }
+        // Verify hidden forces (tick-level)
+        let us_verify = us_hidden_force_state.tick(
+            &us_residual_field,
+            &reasoning.hypotheses,
+            tick,
+        );
+        if !us_verify.confirmed.is_empty() || !us_verify.invalidated.is_empty() {
+            eprintln!(
+                "[us] hidden force verification: {}c/{}d/{}i/{}r",
+                us_verify.confirmed.len(),
+                us_verify.dissipating.len(),
+                us_verify.invalidated.len(),
+                us_verify.resolved.len(),
+            );
+        }
+        // Apply residual-based confidence adjustments
+        for (hyp_id, adj) in us_hidden_force_state.confidence_adjustments() {
+            if let Some(hyp) = reasoning.hypotheses.iter_mut().find(|h| h.hypothesis_id == hyp_id) {
+                hyp.confidence = (hyp.confidence + adj).clamp(Decimal::ZERO, Decimal::ONE).round_dp(4);
+            }
+        }
+        // Option cross-validation (US has option surfaces!)
+        let option_validations = crate::pipeline::residual::cross_validate_with_options(
+            &us_hidden_force_state,
+            &rest.option_surfaces,
+        );
+        if !option_validations.is_empty() {
+            for v in &option_validations {
+                eprintln!(
+                    "[us] option cross-validation: {} {:?} (confidence={:.2}) — {}",
+                    v.symbol.0, v.verdict, v.confidence, v.explanation,
+                );
+            }
+            // Apply option-based confidence adjustments
+            for (hyp_id, adj) in crate::pipeline::residual::option_confidence_adjustments(&option_validations) {
+                if let Some(hyp) = reasoning.hypotheses.iter_mut().find(|h| h.hypothesis_id == hyp_id) {
+                    hyp.confidence = (hyp.confidence + adj).clamp(Decimal::ZERO, Decimal::ONE).round_dp(4);
+                }
+            }
+        }
+        // Crystallize confirmed forces
+        let us_crystallization =
+            crate::pipeline::residual::crystallize_confirmed_forces(&us_hidden_force_state);
+        if !us_crystallization.emergent_paths.is_empty() {
+            let emergent = crate::pipeline::residual::emergent_paths_to_propagation_paths(
+                &us_crystallization.emergent_paths,
+                now,
+            );
+            reasoning.propagation_paths.extend(emergent);
+        }
 
         // 6. Build UsTickRecord
         let mut per_symbol_signals: HashMap<Symbol, UsSymbolSignals> = HashMap::new();
@@ -366,16 +600,44 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             market_regime: decision.market_regime.bias,
         };
         #[cfg(feature = "persistence")]
-        run_us_persistence_stage(
-            &runtime,
-            tick,
-            now,
-            &live,
-            &rest,
-            &tick_record,
-        )
-        .await;
+        run_us_persistence_stage(&runtime, tick, now, &live, &rest, &tick_record).await;
         tick_history.push(tick_record);
+
+        // Evaluate and persist US candidate mechanisms
+        {
+            let next_patterns =
+                compute_us_convergence_success_patterns(&tick_history, SIGNAL_RESOLUTION_LAG);
+            let now_str = now
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default();
+            cached_us_candidate_mechanisms = evaluate_us_candidate_mechanisms(
+                &next_patterns,
+                &cached_us_candidate_mechanisms,
+                tick,
+                &now_str,
+            );
+            let live_count = cached_us_candidate_mechanisms
+                .iter()
+                .filter(|m| m.mode == "live")
+                .count();
+            if !cached_us_candidate_mechanisms.is_empty() {
+                eprintln!(
+                    "[us] candidate mechanisms: {} total, {} live",
+                    cached_us_candidate_mechanisms.len(),
+                    live_count,
+                );
+            }
+            #[cfg(feature = "persistence")]
+            if let Some(ref store) = runtime.store {
+                if let Err(err) = store
+                    .write_candidate_mechanisms(&cached_us_candidate_mechanisms)
+                    .await
+                {
+                    eprintln!("[us] failed to persist candidate mechanisms: {err}");
+                }
+            }
+        }
+
         let dynamics = compute_us_dynamics(&tick_history);
 
         // 7. Signal scorecard: record new suggestions, resolve old ones
@@ -404,6 +666,52 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         prune_us_signal_records(&mut signal_records, tick);
         let scorecard = UsSignalScorecard::compute(&signal_records);
+        vortex_attention =
+            derive_us_vortex_attention(&reasoning.hypotheses, &reasoning.propagation_paths);
+        for symbol in graph.stock_nodes.keys() {
+            let signal_fired = reasoning_event_snapshot.events.iter().any(|event| {
+                matches!(&event.value.scope, UsSignalScope::Symbol(candidate) if candidate == symbol)
+            }) || reasoning_derived_snapshot.signals.iter().any(|signal| {
+                matches!(&signal.value.scope, UsSignalScope::Symbol(candidate) if candidate == symbol)
+            });
+            let has_recommendation = reasoning_decision
+                .order_suggestions
+                .iter()
+                .any(|suggestion| suggestion.symbol == *symbol);
+            let active_hypotheses = reasoning
+                .hypothesis_tracks
+                .iter()
+                .filter(|track| {
+                    matches!(
+                        &track.scope,
+                        crate::ontology::reasoning::ReasoningScope::Symbol(candidate)
+                            if candidate == symbol
+                    )
+                })
+                .count() as u32;
+            let change_pct = quotes
+                .iter()
+                .find(|quote| quote.symbol == *symbol)
+                .map(|quote| {
+                    use rust_decimal::prelude::ToPrimitive;
+                    let last = quote.last_done.to_f64().unwrap_or(0.0);
+                    let prev = quote.prev_close.to_f64().unwrap_or(0.0);
+                    if prev.abs() > 0.0001 {
+                        ((last - prev) / prev) * 100.0
+                    } else {
+                        0.0
+                    }
+                })
+                .unwrap_or(0.0);
+            attention.update_activity(
+                &symbol.0,
+                signal_fired,
+                change_pct.abs() > 0.5,
+                change_pct,
+                active_hypotheses,
+                has_recommendation,
+            );
+        }
 
         // Update state for next tick
         previous_setups = reasoning.tactical_setups.clone();
@@ -417,14 +725,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         if tick % 30 == 0 && tick_history.len() > 1 {
             lineage_stats = compute_us_lineage_stats(&tick_history, SIGNAL_RESOLUTION_LAG);
             #[cfg(feature = "persistence")]
-            maybe_persist_us_lineage_stage(
-                &runtime,
-                tick,
-                now,
-                tick_history.len(),
-                &lineage_stats,
-            )
-            .await;
+            maybe_persist_us_lineage_stage(&runtime, tick, now, tick_history.len(), &lineage_stats)
+                .await;
         }
 
         // 9. Graph insights (pressure, rotation, clusters, stress, cross-market anomalies)
@@ -555,7 +857,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             &cross_market_signals,
             &dynamics,
             &tick_history,
-            &lineage_stats,
             &position_tracker,
             &workflows,
             &propagation_senses,
@@ -563,25 +864,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
         let mut sorted_convergence: Vec<_> = decision.convergence_scores.iter().collect();
         sorted_convergence.sort_by(|a, b| b.1.composite.abs().cmp(&a.1.composite.abs()));
-
-        display_us_runtime_summary(
-            tick,
-            &timestamp_str,
-            &graph,
-            &decision,
-            &event_snapshot,
-            &reasoning,
-            &scorecard,
-            live.push_count,
-            &sorted_convergence,
-            &cross_market_signals,
-            &sorted_events,
-            &lineage_stats,
-            &insights,
-            &backward,
-            &position_tracker,
-            &workflows,
-        );
 
         // Build projection bundle
         let artifact_projection = project_us(UsProjectionInputs {
@@ -595,6 +877,28 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             previous_agent_session: runtime.projection_state.previous_agent_session.as_ref(),
             previous_agent_scoreboard: runtime.projection_state.previous_agent_scoreboard.as_ref(),
         });
+
+        display_us_runtime_summary(
+            &artifact_projection.live_snapshot,
+            tick,
+            &timestamp_str,
+            &graph,
+            &decision,
+            &event_snapshot,
+            &reasoning,
+            &scorecard,
+            live.push_count,
+            &sorted_convergence,
+            &cross_market_signals,
+            &sorted_events,
+            &insights,
+            &backward,
+            &position_tracker,
+            &workflows,
+            &artifact_projection.agent_briefing,
+            &artifact_projection.agent_session,
+            runtime.projection_state.previous_agent_session.as_ref(),
+        );
         #[cfg(feature = "persistence")]
         run_us_projection_stage(
             &mut runtime,
@@ -624,7 +928,41 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             tick_advance.received_push,
             tick_advance.received_update,
         );
+
+        runtime.runtime_task_heartbeat(
+            format!(
+                "us runtime tick {} · pushes={} · workflows={}",
+                tick,
+                live.push_count,
+                workflows.len()
+            ),
+            json!({
+                "market": "us",
+                "tick": tick,
+                "push_count": live.push_count,
+                "received_push": tick_advance.received_push,
+                "received_update": tick_advance.received_update,
+                "tick_ms": tick_started_at.elapsed().as_millis(),
+                "quotes": live.quotes.len(),
+                "candlesticks": live.candlesticks.len(),
+                "tick_history_len": tick_history.len(),
+                "signal_records": signal_records.len(),
+                "workflows": workflows.len(),
+                "market_open": true,
+            }),
+        );
     }
+
+    runtime.complete_runtime_task(
+        "us runtime stopped",
+        json!({
+            "market": "us",
+            "final_tick": tick,
+            "push_count": live.push_count,
+            "tick_history_len": tick_history.len(),
+            "workflows": workflows.len(),
+        }),
+    );
 
     Ok(())
 }
