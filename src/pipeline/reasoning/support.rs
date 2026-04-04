@@ -610,28 +610,91 @@ pub(super) fn competing_hypothesis_confidence(evidence: &[ReasoningEvidence]) ->
 }
 
 /// Build a one-sentence causal narrative: why does this case exist at the reasoning level?
-/// Uses the strongest supporting evidence to ground the explanation.
+///
+/// Distinct from entry_rationale (policy justification). This answers: what causal chain
+/// produced this hypothesis? It considers:
+/// - The trigger event (strongest supporting evidence)
+/// - The driver kind (company-specific vs sector-wide vs macro, from attribution provenance)
+/// - Whether propagation paths reinforce the thesis
+/// - The diversity of evidence channels
 pub(super) fn build_causal_narrative(
     scope: &ReasoningScope,
     family_label: &str,
     evidence: &[ReasoningEvidence],
 ) -> String {
-    let strongest_support = evidence
+    let supporting: Vec<_> = evidence
         .iter()
         .filter(|item| item.polarity == EvidencePolarity::Supports)
-        .max_by(|a, b| a.weight.cmp(&b.weight));
+        .collect();
+
+    if supporting.is_empty() {
+        return format!(
+            "{} is under investigation for {} based on structural signals",
+            scope_title(scope),
+            family_label
+        );
+    }
+
+    let strongest = supporting
+        .iter()
+        .max_by(|a, b| a.weight.cmp(&b.weight))
+        .unwrap();
+
+    // Extract driver kind from evidence provenance
+    let driver_phrase = supporting
+        .iter()
+        .flat_map(|e| e.references.iter())
+        .find_map(|r| r.strip_prefix("attr:driver="))
+        .map(|driver| match driver {
+            "company_specific" => "a company-specific event",
+            "sector_wide" => "a sector-wide dynamic",
+            "macro_wide" => "a macro-level shift",
+            _ => "an observed signal",
+        })
+        .unwrap_or("observed market activity");
+
+    // Check if propagation paths reinforce
+    let has_propagation = supporting
+        .iter()
+        .any(|e| e.kind == ReasoningEvidenceKind::PropagatedPath);
+
+    // Count distinct evidence channels
+    let local_event_count = supporting
+        .iter()
+        .filter(|e| e.kind == ReasoningEvidenceKind::LocalEvent)
+        .count();
+    let local_signal_count = supporting
+        .iter()
+        .filter(|e| e.kind == ReasoningEvidenceKind::LocalSignal)
+        .count();
 
     let scope_name = scope_title(scope);
-    match strongest_support {
-        Some(item) => format!(
-            "{} triggered a {} hypothesis because {}",
-            scope_name, family_label, item.statement
-        ),
-        None => format!(
-            "{} is under investigation for {} based on structural signals",
-            scope_name, family_label
-        ),
-    }
+
+    // Build narrative from components
+    let trigger = &strongest.statement;
+    let propagation_clause = if has_propagation {
+        ", reinforced by cross-scope propagation paths"
+    } else {
+        ""
+    };
+    let channel_clause = if local_event_count + local_signal_count > 2 {
+        format!(
+            " ({} events + {} signals converging)",
+            local_event_count, local_signal_count
+        )
+    } else {
+        String::new()
+    };
+
+    format!(
+        "{scope_name}: {driver_phrase} — {trigger} — suggests {family}{propagation}{channels}",
+        scope_name = scope_name,
+        driver_phrase = driver_phrase,
+        trigger = trigger,
+        family = family_label.to_ascii_lowercase(),
+        propagation = propagation_clause,
+        channels = channel_clause,
+    )
 }
 
 pub(super) fn derived_provenance(

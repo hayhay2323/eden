@@ -2808,3 +2808,92 @@ fn midflight_health_leaves_stable_enter_alone() {
         "stable case should not have midflight_health note"
     );
 }
+
+#[test]
+fn causal_narrative_includes_driver_and_propagation() {
+    use super::support::build_causal_narrative;
+
+    let evidence = vec![
+        ReasoningEvidence {
+            statement: "700.HK smart-money pressure remains elevated".into(),
+            kind: ReasoningEvidenceKind::LocalEvent,
+            polarity: EvidencePolarity::Supports,
+            weight: dec!(0.8),
+            references: vec![
+                "graph_pressure:700.HK".into(),
+                "attr:driver=company_specific".into(),
+                "attr:scope=local".into(),
+            ],
+            provenance: crate::ontology::domain::ProvenanceMetadata::default(),
+        },
+        ReasoningEvidence {
+            statement: "convergence signal aligns".into(),
+            kind: ReasoningEvidenceKind::LocalSignal,
+            polarity: EvidencePolarity::Supports,
+            weight: dec!(0.5),
+            references: vec![],
+            provenance: crate::ontology::domain::ProvenanceMetadata::default(),
+        },
+        ReasoningEvidence {
+            statement: "propagation paths align with directed flow repricing".into(),
+            kind: ReasoningEvidenceKind::PropagatedPath,
+            polarity: EvidencePolarity::Supports,
+            weight: dec!(0.3),
+            references: vec![],
+            provenance: crate::ontology::domain::ProvenanceMetadata::default(),
+        },
+    ];
+
+    let narrative = build_causal_narrative(
+        &ReasoningScope::Symbol(sym("700.HK")),
+        "Directed Flow",
+        &evidence,
+    );
+
+    assert!(
+        narrative.contains("company-specific"),
+        "narrative should mention driver kind: {}",
+        narrative
+    );
+    assert!(
+        narrative.contains("propagation"),
+        "narrative should mention propagation: {}",
+        narrative
+    );
+    assert!(
+        narrative.contains("smart-money pressure"),
+        "narrative should include trigger event: {}",
+        narrative
+    );
+}
+
+#[test]
+fn causal_narrative_graceful_without_attribution() {
+    use super::support::build_causal_narrative;
+
+    let evidence = vec![ReasoningEvidence {
+        statement: "volume ratio elevated".into(),
+        kind: ReasoningEvidenceKind::LocalEvent,
+        polarity: EvidencePolarity::Supports,
+        weight: dec!(0.6),
+        references: vec!["calc_index:700.HK".into()],
+        provenance: crate::ontology::domain::ProvenanceMetadata::default(),
+    }];
+
+    let narrative = build_causal_narrative(
+        &ReasoningScope::Symbol(sym("700.HK")),
+        "Liquidity Dislocation",
+        &evidence,
+    );
+
+    assert!(
+        narrative.contains("observed market activity"),
+        "should fall back gracefully when no attribution: {}",
+        narrative
+    );
+    assert!(
+        narrative.contains("volume ratio"),
+        "should still include trigger: {}",
+        narrative
+    );
+}
