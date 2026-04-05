@@ -1,7 +1,9 @@
 use super::*;
+use crate::temporal::session::is_hk_regular_market_hours;
 
 pub(super) const TRADE_BUFFER_CAP_PER_SYMBOL: usize = 2_000;
-pub(super) const POLYMARKET_WARNING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+pub(super) const POLYMARKET_WARNING_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(300);
 
 /// Live market state accumulated from WebSocket push events.
 pub(super) struct LiveState {
@@ -114,12 +116,14 @@ pub(super) fn append_trades_with_cap(buffer: &mut Vec<Trade>, mut trades: Vec<Tr
 }
 
 /// REST-only data that doesn't come via push.
+#[allow(dead_code)]
 pub(super) struct RestSnapshot {
     pub(super) calc_indexes: HashMap<Symbol, SecurityCalcIndex>,
     pub(super) capital_flows: HashMap<Symbol, Vec<longport::quote::CapitalFlowLine>>,
     pub(super) capital_distributions: HashMap<Symbol, longport::quote::CapitalDistributionResponse>,
     pub(super) market_temperature: Option<MarketTemperature>,
     pub(super) polymarket: PolymarketSnapshot,
+    pub(super) intraday_lines: HashMap<Symbol, Vec<longport::quote::IntradayLine>>,
 }
 
 impl RestSnapshot {
@@ -130,6 +134,7 @@ impl RestSnapshot {
             capital_distributions: HashMap::new(),
             market_temperature: None,
             polymarket: PolymarketSnapshot::default(),
+            intraday_lines: HashMap::new(),
         }
     }
 }
@@ -178,6 +183,13 @@ pub(super) async fn fetch_market_context(
                 CalcIndex::Amplitude,
                 CalcIndex::FiveMinutesChangeRate,
                 CalcIndex::DividendRatioTtm,
+                CalcIndex::YtdChangeRate,
+                CalcIndex::FiveDayChangeRate,
+                CalcIndex::TenDayChangeRate,
+                CalcIndex::HalfYearChangeRate,
+                CalcIndex::TotalMarketValue,
+                CalcIndex::CapitalFlow,
+                CalcIndex::ChangeRate,
             ],
         )
         .await
@@ -210,6 +222,17 @@ pub(super) async fn fetch_rest_data(
     watchlist: &[Symbol],
     polymarket_configs: &[PolymarketMarketConfig],
 ) -> RestSnapshot {
+    if !is_hk_regular_market_hours(time::OffsetDateTime::now_utc()) {
+        return RestSnapshot {
+            calc_indexes: HashMap::new(),
+            capital_flows: HashMap::new(),
+            capital_distributions: HashMap::new(),
+            market_temperature: None,
+            polymarket: PolymarketSnapshot::default(),
+            intraday_lines: HashMap::new(),
+        };
+    }
+
     use futures::stream::{self, StreamExt};
 
     const BATCH_CONCURRENCY: usize = 8; // max concurrent requests per stream
@@ -249,11 +272,37 @@ pub(super) async fn fetch_rest_data(
     let market_context_future = fetch_market_context(ctx, watchlist);
     let polymarket_future = fetch_polymarket_snapshot(polymarket_configs);
 
-    let (flow_results, dist_results, (calc_indexes, market_temperature), polymarket_snapshot) = tokio::join!(
+    let intraday_future = stream::iter(watchlist.iter().cloned())
+        .map(|sym| {
+            let ctx = ctx.clone();
+            async move {
+                match ctx
+                    .intraday(sym.0.clone(), longport::quote::TradeSessions::Intraday)
+                    .await
+                {
+                    Ok(lines) => Some((sym, lines)),
+                    Err(e) => {
+                        eprintln!("Warning: intraday({}) failed: {}", sym, e);
+                        None
+                    }
+                }
+            }
+        })
+        .buffer_unordered(BATCH_CONCURRENCY)
+        .collect::<Vec<_>>();
+
+    let (
+        flow_results,
+        dist_results,
+        (calc_indexes, market_temperature),
+        polymarket_snapshot,
+        intraday_results,
+    ) = tokio::join!(
         flow_future,
         dist_future,
         market_context_future,
-        polymarket_future
+        polymarket_future,
+        intraday_future
     );
 
     RestSnapshot {
@@ -268,7 +317,94 @@ pub(super) async fn fetch_rest_data(
             ));
             PolymarketSnapshot::default()
         }),
+        intraday_lines: intraday_results.into_iter().flatten().collect(),
     }
+}
+
+#[allow(dead_code)]
+pub(super) async fn fetch_warrant_sentiment(
+    ctx: &QuoteContext,
+    watchlist: &[Symbol],
+) -> Vec<crate::ontology::links::WarrantSentimentObservation> {
+    use longport::quote::{SortOrderType, WarrantSortBy};
+
+    let mut results = Vec::new();
+    for sym in watchlist {
+        let warrants = match ctx
+            .warrant_list(
+                sym.0.clone(),
+                WarrantSortBy::LastDone,
+                SortOrderType::Descending,
+                None, None, None, None, None,
+            )
+            .await
+        {
+            Ok(w) => w,
+            Err(_) => continue,
+        };
+        if warrants.is_empty() {
+            continue;
+        }
+
+        let mut call_count = 0usize;
+        let mut put_count = 0usize;
+        let mut top_call_oustanding: Option<Decimal> = None;
+        let mut top_put_outstanding: Option<Decimal> = None;
+        let mut call_iv_sum = Decimal::ZERO;
+        let mut call_iv_n = 0usize;
+        let mut put_iv_sum = Decimal::ZERO;
+        let mut put_iv_n = 0usize;
+
+        for w in &warrants {
+            let is_call = matches!(w.warrant_type, longport::quote::WarrantType::Call);
+            let is_put = matches!(w.warrant_type, longport::quote::WarrantType::Put);
+
+            if is_call {
+                call_count += 1;
+                if let Some(iv) = w.implied_volatility {
+                    if iv > Decimal::ZERO {
+                        call_iv_sum += iv;
+                        call_iv_n += 1;
+                    }
+                }
+                if top_call_oustanding.is_none() || w.outstanding_ratio > top_call_oustanding.unwrap_or(Decimal::ZERO) {
+                    top_call_oustanding = Some(w.outstanding_ratio);
+                }
+            } else if is_put {
+                put_count += 1;
+                if let Some(iv) = w.implied_volatility {
+                    if iv > Decimal::ZERO {
+                        put_iv_sum += iv;
+                        put_iv_n += 1;
+                    }
+                }
+                if top_put_outstanding.is_none() || w.outstanding_ratio > top_put_outstanding.unwrap_or(Decimal::ZERO) {
+                    top_put_outstanding = Some(w.outstanding_ratio);
+                }
+            }
+        }
+
+        results.push(crate::ontology::links::WarrantSentimentObservation {
+            underlying: sym.clone(),
+            total_warrants: warrants.len(),
+            call_warrant_count: call_count,
+            put_warrant_count: put_count,
+            top_call_outstanding_ratio: top_call_oustanding,
+            top_put_outstanding_ratio: top_put_outstanding,
+            weighted_call_iv: if call_iv_n > 0 {
+                Some(call_iv_sum / Decimal::from(call_iv_n as i64))
+            } else {
+                None
+            },
+            weighted_put_iv: if put_iv_n > 0 {
+                Some(put_iv_sum / Decimal::from(put_iv_n as i64))
+            } else {
+                None
+            },
+        });
+    }
+
+    results
 }
 
 pub(super) fn rate_limited_polymarket_warning(message: &str) {

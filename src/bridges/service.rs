@@ -9,8 +9,8 @@ use crate::bridges::us_to_hk::{
     compute_us_counterpart_moves, compute_us_to_hk_signals, minutes_since_us_close,
     read_us_snapshot,
 };
-use crate::core::market::{ArtifactKind, MarketId};
 use crate::core::artifact_repository::resolve_artifact_path;
+use crate::core::market::{ArtifactKind, MarketId};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FileSystemBridgeService;

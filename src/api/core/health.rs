@@ -43,6 +43,8 @@ struct ApiHealthSummary {
     status: &'static str,
     bind_addr: String,
     db_path: String,
+    runtime_tasks_path: String,
+    runtime_task_count: usize,
     persistence_enabled: bool,
     query_auth_enabled: bool,
     cors_mode: &'static str,
@@ -117,8 +119,10 @@ pub(super) async fn health_report(
         now: OffsetDateTime::now_utc(),
         api: ApiHealthSummary {
             status: "ok",
-            bind_addr: api_config.bind_addr.to_string(),
+            bind_addr: state.bind_addr.to_string(),
             db_path: api_config.db_path,
+            runtime_tasks_path: state.runtime_tasks.path().display().to_string(),
+            runtime_task_count: state.runtime_tasks.task_count(),
             persistence_enabled: cfg!(feature = "persistence"),
             query_auth_enabled: false,
             cors_mode: cors_policy.mode,
@@ -160,9 +164,7 @@ pub(super) async fn get_us_live_snapshot() -> Result<Json<serde_json::Value>, Ap
     Ok(Json(value))
 }
 
-async fn build_runtime_health_summary(
-    market: MarketId,
-) -> Result<RuntimeHealthSummary, ApiError> {
+async fn build_runtime_health_summary(market: MarketId) -> Result<RuntimeHealthSummary, ApiError> {
     let runtime_config = RuntimeInfraConfig::load(market).map_err(ApiError::internal)?;
     let artifacts = load_runtime_artifacts(market).await;
     let issue_events = load_runtime_log_tail(runtime_config.runtime_log_path.as_deref(), 50).await;
@@ -236,10 +238,7 @@ async fn build_artifact_health(kind: &'static str, path: &str) -> ArtifactHealth
     match tokio::fs::metadata(path).await {
         Ok(metadata) => {
             let modified_at = metadata.modified().ok().and_then(system_time_to_rfc3339);
-            let age_secs = metadata
-                .modified()
-                .ok()
-                .and_then(system_time_to_age_secs);
+            let age_secs = metadata.modified().ok().and_then(system_time_to_age_secs);
             ArtifactHealth {
                 kind,
                 status: classify_artifact_status(kind, age_secs),

@@ -35,6 +35,7 @@ pub(crate) fn build_hk_backward_chains(
                 conclusion: format!("{} — 主因: {}", item.leaf_label, leading.explanation),
                 primary_driver: leading.explanation.clone(),
                 confidence: leading.confidence,
+                freshness: None,
                 evidence,
             })
         })

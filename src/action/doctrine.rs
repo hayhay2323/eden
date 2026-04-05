@@ -24,6 +24,6 @@ pub mod governance {
 
 pub mod narratives {
     pub use super::super::narrative::{
-        Direction, DimensionReading, NarrativeSnapshot, Regime, SymbolNarrative,
+        DimensionReading, Direction, NarrativeSnapshot, Regime, SymbolNarrative,
     };
 }

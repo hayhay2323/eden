@@ -4,9 +4,9 @@ use petgraph::visit::EdgeRef;
 use petgraph::Direction as GraphDirection;
 use rust_decimal::Decimal;
 
+use crate::graph::graph::{BrainGraph, EdgeKind, NodeKind};
 use crate::math::{clamp_unit_interval, median};
 use crate::ontology::objects::{SectorId, Symbol};
-use crate::graph::graph::{BrainGraph, EdgeKind, NodeKind};
 
 use super::{GraphInsights, InstitutionalConflict, MarketStressIndex, RotationPair, StockPressure};
 
@@ -19,7 +19,10 @@ pub(super) fn average(values: impl IntoIterator<Item = Decimal>) -> Decimal {
     }
 }
 
-pub(super) fn compute_pressures(brain: &BrainGraph, prev: Option<&GraphInsights>) -> Vec<StockPressure> {
+pub(super) fn compute_pressures(
+    brain: &BrainGraph,
+    prev: Option<&GraphInsights>,
+) -> Vec<StockPressure> {
     // Build prev pressure map
     let prev_map: HashMap<&Symbol, &StockPressure> = prev
         .map(|p| p.pressures.iter().map(|sp| (&sp.symbol, sp)).collect())
@@ -101,7 +104,10 @@ pub(super) fn compute_pressures(brain: &BrainGraph, prev: Option<&GraphInsights>
     results
 }
 
-pub(super) fn compute_rotations(brain: &BrainGraph, prev: Option<&GraphInsights>) -> Vec<RotationPair> {
+pub(super) fn compute_rotations(
+    brain: &BrainGraph,
+    prev: Option<&GraphInsights>,
+) -> Vec<RotationPair> {
     // Build prev rotation map: (from, to) → spread
     let prev_map: HashMap<(&SectorId, &SectorId), Decimal> = prev
         .map(|p| {

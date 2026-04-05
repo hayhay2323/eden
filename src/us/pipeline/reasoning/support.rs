@@ -5,13 +5,15 @@ use crate::ontology::reasoning::{
     EvidencePolarity, PropagationPath, ReasoningEvidence, ReasoningEvidenceKind, ReasoningScope,
 };
 use crate::us::pipeline::signals::{
-    UsDerivedSignalKind, UsDerivedSignalSnapshot, UsEventKind, UsEventSnapshot,
+    event_propagation_scope, UsDerivedSignalKind, UsDerivedSignalSnapshot, UsEventKind,
+    UsEventSnapshot, UsPropagationScope,
 };
 
 use super::{
     convert_scope, scope_id, scope_label, scope_matches, HypothesisTemplate,
-    TEMPLATE_CROSS_MARKET_ARBITRAGE, TEMPLATE_MOMENTUM_CONTINUATION,
-    TEMPLATE_PRE_MARKET_POSITIONING, TEMPLATE_SECTOR_ROTATION,
+    TEMPLATE_CATALYST_REPRICING, TEMPLATE_CROSS_MARKET_ARBITRAGE, TEMPLATE_CROSS_MARKET_DIFFUSION,
+    TEMPLATE_CROSS_MECHANISM_CHAIN, TEMPLATE_MOMENTUM_CONTINUATION, TEMPLATE_PEER_RELAY,
+    TEMPLATE_PRE_MARKET_POSITIONING, TEMPLATE_SECTOR_DIFFUSION, TEMPLATE_SECTOR_ROTATION,
     TEMPLATE_STRUCTURAL_DIFFUSION,
 };
 
@@ -22,6 +24,10 @@ pub(crate) fn template_applicable(
     derived_signals: &UsDerivedSignalSnapshot,
     relevant_paths: &[&PropagationPath],
 ) -> bool {
+    if !attribution_allows_template(template.key, scope, events) {
+        return false;
+    }
+
     match template.key {
         TEMPLATE_PRE_MARKET_POSITIONING => has_event_for_scope(
             events,
@@ -36,6 +42,13 @@ pub(crate) fn template_applicable(
                     &[UsDerivedSignalKind::CrossMarketPropagation],
                 )
                 || !relevant_paths_for_template(template.key, relevant_paths).is_empty()
+        }
+        TEMPLATE_CROSS_MARKET_DIFFUSION => {
+            has_signal_for_scope(
+                derived_signals,
+                scope,
+                &[UsDerivedSignalKind::CrossMarketPropagation],
+            ) || !relevant_paths_for_template(template.key, relevant_paths).is_empty()
         }
         TEMPLATE_MOMENTUM_CONTINUATION => {
             let has_event = has_event_for_scope(
@@ -56,11 +69,74 @@ pub(crate) fn template_applicable(
                 || matches!(scope, ReasoningScope::Sector(_))
                 || !relevant_paths_for_template(template.key, relevant_paths).is_empty()
         }
+        TEMPLATE_SECTOR_DIFFUSION => {
+            matches!(scope, ReasoningScope::Sector(_) | ReasoningScope::Symbol(_))
+                && !relevant_paths_for_template(template.key, relevant_paths).is_empty()
+        }
+        TEMPLATE_PEER_RELAY => {
+            has_event_for_scope(events, scope, &[UsEventKind::VolumeSpike])
+                || !relevant_paths_for_template(template.key, relevant_paths).is_empty()
+        }
+        TEMPLATE_CROSS_MECHANISM_CHAIN => relevant_paths
+            .iter()
+            .copied()
+            .any(path_is_mixed_multi_hop_us),
+        TEMPLATE_CATALYST_REPRICING => {
+            has_event_for_scope(events, scope, &[UsEventKind::CatalystActivation])
+                || !relevant_paths_for_template(template.key, relevant_paths).is_empty()
+        }
         TEMPLATE_STRUCTURAL_DIFFUSION => {
             !relevant_paths_for_template(template.key, relevant_paths).is_empty()
         }
         _ => false,
     }
+}
+
+fn attribution_allows_template(
+    template_key: &str,
+    scope: &ReasoningScope,
+    events: &UsEventSnapshot,
+) -> bool {
+    let Some(propagation_scope) = strongest_event_propagation_scope(events, scope) else {
+        return true;
+    };
+
+    match template_key {
+        TEMPLATE_PRE_MARKET_POSITIONING
+        | TEMPLATE_MOMENTUM_CONTINUATION
+        | TEMPLATE_CATALYST_REPRICING => true,
+        TEMPLATE_CROSS_MARKET_ARBITRAGE | TEMPLATE_CROSS_MARKET_DIFFUSION => {
+            matches!(
+                propagation_scope,
+                UsPropagationScope::CrossMarket | UsPropagationScope::Market
+            )
+        }
+        TEMPLATE_SECTOR_ROTATION
+        | TEMPLATE_SECTOR_DIFFUSION
+        | TEMPLATE_PEER_RELAY
+        | TEMPLATE_CROSS_MECHANISM_CHAIN
+        | TEMPLATE_STRUCTURAL_DIFFUSION => {
+            matches!(
+                propagation_scope,
+                UsPropagationScope::Sector
+                    | UsPropagationScope::Market
+                    | UsPropagationScope::CrossMarket
+            )
+        }
+        _ => true,
+    }
+}
+
+fn strongest_event_propagation_scope(
+    events: &UsEventSnapshot,
+    scope: &ReasoningScope,
+) -> Option<UsPropagationScope> {
+    events
+        .events
+        .iter()
+        .filter(|event| scope_matches(&convert_scope(&event.value.scope), scope))
+        .filter_map(event_propagation_scope)
+        .max()
 }
 
 fn has_event_for_scope(
@@ -169,6 +245,11 @@ pub(crate) fn event_polarity(template_key: &str, kind: &UsEventKind) -> Option<E
             UsEventKind::CapitalFlowReversal => Some(EvidencePolarity::Contradicts),
             _ => None,
         },
+        TEMPLATE_CROSS_MARKET_DIFFUSION => match kind {
+            UsEventKind::CrossMarketDivergence => Some(EvidencePolarity::Supports),
+            UsEventKind::CapitalFlowReversal => Some(EvidencePolarity::Contradicts),
+            _ => None,
+        },
         TEMPLATE_MOMENTUM_CONTINUATION => match kind {
             UsEventKind::VolumeSpike => Some(EvidencePolarity::Supports),
             UsEventKind::CapitalFlowReversal => Some(EvidencePolarity::Contradicts),
@@ -179,14 +260,53 @@ pub(crate) fn event_polarity(template_key: &str, kind: &UsEventKind) -> Option<E
         },
         TEMPLATE_SECTOR_ROTATION => match kind {
             UsEventKind::SectorMomentumShift => Some(EvidencePolarity::Supports),
-            UsEventKind::CapitalFlowReversal => Some(EvidencePolarity::Contradicts),
+            UsEventKind::CapitalFlowReversal | UsEventKind::PropagationAbsence => {
+                Some(EvidencePolarity::Contradicts)
+            }
+            _ => None,
+        },
+        TEMPLATE_SECTOR_DIFFUSION => match kind {
+            UsEventKind::SectorMomentumShift | UsEventKind::VolumeSpike => {
+                Some(EvidencePolarity::Supports)
+            }
+            UsEventKind::CapitalFlowReversal | UsEventKind::PropagationAbsence => {
+                Some(EvidencePolarity::Contradicts)
+            }
+            _ => None,
+        },
+        TEMPLATE_PEER_RELAY => match kind {
+            UsEventKind::VolumeSpike | UsEventKind::CrossMarketDivergence => {
+                Some(EvidencePolarity::Supports)
+            }
+            UsEventKind::CapitalFlowReversal | UsEventKind::PropagationAbsence => {
+                Some(EvidencePolarity::Contradicts)
+            }
+            _ => None,
+        },
+        TEMPLATE_CROSS_MECHANISM_CHAIN => match kind {
+            UsEventKind::CrossMarketDivergence
+            | UsEventKind::SectorMomentumShift
+            | UsEventKind::VolumeSpike => Some(EvidencePolarity::Supports),
+            UsEventKind::CapitalFlowReversal | UsEventKind::PropagationAbsence => {
+                Some(EvidencePolarity::Contradicts)
+            }
+            _ => None,
+        },
+        TEMPLATE_CATALYST_REPRICING => match kind {
+            UsEventKind::CatalystActivation => Some(EvidencePolarity::Supports),
+            UsEventKind::CapitalFlowReversal | UsEventKind::PropagationAbsence => {
+                Some(EvidencePolarity::Contradicts)
+            }
             _ => None,
         },
         _ => None,
     }
 }
 
-pub(crate) fn signal_polarity(template_key: &str, kind: &UsDerivedSignalKind) -> Option<EvidencePolarity> {
+pub(crate) fn signal_polarity(
+    template_key: &str,
+    kind: &UsDerivedSignalKind,
+) -> Option<EvidencePolarity> {
     match template_key {
         TEMPLATE_PRE_MARKET_POSITIONING => match kind {
             UsDerivedSignalKind::PreMarketConviction => Some(EvidencePolarity::Supports),
@@ -199,6 +319,12 @@ pub(crate) fn signal_polarity(template_key: &str, kind: &UsDerivedSignalKind) ->
             UsDerivedSignalKind::ValuationExtreme => Some(EvidencePolarity::Contradicts),
             _ => None,
         },
+        TEMPLATE_CROSS_MARKET_DIFFUSION => match kind {
+            UsDerivedSignalKind::CrossMarketPropagation
+            | UsDerivedSignalKind::StructuralComposite => Some(EvidencePolarity::Supports),
+            UsDerivedSignalKind::ValuationExtreme => Some(EvidencePolarity::Contradicts),
+            _ => None,
+        },
         TEMPLATE_MOMENTUM_CONTINUATION => match kind {
             UsDerivedSignalKind::StructuralComposite => Some(EvidencePolarity::Supports),
             UsDerivedSignalKind::ValuationExtreme => Some(EvidencePolarity::Contradicts),
@@ -207,6 +333,29 @@ pub(crate) fn signal_polarity(template_key: &str, kind: &UsDerivedSignalKind) ->
         },
         TEMPLATE_SECTOR_ROTATION => match kind {
             UsDerivedSignalKind::StructuralComposite => Some(EvidencePolarity::Supports),
+            UsDerivedSignalKind::ValuationExtreme => Some(EvidencePolarity::Contradicts),
+            _ => None,
+        },
+        TEMPLATE_SECTOR_DIFFUSION => match kind {
+            UsDerivedSignalKind::StructuralComposite => Some(EvidencePolarity::Supports),
+            UsDerivedSignalKind::ValuationExtreme => Some(EvidencePolarity::Contradicts),
+            _ => None,
+        },
+        TEMPLATE_PEER_RELAY => match kind {
+            UsDerivedSignalKind::StructuralComposite
+            | UsDerivedSignalKind::CrossMarketPropagation => Some(EvidencePolarity::Supports),
+            UsDerivedSignalKind::ValuationExtreme => Some(EvidencePolarity::Contradicts),
+            _ => None,
+        },
+        TEMPLATE_CROSS_MECHANISM_CHAIN => match kind {
+            UsDerivedSignalKind::StructuralComposite
+            | UsDerivedSignalKind::CrossMarketPropagation => Some(EvidencePolarity::Supports),
+            UsDerivedSignalKind::ValuationExtreme => Some(EvidencePolarity::Contradicts),
+            _ => None,
+        },
+        TEMPLATE_CATALYST_REPRICING => match kind {
+            UsDerivedSignalKind::StructuralComposite
+            | UsDerivedSignalKind::CrossMarketPropagation => Some(EvidencePolarity::Supports),
             UsDerivedSignalKind::ValuationExtreme => Some(EvidencePolarity::Contradicts),
             _ => None,
         },
@@ -232,6 +381,18 @@ fn path_family(mechanism: &str) -> &'static str {
     }
 }
 
+fn path_is_mixed_multi_hop_us(path: &PropagationPath) -> bool {
+    if path.steps.len() < 2 {
+        return false;
+    }
+    let families = path
+        .steps
+        .iter()
+        .map(|step| path_family(&step.mechanism))
+        .collect::<std::collections::HashSet<_>>();
+    families.len() > 1
+}
+
 fn relevant_paths_for_template<'a>(
     template_key: &str,
     relevant_paths: &[&'a PropagationPath],
@@ -248,6 +409,10 @@ fn relevant_paths_for_template<'a>(
                 .steps
                 .iter()
                 .any(|step| path_family(&step.mechanism) == "cross_market_diffusion"),
+            TEMPLATE_CROSS_MARKET_DIFFUSION => path
+                .steps
+                .iter()
+                .any(|step| path_family(&step.mechanism) == "cross_market_diffusion"),
             TEMPLATE_MOMENTUM_CONTINUATION => path.steps.iter().any(|step| {
                 matches!(
                     path_family(&step.mechanism),
@@ -258,6 +423,21 @@ fn relevant_paths_for_template<'a>(
                 matches!(
                     path_family(&step.mechanism),
                     "sector_diffusion" | "stock_diffusion"
+                )
+            }),
+            TEMPLATE_SECTOR_DIFFUSION => path
+                .steps
+                .iter()
+                .any(|step| path_family(&step.mechanism) == "sector_diffusion"),
+            TEMPLATE_PEER_RELAY => path
+                .steps
+                .iter()
+                .any(|step| path_family(&step.mechanism) == "stock_diffusion"),
+            TEMPLATE_CROSS_MECHANISM_CHAIN => path_is_mixed_multi_hop_us(path),
+            TEMPLATE_CATALYST_REPRICING => path.steps.iter().any(|step| {
+                matches!(
+                    path_family(&step.mechanism),
+                    "cross_market_diffusion" | "sector_diffusion" | "stock_diffusion"
                 )
             }),
             TEMPLATE_STRUCTURAL_DIFFUSION => path
@@ -273,8 +453,13 @@ fn path_polarity(template_key: &str) -> EvidencePolarity {
     match template_key {
         TEMPLATE_PRE_MARKET_POSITIONING => EvidencePolarity::Contradicts,
         TEMPLATE_CROSS_MARKET_ARBITRAGE
+        | TEMPLATE_CROSS_MARKET_DIFFUSION
         | TEMPLATE_MOMENTUM_CONTINUATION
         | TEMPLATE_SECTOR_ROTATION
+        | TEMPLATE_SECTOR_DIFFUSION
+        | TEMPLATE_PEER_RELAY
+        | TEMPLATE_CROSS_MECHANISM_CHAIN
+        | TEMPLATE_CATALYST_REPRICING
         | TEMPLATE_STRUCTURAL_DIFFUSION => EvidencePolarity::Supports,
         _ => EvidencePolarity::Supports,
     }
@@ -290,12 +475,32 @@ fn diffusion_path_statement(template_key: &str, scope: &ReasoningScope) -> Strin
             "{} is receiving cross-market diffusion before full price convergence",
             scope_label(scope)
         ),
+        TEMPLATE_CROSS_MARKET_DIFFUSION => format!(
+            "{} is still repricing through a cross-market lead/lag chain",
+            scope_label(scope)
+        ),
         TEMPLATE_MOMENTUM_CONTINUATION => format!(
             "{} is being reinforced by diffusion through connected names",
             scope_label(scope)
         ),
         TEMPLATE_SECTOR_ROTATION => format!(
             "{} is participating in sector-level structural diffusion",
+            scope_label(scope)
+        ),
+        TEMPLATE_SECTOR_DIFFUSION => format!(
+            "{} is being carried by a sector-level diffusion wave",
+            scope_label(scope)
+        ),
+        TEMPLATE_PEER_RELAY => format!(
+            "{} is being relayed through adjacent peer names",
+            scope_label(scope)
+        ),
+        TEMPLATE_CROSS_MECHANISM_CHAIN => format!(
+            "{} is being reinforced by a multi-hop cross-mechanism chain",
+            scope_label(scope)
+        ),
+        TEMPLATE_CATALYST_REPRICING => format!(
+            "{} may still be repricing around an active catalyst",
             scope_label(scope)
         ),
         TEMPLATE_STRUCTURAL_DIFFUSION => format!(
@@ -360,4 +565,28 @@ pub(super) fn propagated_path_evidence(
     let best_weight = scored.first().map(|item| item.0).unwrap_or(Decimal::ZERO);
     let path_ids = scored.into_iter().take(3).map(|item| item.1).collect();
     (best_weight, path_ids)
+}
+
+/// Build a one-sentence causal narrative for a US tactical setup.
+pub(crate) fn build_causal_narrative_us(
+    scope: &ReasoningScope,
+    family_label: &str,
+    evidence: &[ReasoningEvidence],
+) -> String {
+    let strongest_support = evidence
+        .iter()
+        .filter(|item| item.polarity == EvidencePolarity::Supports)
+        .max_by(|a, b| a.weight.cmp(&b.weight));
+
+    let scope_name = scope_label(scope);
+    match strongest_support {
+        Some(item) => format!(
+            "{} triggered a {} hypothesis because {}",
+            scope_name, family_label, item.statement
+        ),
+        None => format!(
+            "{} is under investigation for {} based on structural signals",
+            scope_name, family_label
+        ),
+    }
 }

@@ -1,5 +1,7 @@
 pub mod action_workflow;
 pub mod agent_graph;
+pub mod candidate_mechanism;
+pub mod causal_schema;
 pub mod case_realized_outcome;
 pub mod case_reasoning_assessment;
 pub mod hypothesis_track;

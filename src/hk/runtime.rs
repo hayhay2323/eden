@@ -46,7 +46,7 @@ use crate::live_snapshot::{
     LiveHypothesisTrack, LiveLineageMetric, LiveMarket, LiveMarketRegime, LivePressure,
     LiveScorecard, LiveSignal, LiveSnapshot, LiveStressSnapshot, LiveTacticalCase,
 };
-use crate::logic::tension::TensionSnapshot;
+use crate::pipeline::tension::TensionSnapshot;
 use crate::ontology::links::LinkSnapshot;
 use crate::ontology::objects::{BrokerId, Symbol};
 use crate::ontology::reasoning::HypothesisTrack;

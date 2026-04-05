@@ -1,5 +1,5 @@
-pub mod domain;
 pub mod contracts;
+pub mod domain;
 pub mod identity;
 pub mod kernel;
 pub mod knowledge;
@@ -17,10 +17,10 @@ pub mod states;
 pub mod store;
 pub mod world;
 
-pub use domain::*;
 pub use contracts::*;
-pub use kernel::{actions, events, facts, memory, refs};
+pub use domain::*;
 pub use identity::*;
+pub use kernel::{actions, events, facts, memory, refs};
 pub use knowledge::*;
 pub use laws::*;
 pub use mechanisms::*;

@@ -7,30 +7,23 @@ use crate::live_snapshot::{
     LiveTacticalCase,
 };
 use crate::math::clamp_unit_interval;
-use crate::ontology::{
-    ActionDirection, ActionNode, AtomicPredicate, AtomicPredicateKind,
-};
+use crate::ontology::{ActionDirection, ActionNode, AtomicPredicate, AtomicPredicateKind};
 
-#[path = "predicate_engine/position.rs"]
-mod position;
-#[path = "predicate_engine/state_dynamics.rs"]
-mod state_dynamics;
-#[path = "predicate_engine/market_structure.rs"]
-mod market_structure;
 #[path = "predicate_engine/contextual.rs"]
 mod contextual;
-#[path = "predicate_engine/signal_context.rs"]
-mod signal_context;
+#[path = "predicate_engine/market_structure.rs"]
+mod market_structure;
+#[path = "predicate_engine/position.rs"]
+mod position;
 #[path = "predicate_engine/review.rs"]
 mod review;
+#[path = "predicate_engine/signal_context.rs"]
+mod signal_context;
+#[path = "predicate_engine/state_dynamics.rs"]
+mod state_dynamics;
 use contextual::{
     counterevidence_present, cross_market_dislocation, leader_flip_detected,
     sector_rotation_pressure,
-};
-use signal_context::{
-    cross_market_link_active, cross_scope_propagation, event_catalyst_active,
-    liquidity_imbalance, mean_reversion_pressure, price_reasoning_divergence,
-    source_concentrated,
 };
 use market_structure::{
     broker_cluster_aligned, broker_concentration_risk, broker_replenish_active,
@@ -39,12 +32,16 @@ use market_structure::{
 use position::{
     concentration_risk, exit_condition_forming, position_conflict, position_reinforcement,
 };
+pub(crate) use review::derive_human_review_context;
+use review::human_rejected;
+use signal_context::{
+    cross_market_link_active, cross_scope_propagation, event_catalyst_active, liquidity_imbalance,
+    mean_reversion_pressure, price_reasoning_divergence, source_concentrated,
+};
 use state_dynamics::{
     confidence_builds, pressure_persists, signal_recurs, stress_accelerating,
     structural_degradation,
 };
-pub(crate) use review::derive_human_review_context;
-use review::human_rejected;
 
 pub struct PredicateInputs<'a> {
     pub tactical_case: &'a LiveTacticalCase,
@@ -145,7 +142,6 @@ pub fn augment_predicates_with_workflow(
     next
 }
 
-
 pub(super) fn predicate(
     kind: AtomicPredicateKind,
     score: Decimal,
@@ -177,7 +173,9 @@ pub(super) fn evidence_concentration(items: &[crate::live_snapshot::LiveEvidence
     clamp_unit_interval(peak / total)
 }
 
-pub(super) fn active_positions_for_symbol<'a>(inputs: &'a PredicateInputs<'_>) -> Vec<&'a ActionNode> {
+pub(super) fn active_positions_for_symbol<'a>(
+    inputs: &'a PredicateInputs<'_>,
+) -> Vec<&'a ActionNode> {
     let symbol = inputs.tactical_case.symbol.trim();
     if symbol.is_empty() {
         return Vec::new();
@@ -224,7 +222,10 @@ pub(super) fn case_direction(inputs: &PredicateInputs<'_>) -> ActionDirection {
     }
 }
 
-pub(super) fn directions_conflict(case_direction: ActionDirection, active_direction: ActionDirection) -> bool {
+pub(super) fn directions_conflict(
+    case_direction: ActionDirection,
+    active_direction: ActionDirection,
+) -> bool {
     matches!(
         (case_direction, active_direction),
         (ActionDirection::Long, ActionDirection::Short)
@@ -232,7 +233,10 @@ pub(super) fn directions_conflict(case_direction: ActionDirection, active_direct
     )
 }
 
-pub(super) fn directions_align(case_direction: ActionDirection, active_direction: ActionDirection) -> bool {
+pub(super) fn directions_align(
+    case_direction: ActionDirection,
+    active_direction: ActionDirection,
+) -> bool {
     matches!(
         (case_direction, active_direction),
         (ActionDirection::Long, ActionDirection::Long)
@@ -282,7 +286,6 @@ fn mean(values: &[Decimal]) -> Decimal {
             / Decimal::from(values.len() as i64),
     )
 }
-
 
 pub(super) fn normalize_count(count: usize, max: usize) -> Decimal {
     if max == 0 {

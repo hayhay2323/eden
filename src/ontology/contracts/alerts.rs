@@ -5,9 +5,7 @@ pub fn derive_agent_scoreboard(
     previous: Option<&AgentAlertScoreboard>,
 ) -> AgentAlertScoreboard {
     let recommendations = derive_agent_recommendations(snapshot);
-    let mut alerts = previous
-        .map(|item| item.alerts.clone())
-        .unwrap_or_default();
+    let mut alerts = previous.map(|item| item.alerts.clone()).unwrap_or_default();
 
     for alert in alerts.iter_mut().filter(|item| item.resolution.is_none()) {
         alert.resolution = resolve_alert_resolution_contract(snapshot, alert);
@@ -20,9 +18,16 @@ pub fn derive_agent_scoreboard(
         }
     }
 
-    alerts.sort_by(|a, b| b.tick.cmp(&a.tick).then_with(|| a.alert_id.cmp(&b.alert_id)));
+    alerts.sort_by(|a, b| {
+        b.tick
+            .cmp(&a.tick)
+            .then_with(|| a.alert_id.cmp(&b.alert_id))
+    });
 
-    let unresolved = alerts.iter().filter(|item| item.resolution.is_none()).count();
+    let unresolved = alerts
+        .iter()
+        .filter(|item| item.resolution.is_none())
+        .count();
     if alerts.len() > 240 {
         let keep = alerts
             .iter()
@@ -34,7 +39,8 @@ pub fn derive_agent_scoreboard(
 
     let stats = compute_alert_stats_contract(&alerts);
     let by_kind = compute_alert_slice_stats_contract(&alerts, |item| item.kind.clone());
-    let by_action = compute_alert_slice_stats_contract(&alerts, |item| item.suggested_action.clone());
+    let by_action =
+        compute_alert_slice_stats_contract(&alerts, |item| item.suggested_action.clone());
     let by_scope = compute_alert_slice_stats_contract(&alerts, |item| item.scope_kind.clone());
     let by_regime = compute_alert_slice_stats_contract(&alerts, |item| item.regime_bias.clone());
     let by_sector = compute_alert_slice_stats_contract(&alerts, |item| {
@@ -167,7 +173,8 @@ pub(crate) fn link_recommendations_to_cases(
             let linked_case = by_symbol
                 .get(&item.symbol.to_ascii_lowercase())
                 .and_then(|cases| {
-                    cases.iter()
+                    cases
+                        .iter()
                         .find(|case| case.recommended_action.eq_ignore_ascii_case(&item.action))
                         .copied()
                         .or_else(|| cases.first().copied())
@@ -196,26 +203,28 @@ pub(crate) fn build_workflow_contracts(
             .workflow_id
             .clone()
             .unwrap_or_else(|| format!("workflow:{}", case.setup_id));
-        let entry = grouped.entry(workflow_key.clone()).or_insert_with(|| WorkflowContract {
-            id: WorkflowContractId(workflow_key.clone()),
-            market,
-            source_tick,
-            observed_at,
-            stage: case.workflow_state.clone(),
-            execution_policy: case.execution_policy,
-            governance_reason_code: case.governance_reason_code,
-            owner: case.owner.clone(),
-            reviewer: case.reviewer.clone(),
-            queue_pin: case.queue_pin.clone(),
-            synthetic: case.workflow_id.is_none(),
-            case_ids: Vec::new(),
-            recommendation_ids: Vec::new(),
-            navigation: OperationalNavigation::default(),
-            relationships: WorkflowRelationships::default(),
-            case_refs: Vec::new(),
-            recommendation_refs: Vec::new(),
-            history_refs: workflow_history_refs(market, &workflow_key),
-        });
+        let entry = grouped
+            .entry(workflow_key.clone())
+            .or_insert_with(|| WorkflowContract {
+                id: WorkflowContractId(workflow_key.clone()),
+                market,
+                source_tick,
+                observed_at,
+                stage: case.workflow_state.clone(),
+                execution_policy: case.execution_policy,
+                governance_reason_code: case.governance_reason_code,
+                owner: case.owner.clone(),
+                reviewer: case.reviewer.clone(),
+                queue_pin: case.queue_pin.clone(),
+                synthetic: case.workflow_id.is_none(),
+                case_ids: Vec::new(),
+                recommendation_ids: Vec::new(),
+                navigation: OperationalNavigation::default(),
+                relationships: WorkflowRelationships::default(),
+                case_refs: Vec::new(),
+                recommendation_refs: Vec::new(),
+                history_refs: workflow_history_refs(market, &workflow_key),
+            });
         entry.case_ids.push(case.id.0.clone());
         entry.relationships.cases.push(case_object_ref(
             market,
@@ -256,11 +265,14 @@ pub(crate) fn build_workflow_contracts(
                     history_refs: workflow_history_refs(market, workflow_id),
                 });
             entry.recommendation_ids.push(recommendation.id.0.clone());
-            entry.relationships.recommendations.push(recommendation_object_ref(
-                market,
-                &recommendation.id.0,
-                recommendation.recommendation.title.clone(),
-            ));
+            entry
+                .relationships
+                .recommendations
+                .push(recommendation_object_ref(
+                    market,
+                    &recommendation.id.0,
+                    recommendation.recommendation.title.clone(),
+                ));
             entry.recommendation_refs.push(recommendation_object_ref(
                 market,
                 &recommendation.id.0,
@@ -313,7 +325,11 @@ pub(crate) fn decision_watchlist_entry(
             action: item.best_action.clone(),
             action_label: Some(item.preferred_expression.clone()),
             bias: item.bias.clone(),
-            severity: if item.best_action == "wait" { "normal".into() } else { "high".into() },
+            severity: if item.best_action == "wait" {
+                "normal".into()
+            } else {
+                "high".into()
+            },
             score: item.market_impulse_score,
             status: Some(snapshot.market_session.market_regime.bias.clone()),
             why: item.summary.clone(),
@@ -333,12 +349,10 @@ pub(crate) fn decision_watchlist_entry(
             state_transition: None,
             best_action: item.best_action.clone(),
             action_expectancies: AgentActionExpectancies {
-                follow_expectancy: (item.best_action == "follow").then_some(
-                    item.expected_net_alpha.unwrap_or(Decimal::ZERO),
-                ),
-                fade_expectancy: (item.best_action == "fade").then_some(
-                    item.expected_net_alpha.unwrap_or(Decimal::ZERO),
-                ),
+                follow_expectancy: (item.best_action == "follow")
+                    .then_some(item.expected_net_alpha.unwrap_or(Decimal::ZERO)),
+                fade_expectancy: (item.best_action == "fade")
+                    .then_some(item.expected_net_alpha.unwrap_or(Decimal::ZERO)),
                 wait_expectancy: Some(Decimal::ZERO),
             },
             decision_attribution: AgentDecisionAttribution {
@@ -359,6 +373,7 @@ pub(crate) fn decision_watchlist_entry(
             governance: Some(item.governance.clone()),
             governance_reason_code: Some(item.governance_reason_code),
             governance_reason: Some(item.governance_reason.clone()),
+            matched_success_pattern_signature: None,
         },
         AgentDecision::Sector(item) => AgentWatchlistEntry {
             rank,
@@ -370,7 +385,11 @@ pub(crate) fn decision_watchlist_entry(
             action: item.best_action.clone(),
             action_label: Some(item.preferred_expression.clone()),
             bias: item.bias.clone(),
-            severity: if item.best_action == "wait" { "normal".into() } else { "high".into() },
+            severity: if item.best_action == "wait" {
+                "normal".into()
+            } else {
+                "high".into()
+            },
             score: item.sector_impulse_score,
             status: None,
             why: item.summary.clone(),
@@ -386,12 +405,10 @@ pub(crate) fn decision_watchlist_entry(
             state_transition: None,
             best_action: item.best_action.clone(),
             action_expectancies: AgentActionExpectancies {
-                follow_expectancy: (item.best_action == "follow").then_some(
-                    item.expected_net_alpha.unwrap_or(Decimal::ZERO),
-                ),
-                fade_expectancy: (item.best_action == "fade").then_some(
-                    item.expected_net_alpha.unwrap_or(Decimal::ZERO),
-                ),
+                follow_expectancy: (item.best_action == "follow")
+                    .then_some(item.expected_net_alpha.unwrap_or(Decimal::ZERO)),
+                fade_expectancy: (item.best_action == "fade")
+                    .then_some(item.expected_net_alpha.unwrap_or(Decimal::ZERO)),
                 wait_expectancy: Some(Decimal::ZERO),
             },
             decision_attribution: AgentDecisionAttribution {
@@ -412,6 +429,7 @@ pub(crate) fn decision_watchlist_entry(
             governance: Some(item.governance.clone()),
             governance_reason_code: Some(item.governance_reason_code),
             governance_reason: Some(item.governance_reason.clone()),
+            matched_success_pattern_signature: None,
         },
         AgentDecision::Symbol(item) => AgentWatchlistEntry {
             rank,
@@ -450,6 +468,7 @@ pub(crate) fn decision_watchlist_entry(
             governance: Some(item.governance.clone()),
             governance_reason_code: Some(item.governance_reason_code),
             governance_reason: Some(item.governance_reason.clone()),
+            matched_success_pattern_signature: item.matched_success_pattern_signature.clone(),
         },
     }
 }
@@ -472,14 +491,14 @@ fn decision_alert_record_contract(
 ) -> Option<AgentAlertRecord> {
     match decision {
         AgentDecision::Symbol(recommendation) => {
-            let fresh_transition = snapshot
-                .recent_transitions
-                .iter()
-                .find(|item| item.to_tick == snapshot.source_tick && item.symbol.eq_ignore_ascii_case(&recommendation.symbol));
-            let fresh_notice = snapshot
-                .notices
-                .iter()
-                .find(|item| item.tick == snapshot.source_tick && item.symbol.as_deref() == Some(recommendation.symbol.as_str()));
+            let fresh_transition = snapshot.recent_transitions.iter().find(|item| {
+                item.to_tick == snapshot.source_tick
+                    && item.symbol.eq_ignore_ascii_case(&recommendation.symbol)
+            });
+            let fresh_notice = snapshot.notices.iter().find(|item| {
+                item.tick == snapshot.source_tick
+                    && item.symbol.as_deref() == Some(recommendation.symbol.as_str())
+            });
             let should_record = recommendation.action != "ignore"
                 && (fresh_transition.is_some()
                     || fresh_notice.is_some()
@@ -526,7 +545,9 @@ fn decision_alert_record_contract(
             }
             let alert_id = format!(
                 "alert:{}:market:{}:{}",
-                snapshot.source_tick, recommendation.preferred_expression, recommendation.best_action
+                snapshot.source_tick,
+                recommendation.preferred_expression,
+                recommendation.best_action
             );
             if existing.iter().any(|item| item.alert_id == alert_id) {
                 return None;
@@ -604,7 +625,8 @@ fn resolve_alert_resolution_contract(
 
     let current_reference = current_alert_reference_value_contract(snapshot, alert)?;
     let price_return = (current_reference - reference_at_alert) / reference_at_alert;
-    let expected_direction = expected_alert_direction_contract(&alert.suggested_action, &alert.action_bias);
+    let expected_direction =
+        expected_alert_direction_contract(&alert.suggested_action, &alert.action_bias);
     let follow_realized_return = if expected_direction == 0 {
         Decimal::ZERO
     } else {
@@ -649,9 +671,7 @@ fn resolve_alert_resolution_contract(
     })
 }
 
-fn alert_outcome_from_resolution_contract(
-    alert: &AgentAlertRecord,
-) -> Option<AgentAlertOutcome> {
+fn alert_outcome_from_resolution_contract(alert: &AgentAlertRecord) -> Option<AgentAlertOutcome> {
     let resolution = alert.resolution.as_ref()?;
     Some(AgentAlertOutcome {
         resolved_tick: resolution.resolved_tick,
@@ -659,7 +679,10 @@ fn alert_outcome_from_resolution_contract(
         status: resolution.status.clone(),
         price_return: Some(resolution.price_return),
         oriented_return: alert_oriented_return_contract(alert, resolution),
-        follow_through: summarize_follow_through_contract(&resolution.status, resolution.price_return),
+        follow_through: summarize_follow_through_contract(
+            &resolution.status,
+            resolution.price_return,
+        ),
     })
 }
 
@@ -715,7 +738,11 @@ where
         })
         .collect::<Vec<_>>();
 
-    items.sort_by(|a, b| b.total_alerts.cmp(&a.total_alerts).then_with(|| a.key.cmp(&b.key)));
+    items.sort_by(|a, b| {
+        b.total_alerts
+            .cmp(&a.total_alerts)
+            .then_with(|| a.key.cmp(&b.key))
+    });
     items
 }
 
@@ -960,7 +987,11 @@ fn recommendation_resolution_status_contract(
     threshold: Decimal,
 ) -> &'static str {
     if best_action == "wait" {
-        if wait_regret > threshold { "miss" } else { "flat" }
+        if wait_regret > threshold {
+            "miss"
+        } else {
+            "flat"
+        }
     } else if best_action_return > threshold {
         "hit"
     } else if wait_regret <= threshold {
@@ -984,7 +1015,11 @@ pub(crate) fn narration_action_card(
             setup_id: Some(item.recommendation_id.clone()),
             action: item.best_action.clone(),
             action_label: Some(item.preferred_expression.clone()),
-            severity: if item.best_action == "wait" { "normal".into() } else { "high".into() },
+            severity: if item.best_action == "wait" {
+                "normal".into()
+            } else {
+                "high".into()
+            },
             title: Some(format!("{} macro / market setup", market_label(market))),
             summary: item.summary.clone(),
             why_now: item.summary.clone(),
@@ -1003,12 +1038,10 @@ pub(crate) fn narration_action_card(
             state_transition: None,
             best_action: item.best_action.clone(),
             action_expectancies: AgentActionExpectancies {
-                follow_expectancy: (item.best_action == "follow").then_some(
-                    item.expected_net_alpha.unwrap_or(Decimal::ZERO),
-                ),
-                fade_expectancy: (item.best_action == "fade").then_some(
-                    item.expected_net_alpha.unwrap_or(Decimal::ZERO),
-                ),
+                follow_expectancy: (item.best_action == "follow")
+                    .then_some(item.expected_net_alpha.unwrap_or(Decimal::ZERO)),
+                fade_expectancy: (item.best_action == "fade")
+                    .then_some(item.expected_net_alpha.unwrap_or(Decimal::ZERO)),
                 wait_expectancy: Some(Decimal::ZERO),
             },
             decision_attribution: AgentDecisionAttribution {
@@ -1038,7 +1071,11 @@ pub(crate) fn narration_action_card(
             setup_id: Some(item.recommendation_id.clone()),
             action: item.best_action.clone(),
             action_label: Some(item.preferred_expression.clone()),
-            severity: if item.best_action == "wait" { "normal".into() } else { "high".into() },
+            severity: if item.best_action == "wait" {
+                "normal".into()
+            } else {
+                "high".into()
+            },
             title: Some(format!("{} sector setup", item.sector)),
             summary: item.summary.clone(),
             why_now: item.summary.clone(),
@@ -1053,12 +1090,10 @@ pub(crate) fn narration_action_card(
             state_transition: None,
             best_action: item.best_action.clone(),
             action_expectancies: AgentActionExpectancies {
-                follow_expectancy: (item.best_action == "follow").then_some(
-                    item.expected_net_alpha.unwrap_or(Decimal::ZERO),
-                ),
-                fade_expectancy: (item.best_action == "fade").then_some(
-                    item.expected_net_alpha.unwrap_or(Decimal::ZERO),
-                ),
+                follow_expectancy: (item.best_action == "follow")
+                    .then_some(item.expected_net_alpha.unwrap_or(Decimal::ZERO)),
+                fade_expectancy: (item.best_action == "fade")
+                    .then_some(item.expected_net_alpha.unwrap_or(Decimal::ZERO)),
                 wait_expectancy: Some(Decimal::ZERO),
             },
             decision_attribution: AgentDecisionAttribution {
@@ -1117,7 +1152,9 @@ pub(crate) fn narration_action_card(
     }
 }
 
-pub(crate) fn aggregate_dominant_lenses(cards: &[AgentNarrationActionCard]) -> Vec<AgentDominantLens> {
+pub(crate) fn aggregate_dominant_lenses(
+    cards: &[AgentNarrationActionCard],
+) -> Vec<AgentDominantLens> {
     #[derive(Default)]
     struct LensAccumulator {
         card_count: usize,

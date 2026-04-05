@@ -40,7 +40,7 @@ pub(super) async fn stream_feed_transitions(
 async fn snapshot_stream_revision(market: CaseMarket) -> Result<String, ApiError> {
     let (env_var, default_path) = agent::load_agent_snapshot_path(market);
     latest_file_revision(vec![
-        std::env::var(env_var).unwrap_or_else(|_| default_path.to_string()),
+        std::env::var(env_var).unwrap_or_else(|_| default_path.to_string())
     ])
     .await
 }

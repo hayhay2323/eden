@@ -56,8 +56,12 @@ pub struct LiveSnapshot {
     pub structural_deltas: Vec<LiveStructuralDelta>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub propagation_senses: Vec<LivePropagationSense>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub temporal_bars: Vec<LiveTemporalBar>,
     #[serde(default, deserialize_with = "deserialize_lineage")]
     pub lineage: Vec<LiveLineageMetric>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub success_patterns: Vec<LiveSuccessPattern>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -110,9 +114,19 @@ pub struct LiveTacticalCase {
     pub heuristic_edge: Decimal,
     pub entry_rationale: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_reason_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_primary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multi_horizon_gate_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub family_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub counter_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_success_pattern_signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -176,6 +190,31 @@ pub struct LivePropagationSense {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LiveTemporalBar {
+    pub horizon: String,
+    pub symbol: String,
+    pub bucket_started_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub high: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub low: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close: Option<Decimal>,
+    pub composite_open: Decimal,
+    pub composite_high: Decimal,
+    pub composite_low: Decimal,
+    pub composite_close: Decimal,
+    pub composite_mean: Decimal,
+    pub capital_flow_sum: Decimal,
+    pub capital_flow_delta: Decimal,
+    pub volume_total: i64,
+    pub event_count: usize,
+    pub signal_persistence: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LivePressure {
     pub symbol: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -194,6 +233,8 @@ pub struct LiveBackwardChain {
     pub conclusion: String,
     pub primary_driver: String,
     pub confidence: Decimal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness: Option<Decimal>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<LiveEvidence>,
 }
@@ -221,6 +262,10 @@ pub struct LiveEvent {
     pub symbol: Option<String>,
     pub magnitude: Decimal,
     pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub age_secs: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -243,12 +288,32 @@ pub struct LiveCrossMarketAnomaly {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LiveLineageMetric {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub horizon: Option<String>,
     pub template: String,
     pub total: usize,
     pub resolved: usize,
     pub hits: usize,
     pub hit_rate: Decimal,
     pub mean_return: Decimal,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LiveSuccessPattern {
+    pub family: String,
+    pub signature: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dominant_channels: Vec<String>,
+    pub samples: usize,
+    pub mean_net_return: Decimal,
+    pub mean_strength: Decimal,
+    pub mean_coherence: Decimal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mean_channel_diversity: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
 }
 
 /// Accepts either a full `LiveMarketRegime` object (HK format)
@@ -497,7 +562,9 @@ mod tests {
             backward_chains: vec![],
             causal_leaders: vec![],
             events: vec![],
+            temporal_bars: vec![],
             lineage: vec![],
+            success_patterns: vec![],
             cross_market_signals: vec![],
             cross_market_anomalies: vec![],
             structural_deltas: vec![],

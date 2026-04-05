@@ -4,7 +4,7 @@ use crate::agent::{
     AgentAlertScoreboard, AgentBriefing, AgentEodReview, AgentRecommendations, AgentSession,
     AgentSnapshot, AgentWatchlist,
 };
-use crate::agent_llm::{build_narration, AgentNarration};
+use crate::agent::llm::{build_narration, AgentNarration};
 use crate::live_snapshot::LiveSnapshot;
 use crate::ontology::links::LinkSnapshot;
 use crate::ontology::store::ObjectStore;

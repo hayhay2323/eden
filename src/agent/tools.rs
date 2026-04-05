@@ -10,7 +10,17 @@ const COMPAT_QUERY_ALLOWLIST: &[&str] = &[
 ];
 
 pub fn tool_catalog() -> Vec<AgentToolSpec> {
-    let mut tools = vec![
+    #[cfg(feature = "tool-registry")]
+    {
+        let registry = super::tool_registry::build_default_registry();
+        let mut tools = registry.catalog();
+        sort_tool_specs(&mut tools);
+        return tools;
+    }
+
+    #[cfg(not(feature = "tool-registry"))]
+    {
+        let mut tools = vec![
         AgentToolSpec {
             name: "market_session".into(),
             category: AgentToolCategory::ObjectQuery,
@@ -43,6 +53,62 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             deprecated: false,
             replacement: Some("market_session".into()),
             args: vec![],
+        },
+        AgentToolSpec {
+            name: "investigations".into(),
+            category: AgentToolCategory::DerivedView,
+            route: "/api/agent/:market/investigations".into(),
+            method: "GET".into(),
+            description:
+                "Returns the active object-centric investigations before action judgments compress them."
+                    .into(),
+            deprecated: false,
+            replacement: None,
+            args: vec![
+                AgentToolArgSpec {
+                    name: "symbol".into(),
+                    required: false,
+                    description: "Optional symbol filter.".into(),
+                },
+                AgentToolArgSpec {
+                    name: "sector".into(),
+                    required: false,
+                    description: "Optional sector filter.".into(),
+                },
+                AgentToolArgSpec {
+                    name: "limit".into(),
+                    required: false,
+                    description: "Maximum investigations to return.".into(),
+                },
+            ],
+        },
+        AgentToolSpec {
+            name: "judgments".into(),
+            category: AgentToolCategory::DerivedView,
+            route: "/api/agent/:market/judgments".into(),
+            method: "GET".into(),
+            description:
+                "Returns object-centric operational judgments ranked as investigate/escalate/govern/execute."
+                    .into(),
+            deprecated: false,
+            replacement: None,
+            args: vec![
+                AgentToolArgSpec {
+                    name: "symbol".into(),
+                    required: false,
+                    description: "Optional symbol filter.".into(),
+                },
+                AgentToolArgSpec {
+                    name: "sector".into(),
+                    required: false,
+                    description: "Optional sector filter.".into(),
+                },
+                AgentToolArgSpec {
+                    name: "limit".into(),
+                    required: false,
+                    description: "Maximum judgments to return.".into(),
+                },
+            ],
         },
         AgentToolSpec {
             name: "watchlist".into(),
@@ -567,8 +633,9 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             ],
         },
     ];
-    sort_tool_specs(&mut tools);
-    tools
+        sort_tool_specs(&mut tools);
+        tools
+    }
 }
 
 pub(crate) fn compat_query_allowlist() -> &'static [&'static str] {
@@ -598,33 +665,35 @@ fn suggested_tool_sort_key(tool_name: &str) -> (usize, usize) {
 
 fn preferred_tool_rank(tool_name: &str) -> usize {
     match tool_name {
-        "recommendations" => 0,
-        "watchlist" => 1,
-        "market_session" => 2,
-        "notices" => 3,
-        "transitions_since" => 4,
-        "symbol_contract" => 5,
-        "world_state" => 6,
-        "backward_investigation" => 7,
-        "sector_flow" => 8,
-        "macro_event_contracts" => 9,
-        "graph_knowledge_links" => 10,
-        "graph_macro_event_candidates" => 11,
-        "depth_change" => 12,
-        "broker_movement" => 13,
-        "knowledge_links" => 14,
-        "symbol_state" => 15,
-        "invalidation_status" => 16,
-        "active_structures" => 17,
-        "structure_state" => 18,
-        "threads" => 19,
-        "turns" => 20,
-        "wake" => 21,
-        "session" => 22,
-        "alert_scoreboard" => 23,
-        "eod_review" => 24,
-        "macro_event_candidates" => 25,
-        "macro_events" => 26,
+        "investigations" => 0,
+        "judgments" => 1,
+        "recommendations" => 2,
+        "watchlist" => 3,
+        "market_session" => 4,
+        "notices" => 5,
+        "transitions_since" => 6,
+        "symbol_contract" => 7,
+        "world_state" => 8,
+        "backward_investigation" => 9,
+        "sector_flow" => 10,
+        "macro_event_contracts" => 11,
+        "graph_knowledge_links" => 12,
+        "graph_macro_event_candidates" => 13,
+        "depth_change" => 14,
+        "broker_movement" => 15,
+        "knowledge_links" => 16,
+        "symbol_state" => 17,
+        "invalidation_status" => 18,
+        "active_structures" => 19,
+        "structure_state" => 20,
+        "threads" => 21,
+        "turns" => 22,
+        "wake" => 23,
+        "session" => 24,
+        "alert_scoreboard" => 25,
+        "eod_review" => 26,
+        "macro_event_candidates" => 27,
+        "macro_events" => 28,
         _ => 100,
     }
 }
@@ -642,13 +711,17 @@ fn tool_category_rank(category: AgentToolCategory) -> usize {
 
 fn tool_catalog_category(tool_name: &str) -> Option<AgentToolCategory> {
     match tool_name {
-        "wake" | "session" | "watchlist" | "recommendations" | "alert_scoreboard"
-        | "eod_review" | "threads" | "turns" => Some(AgentToolCategory::DerivedView),
-        "notices" | "transitions_since" => Some(AgentToolCategory::Feed),
-        "market_session" | "symbol_contract" | "world_state" | "backward_investigation"
-        | "sector_flow" | "macro_event_contracts" => {
-            Some(AgentToolCategory::ObjectQuery)
+        "wake" | "session" | "investigations" | "judgments" | "watchlist" | "recommendations"
+        | "alert_scoreboard" | "eod_review" | "threads" | "turns" => {
+            Some(AgentToolCategory::DerivedView)
         }
+        "notices" | "transitions_since" => Some(AgentToolCategory::Feed),
+        "market_session"
+        | "symbol_contract"
+        | "world_state"
+        | "backward_investigation"
+        | "sector_flow"
+        | "macro_event_contracts" => Some(AgentToolCategory::ObjectQuery),
         "depth_change" | "broker_movement" => Some(AgentToolCategory::Microstructure),
         "knowledge_links" | "graph_knowledge_links" | "graph_macro_event_candidates" => {
             Some(AgentToolCategory::GraphQuery)
@@ -678,6 +751,54 @@ pub fn execute_tool(
             .cloned()
             .map(AgentToolOutput::Session)
             .ok_or_else(|| "session state not available".to_string()),
+        "investigations" => {
+            let mut investigations = build_investigations(snapshot, session, None, limit);
+            if let Some(symbol) = symbol {
+                investigations.items.retain(|item| {
+                    item.reference_symbols
+                        .iter()
+                        .any(|value| value.eq_ignore_ascii_case(symbol))
+                        || (item.object_kind == "symbol"
+                            && item.object_id.eq_ignore_ascii_case(symbol))
+                });
+            }
+            if let Some(sector) = sector {
+                investigations.items.retain(|item| {
+                    item.object_kind == "sector" && item.object_id.eq_ignore_ascii_case(sector)
+                });
+            }
+            investigations.total = investigations.items.len();
+            if investigations.items.len() > limit {
+                investigations.items.truncate(limit);
+                investigations.total = investigations.items.len();
+            }
+            for (index, item) in investigations.items.iter_mut().enumerate() {
+                item.rank = index + 1;
+            }
+            Ok(AgentToolOutput::Investigations(investigations))
+        }
+        "judgments" => {
+            let mut judgments = build_judgments(snapshot, session, None, limit);
+            if let Some(symbol) = symbol {
+                judgments.items.retain(|item| {
+                    item.object_kind == "symbol" && item.object_id.eq_ignore_ascii_case(symbol)
+                });
+            }
+            if let Some(sector) = sector {
+                judgments.items.retain(|item| {
+                    item.object_kind == "sector" && item.object_id.eq_ignore_ascii_case(sector)
+                });
+            }
+            judgments.total = judgments.items.len();
+            if judgments.items.len() > limit {
+                judgments.items.truncate(limit);
+                judgments.total = judgments.items.len();
+            }
+            for (index, item) in judgments.items.iter_mut().enumerate() {
+                item.rank = index + 1;
+            }
+            Ok(AgentToolOutput::Judgments(judgments))
+        }
         "watchlist" => {
             let recommendations = build_recommendations(snapshot, session);
             let mut watchlist = build_watchlist(snapshot, session, Some(&recommendations), limit);

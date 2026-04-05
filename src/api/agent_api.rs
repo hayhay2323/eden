@@ -9,26 +9,27 @@ use crate::agent::{
     AgentToolSpec, AgentTurn, AgentWakeState, AgentWatchlist,
 };
 use crate::agent_codex::CodexCliAnalyzeBody;
-use crate::agent_llm::{AgentAnalysis, AgentAnalystReview, AgentAnalystScoreboard, AgentNarration};
+use crate::agent::llm::{AgentAnalysis, AgentAnalystReview, AgentAnalystScoreboard, AgentNarration};
 use crate::live_snapshot::spawn_write_json_snapshot;
 use crate::ontology::world::{BackwardInvestigation, WorldStateSnapshot};
 
 use super::agent_surface::{
     load_agent_analyst_review_for_market, load_agent_analyst_scoreboard_for_market,
-    load_agent_briefing_for_market, load_agent_eod_review_for_market, load_agent_narration_for_market,
-    load_agent_recommendations_for_market, load_agent_scoreboard_for_market,
-    load_agent_session_for_market, load_agent_watchlist_for_market,
+    load_agent_briefing_for_market, load_agent_eod_review_for_market,
+    load_agent_narration_for_market, load_agent_recommendations_for_market,
+    load_agent_scoreboard_for_market, load_agent_session_for_market,
+    load_agent_watchlist_for_market,
 };
+use super::constants::{DEFAULT_LIMIT, MAX_LIMIT};
+use super::core::{bounded, normalized_query_value, parse_case_market};
 use super::feed_api::{
     build_feed_notices_response, build_feed_transitions_response,
     FeedNoticesResponse as AgentNoticesResponse,
     FeedTransitionsResponse as AgentTransitionsResponse,
 };
-use super::core::{bounded, normalized_query_value, parse_case_market};
 use super::foundation::ApiError;
 use super::ontology_api::load_or_build_operational_snapshot;
 use super::ontology_query_api::load_world_state_for_market;
-use super::constants::{DEFAULT_LIMIT, MAX_LIMIT};
 
 #[derive(Debug, Serialize)]
 pub(super) struct AgentStructuresResponse {
@@ -112,7 +113,7 @@ pub(super) async fn get_agent_analysis(
     Path(market): Path<String>,
 ) -> Result<Json<AgentAnalysis>, ApiError> {
     let market = parse_case_market(&market)?;
-    let analysis = crate::agent_llm::load_analysis(market)
+    let analysis = crate::agent::llm::load_analysis(market)
         .await
         .map_err(|error| ApiError::internal(format!("failed to load agent analysis: {error}")))?;
     Ok(Json(analysis))
@@ -196,9 +197,9 @@ pub(super) async fn post_agent_analyze(
         .map_err(|error| ApiError::internal(format!("failed to load agent session: {error}")))?;
 
     let analysis = if body.deterministic_only {
-        crate::agent_llm::deterministic_analysis(&snapshot, &briefing)
+        crate::agent::llm::deterministic_analysis(&snapshot, &briefing)
     } else {
-        crate::agent_llm::run_or_fallback_analysis(
+        crate::agent::llm::run_or_fallback_analysis(
             snapshot.clone(),
             briefing.clone(),
             session.clone(),
@@ -207,7 +208,7 @@ pub(super) async fn post_agent_analyze(
     };
     let recommendations = agent::build_recommendations(&snapshot, Some(&session));
     let watchlist = agent::build_watchlist(&snapshot, Some(&session), Some(&recommendations), 8);
-    let narration = crate::agent_llm::build_narration(
+    let narration = crate::agent::llm::build_narration(
         &snapshot,
         &briefing,
         &session,
@@ -217,11 +218,11 @@ pub(super) async fn post_agent_analyze(
     );
 
     let analysis_path = {
-        let (env_var, default_path) = crate::agent_llm::analysis_path(market);
+        let (env_var, default_path) = crate::agent::llm::analysis_path(market);
         std::env::var(env_var).unwrap_or_else(|_| default_path.to_string())
     };
     let narration_path = {
-        let (env_var, default_path) = crate::agent_llm::narration_path(market);
+        let (env_var, default_path) = crate::agent::llm::narration_path(market);
         std::env::var(env_var).unwrap_or_else(|_| default_path.to_string())
     };
     spawn_write_json_snapshot(analysis_path, analysis.clone());
@@ -341,7 +342,9 @@ pub(super) async fn get_agent_transitions(
     Path(market): Path<String>,
     Query(query): Query<AgentFeedQuery>,
 ) -> Result<Json<AgentTransitionsResponse>, ApiError> {
-    Ok(Json(build_feed_transitions_response(&market, &query).await?))
+    Ok(Json(
+        build_feed_transitions_response(&market, &query).await?,
+    ))
 }
 
 pub(super) async fn get_agent_structures(

@@ -109,18 +109,18 @@ pub fn build_knowledge_node_records(
         match decision {
             AgentDecision::Market(item) => insert_node(
                 decision_node_ref(decision),
-                    KnowledgeNodeAttributes::Decision {
-                        scope_kind: "market".into(),
-                        title: format!("{} {}", market_label(item.market), item.best_action),
-                        bias: item.bias.clone(),
-                        best_action: item.best_action.clone(),
-                        regime_bias: item.regime_bias.clone(),
-                        alpha_horizon: item.alpha_horizon.clone(),
-                        confidence: item.market_impulse_score,
-                        score: item.market_impulse_score,
-                        preferred_expression: Some(item.preferred_expression.clone()),
-                        reference_symbols: item.reference_symbols.clone(),
-                    },
+                KnowledgeNodeAttributes::Decision {
+                    scope_kind: "market".into(),
+                    title: format!("{} {}", market_label(item.market), item.best_action),
+                    bias: item.bias.clone(),
+                    best_action: item.best_action.clone(),
+                    regime_bias: item.regime_bias.clone(),
+                    alpha_horizon: item.alpha_horizon.clone(),
+                    confidence: item.market_impulse_score,
+                    score: item.market_impulse_score,
+                    preferred_expression: Some(item.preferred_expression.clone()),
+                    reference_symbols: item.reference_symbols.clone(),
+                },
             ),
             AgentDecision::Sector(item) => {
                 insert_node(

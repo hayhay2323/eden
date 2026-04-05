@@ -1,22 +1,22 @@
-use std::collections::HashMap;
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 
 use crate::ontology::objects::{InstitutionId, SectorId, Symbol};
 use crate::ontology::store::ObjectStore;
 
 use super::graph::BrainGraph;
 
+#[path = "insights/display.rs"]
+mod display;
 #[path = "insights/institutional.rs"]
 mod institutional;
 #[path = "insights/market_metrics.rs"]
 mod market_metrics;
 #[path = "insights/relationships.rs"]
 mod relationships;
-#[path = "insights/display.rs"]
-mod display;
 use institutional::{
-    collect_institution_stock_counts, compute_institution_exoduses,
-    compute_institution_rotations, compute_shared_holders,
+    collect_institution_stock_counts, compute_institution_exoduses, compute_institution_rotations,
+    compute_shared_holders,
 };
 use market_metrics::{compute_pressures, compute_rotations, compute_stress_index};
 use relationships::{compute_clusters, compute_conflicts};
@@ -262,8 +262,6 @@ impl GraphInsights {
 // ── 8. MarketStressIndex (graph-wide anomaly detection) ──
 
 // ── Display helpers ──
-
-
 
 #[cfg(test)]
 #[path = "insights_tests.rs"]

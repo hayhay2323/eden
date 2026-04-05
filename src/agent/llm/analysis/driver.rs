@@ -1,7 +1,7 @@
-use super::*;
 use super::super::protocol::{
     call_model, initial_user_prompt, parse_action, resulting_args, system_prompt,
 };
+use super::*;
 
 pub async fn run_analysis(
     config: AnalystConfig,

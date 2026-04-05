@@ -1,5 +1,5 @@
-use super::*;
 use super::routing::impact_market_label;
+use super::*;
 
 pub(crate) fn build_macro_event_knowledge_links(
     macro_events: &[AgentMacroEvent],

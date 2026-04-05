@@ -1,5 +1,11 @@
 use super::*;
 
+fn pattern_phrase(signature: Option<&str>) -> Option<String> {
+    signature
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("matched historical pattern {value}"))
+}
+
 pub fn derive_agent_session(snapshot: &OperationalSnapshot) -> AgentSession {
     AgentSession {
         tick: snapshot.source_tick,
@@ -8,13 +14,28 @@ pub fn derive_agent_session(snapshot: &OperationalSnapshot) -> AgentSession {
         should_speak: snapshot.market_session.should_speak,
         active_thread_count: snapshot.market_session.active_thread_count,
         focus_symbols: snapshot.market_session.focus_symbols.clone(),
-        active_threads: snapshot.threads.iter().map(|item| item.thread.clone()).collect(),
+        active_threads: snapshot
+            .threads
+            .iter()
+            .map(|item| item.thread.clone())
+            .collect(),
+        current_investigations: vec![],
+        current_judgments: vec![],
         recent_turns: snapshot.recent_turns.clone(),
     }
 }
 
 pub fn derive_agent_briefing(snapshot: &OperationalSnapshot) -> AgentBriefing {
     let mut summary = snapshot.market_session.wake_summary.clone();
+    let pattern_summary = snapshot
+        .recommendations
+        .iter()
+        .find_map(|item| pattern_phrase(item.summary.matched_success_pattern_signature.as_deref()));
+    if let Some(pattern_summary) = pattern_summary.clone() {
+        if !summary.iter().any(|item| item == &pattern_summary) {
+            summary.insert(0, pattern_summary);
+        }
+    }
     if let Some(headline) = snapshot.market_session.wake_headline.as_ref() {
         if !summary.iter().any(|item| item == headline) {
             summary.insert(0, headline.clone());
@@ -34,11 +55,17 @@ pub fn derive_agent_briefing(snapshot: &OperationalSnapshot) -> AgentBriefing {
         market: snapshot.market,
         should_speak: snapshot.market_session.should_speak,
         priority: snapshot.market_session.priority,
-        headline: snapshot.market_session.wake_headline.clone(),
+        headline: snapshot
+            .market_session
+            .wake_headline
+            .clone()
+            .or(pattern_summary),
         summary,
         spoken_message,
         focus_symbols: snapshot.market_session.focus_symbols.clone(),
         reasons: snapshot.market_session.wake_reasons.clone(),
+        current_investigations: vec![],
+        current_judgments: vec![],
         executed_tools: snapshot
             .market_session
             .suggested_tools
@@ -131,7 +158,20 @@ pub fn derive_agent_watchlist(snapshot: &OperationalSnapshot, limit: usize) -> A
                 status: symbol_contract
                     .and_then(|item| item.state.structure.as_ref())
                     .and_then(|item| item.status.clone()),
-                why: format!("{symbol} is in the current session focus."),
+                why: pattern_phrase(
+                    symbol_contract
+                        .and_then(|item| item.state.structure.as_ref())
+                        .and_then(|item| item.leader_transition_summary.as_deref())
+                        .and_then(|summary| {
+                            summary
+                                .split('|')
+                                .map(str::trim)
+                                .find_map(|part| part.strip_prefix("pattern=").map(str::to_string))
+                        })
+                        .as_deref(),
+                )
+                .map(|pattern| format!("{symbol} is in the current session focus | {pattern}"))
+                .unwrap_or_else(|| format!("{symbol} is in the current session focus.")),
                 why_components: vec![],
                 primary_lens: None,
                 supporting_lenses: vec![],
@@ -143,6 +183,17 @@ pub fn derive_agent_watchlist(snapshot: &OperationalSnapshot, limit: usize) -> A
                 thesis_family: symbol_contract
                     .and_then(|item| item.state.structure.as_ref())
                     .and_then(|item| item.thesis_family.clone()),
+                matched_success_pattern_signature: symbol_contract
+                    .and_then(|item| item.state.structure.as_ref())
+                    .and_then(|item| {
+                        item.leader_transition_summary
+                            .as_deref()
+                            .and_then(|summary| {
+                                summary.split('|').map(str::trim).find_map(|part| {
+                                    part.strip_prefix("pattern=").map(str::to_string)
+                                })
+                            })
+                    }),
                 state_transition: symbol_contract
                     .and_then(|item| item.state.structure.as_ref())
                     .and_then(|item| item.transition_reason.clone()),
@@ -171,7 +222,8 @@ pub fn derive_agent_watchlist(snapshot: &OperationalSnapshot, limit: usize) -> A
                 )),
                 governance_reason_code: Some(ActionGovernanceReasonCode::AdvisoryAction),
                 governance_reason: Some(
-                    "focus-only symbol remains advisory until a formal recommendation exists".into(),
+                    "focus-only symbol remains advisory until a formal recommendation exists"
+                        .into(),
                 ),
             });
         }
@@ -206,6 +258,16 @@ pub fn derive_agent_narration(
         .take(3)
         .map(|entry| format!("{}: {} | {}", entry.symbol, entry.action, entry.why))
         .collect::<Vec<_>>();
+    if let Some(pattern_summary) = top_decision.and_then(|decision| match decision {
+        AgentDecision::Symbol(item) => {
+            pattern_phrase(item.matched_success_pattern_signature.as_deref())
+        }
+        _ => None,
+    }) {
+        if !bullets.iter().any(|item| item == &pattern_summary) {
+            bullets.insert(0, pattern_summary);
+        }
+    }
     for item in briefing.summary.iter().take(2) {
         if !bullets.iter().any(|candidate| candidate == item) {
             bullets.push(item.clone());
@@ -219,6 +281,16 @@ pub fn derive_agent_narration(
                 item.best_action, item.preferred_expression, item.summary
             ),
         );
+    }
+    if let Some(pattern_summary) = top_decision.and_then(|decision| match decision {
+        AgentDecision::Symbol(item) => {
+            pattern_phrase(item.matched_success_pattern_signature.as_deref())
+        }
+        _ => None,
+    }) {
+        if !bullets.iter().any(|item| item == &pattern_summary) {
+            bullets.insert(0, pattern_summary);
+        }
     }
     bullets.truncate(5);
 
@@ -244,10 +316,18 @@ pub fn derive_agent_narration(
     let alert_level = top_decision
         .map(|decision| match decision {
             AgentDecision::Market(item) => {
-                if item.best_action == "wait" { "normal" } else { "high" }
+                if item.best_action == "wait" {
+                    "normal"
+                } else {
+                    "high"
+                }
             }
             AgentDecision::Sector(item) => {
-                if item.best_action == "wait" { "normal" } else { "high" }
+                if item.best_action == "wait" {
+                    "normal"
+                } else {
+                    "high"
+                }
             }
             AgentDecision::Symbol(item) => item.severity.as_str(),
         })
@@ -359,6 +439,15 @@ pub fn derive_agent_narration(
                     })
                 })
             })
+            .or_else(|| {
+                top_decision.and_then(|decision| match decision {
+                    AgentDecision::Symbol(item) => {
+                        pattern_phrase(item.matched_success_pattern_signature.as_deref())
+                            .map(|pattern| format!("{} {} | {}", item.symbol, item.action, pattern))
+                    }
+                    _ => None,
+                })
+            })
             .or_else(|| briefing.headline.clone()),
         message,
         bullets,
@@ -382,7 +471,11 @@ pub fn derive_agent_narration(
                     break;
                 }
             }
-            if focus.is_empty() { briefing.focus_symbols.clone() } else { focus }
+            if focus.is_empty() {
+                briefing.focus_symbols.clone()
+            } else {
+                focus
+            }
         },
         tags,
         primary_action: top_decision.and_then(|decision| match decision {

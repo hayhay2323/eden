@@ -30,6 +30,7 @@ pub(super) fn assessment_snapshot_from_summary(
         },
         symbol: summary.symbol.clone(),
         title: summary.title.clone(),
+        family_label: summary.family_label.clone(),
         recommended_action: summary.recommended_action.clone(),
         source: "current".into(),
         recorded_at,
@@ -139,7 +140,9 @@ pub(super) fn mechanism_factor_map(
 }
 
 #[cfg(feature = "persistence")]
-pub(super) fn state_score_map(snapshot: &CaseReasoningAssessmentSnapshot) -> HashMap<String, Decimal> {
+pub(super) fn state_score_map(
+    snapshot: &CaseReasoningAssessmentSnapshot,
+) -> HashMap<String, Decimal> {
     snapshot
         .reasoning_profile
         .composite_states
@@ -370,13 +373,14 @@ pub(super) fn decimal_delta(from: Option<Decimal>, to: Option<Decimal>) -> Optio
 
 impl CaseReasoningAssessmentSnapshot {
     #[cfg(feature = "persistence")]
-    pub(in crate::cases) fn from_record(record: CaseReasoningAssessmentRecord) -> Self {
+    pub(crate) fn from_record(record: CaseReasoningAssessmentRecord) -> Self {
         Self {
             assessment_id: record.assessment_id,
             setup_id: record.setup_id,
             market: record.market,
             symbol: record.symbol,
             title: record.title,
+            family_label: record.family_label,
             sector: record.sector,
             recommended_action: record.recommended_action,
             source: record.source,

@@ -225,8 +225,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn bootstrap_does_not_consume_ready_messages() {
-        let (mut push_tx, mut push_rx) = mpsc::channel(4);
-        let (mut update_tx, mut update_rx) = mpsc::channel(4);
+        let (push_tx, mut push_rx) = mpsc::channel(4);
+        let (update_tx, mut update_rx) = mpsc::channel(4);
         push_tx.send("push-1").await.unwrap();
         update_tx.send("update-1").await.unwrap();
 
@@ -257,8 +257,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn clean_state_is_gated_even_on_bootstrap() {
-        let (mut push_tx, mut push_rx) = mpsc::channel(4);
-        let (mut update_tx, mut update_rx) = mpsc::channel(4);
+        let (push_tx, mut push_rx) = mpsc::channel(4);
+        let (update_tx, mut update_rx) = mpsc::channel(4);
         drop(push_tx);
         drop(update_tx);
 
@@ -285,8 +285,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn next_tick_coalesces_debounced_pushes_and_keeps_latest_update() {
-        let (mut push_tx, mut push_rx) = mpsc::channel(8);
-        let (mut update_tx, mut update_rx) = mpsc::channel(8);
+        let (push_tx, mut push_rx) = mpsc::channel(8);
+        let (update_tx, mut update_rx) = mpsc::channel(8);
         push_tx.send("first").await.unwrap();
 
         let mut bootstrap_pending = false;

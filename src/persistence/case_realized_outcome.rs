@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use time::serde::rfc3339;
 use time::OffsetDateTime;
 
@@ -99,11 +99,8 @@ mod tests {
             convergence_score: dec!(0.5),
         };
 
-        let record = CaseRealizedOutcomeRecord::from_outcome(
-            &outcome,
-            "hk",
-            Some("iceberg".into()),
-        );
+        let record =
+            CaseRealizedOutcomeRecord::from_outcome(&outcome, "hk", Some("iceberg".into()));
         assert_eq!(record.market, "hk");
         assert_eq!(record.setup_id, "setup:1");
         assert_eq!(record.primary_lens.as_deref(), Some("iceberg"));

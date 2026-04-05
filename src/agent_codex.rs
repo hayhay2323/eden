@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use crate::agent_llm::{load_analysis, load_final_narration, AgentAnalysis, AgentNarration};
+use crate::agent::llm::{load_analysis, load_final_narration, AgentAnalysis, AgentNarration};
 use crate::cases::CaseMarket;
 
 #[derive(Debug, Clone, Deserialize, Default)]

@@ -31,22 +31,23 @@ pub(crate) fn summarize_hk_scorecard(scorecard: &SignalScorecard) -> LiveScoreca
     }
 }
 
-pub(crate) fn build_hk_lineage_metrics(
-    stats: &eden::temporal::lineage::LineageStats,
-) -> Vec<LiveLineageMetric> {
-    stats
-        .promoted_outcomes
-        .iter()
-        .take(6)
-        .map(|item| LiveLineageMetric {
-            template: item.label.clone(),
-            total: item.total,
-            resolved: item.resolved,
-            hits: item.hits,
-            hit_rate: item.hit_rate,
-            mean_return: item.mean_return,
-        })
-        .collect()
+pub(crate) fn build_hk_lineage_metrics(history: &TickHistory) -> Vec<LiveLineageMetric> {
+    eden::temporal::lineage::compute_multi_horizon_lineage_metrics(
+        history,
+        super::LINEAGE_WINDOW,
+        330,
+    )
+    .iter()
+    .map(|item| LiveLineageMetric {
+        horizon: Some(item.horizon.clone()),
+        template: item.template.clone(),
+        total: item.total,
+        resolved: item.resolved,
+        hits: item.hits,
+        hit_rate: item.hit_rate,
+        mean_return: item.mean_return,
+    })
+    .collect()
 }
 
 pub(crate) fn extract_symbol_scope(scope: &eden::ReasoningScope) -> Option<&Symbol> {

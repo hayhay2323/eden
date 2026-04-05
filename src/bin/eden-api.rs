@@ -1,5 +1,4 @@
-use eden::api::{default_bind_addr, serve, ApiKeyCipher, ApiKeyRevocationStore};
-use eden::core::settings::ApiInfraConfig;
+use eden::{default_bind_addr, serve, ApiInfraConfig, ApiKeyCipher, ApiKeyRevocationStore};
 use std::io;
 
 fn usage() -> &'static str {
@@ -23,7 +22,7 @@ async fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
             let bind = parse_bind_arg(rest)?;
             let config = ApiInfraConfig::load().map_err(usage_error_owned)?;
             config.log_startup(cfg!(feature = "persistence"));
-            println!("eden-api listening on http://{bind}");
+            println!("eden-api starting on http://{bind}");
             serve(bind).await?;
             Ok(())
         }

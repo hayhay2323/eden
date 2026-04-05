@@ -335,6 +335,7 @@ pub(super) fn build_hk_invalidation(
     hypothesis: Option<&Hypothesis>,
     backward: Option<&BackwardInvestigation>,
     setup: Option<&TacticalSetup>,
+    live_case: Option<&crate::live_snapshot::LiveTacticalCase>,
 ) -> Option<AgentInvalidationState> {
     let status = track
         .map(|item| item.status.as_str().to_string())
@@ -356,6 +357,20 @@ pub(super) fn build_hk_invalidation(
     }
     if let Some(setup) = setup {
         rules.extend(setup.risk_notes.iter().cloned());
+    }
+    if let Some(live_case) = live_case {
+        if let Some(code) = &live_case.review_reason_code {
+            rules.push(format!("review_reason_code={code}"));
+        }
+        if let Some(primary) = &live_case.policy_primary {
+            rules.push(format!("policy_primary={primary}"));
+        }
+        if let Some(reason) = &live_case.policy_reason {
+            rules.push(format!("policy_reason={reason}"));
+        }
+        if let Some(reason) = &live_case.multi_horizon_gate_reason {
+            rules.push(format!("multi_horizon_gate=blocked: {reason}"));
+        }
     }
     if let Some(backward) = backward {
         if let Some(falsifier) = &backward.leading_falsifier {
@@ -381,8 +396,9 @@ pub(super) fn build_us_invalidation(
     setup: Option<&TacticalSetup>,
     hypothesis: Option<&Hypothesis>,
     backward: Option<&crate::live_snapshot::LiveBackwardChain>,
+    live_case: Option<&crate::live_snapshot::LiveTacticalCase>,
 ) -> Option<AgentInvalidationState> {
-    if setup.is_none() && hypothesis.is_none() && backward.is_none() {
+    if setup.is_none() && hypothesis.is_none() && backward.is_none() && live_case.is_none() {
         return None;
     }
 
@@ -397,6 +413,20 @@ pub(super) fn build_us_invalidation(
     }
     if let Some(setup) = setup {
         rules.extend(setup.risk_notes.iter().cloned());
+    }
+    if let Some(live_case) = live_case {
+        if let Some(code) = &live_case.review_reason_code {
+            rules.push(format!("review_reason_code={code}"));
+        }
+        if let Some(primary) = &live_case.policy_primary {
+            rules.push(format!("policy_primary={primary}"));
+        }
+        if let Some(reason) = &live_case.policy_reason {
+            rules.push(format!("policy_reason={reason}"));
+        }
+        if let Some(reason) = &live_case.multi_horizon_gate_reason {
+            rules.push(format!("multi_horizon_gate=blocked: {reason}"));
+        }
     }
     if let Some(backward) = backward {
         rules.push(format!("主因反轉則失效: {}", backward.primary_driver));
@@ -485,8 +515,10 @@ pub(super) fn build_hk_structure_state(
     backward: Option<&BackwardInvestigation>,
     hypothesis: Option<&Hypothesis>,
     context_prior: Option<&AgentContextPrior>,
+    live_case: Option<&crate::live_snapshot::LiveTacticalCase>,
 ) -> Option<AgentStructureState> {
     let setup = setup?;
+    let matched_pattern = live_case.and_then(|item| item.matched_success_pattern_signature.clone());
     Some(AgentStructureState {
         symbol: symbol.to_string(),
         sector: store
@@ -515,7 +547,10 @@ pub(super) fn build_hk_structure_state(
                 .map(|cause| cause.explanation.clone())
         }),
         leader_streak: backward.map(|item| item.leading_cause_streak),
-        leader_transition_summary: backward.and_then(|item| item.leader_transition_summary.clone()),
+        leader_transition_summary: append_pattern_fragment(
+            backward.and_then(|item| item.leader_transition_summary.clone()),
+            matched_pattern.clone(),
+        ),
         thesis_family: hypothesis
             .map(|item| item.family_label.clone())
             .or_else(|| setup_family(setup)),
@@ -528,8 +563,22 @@ pub(super) fn build_hk_structure_state(
             hypothesis,
             backward.and_then(|item| item.leading_falsifier.as_deref()),
             Some(setup),
-        ),
+        )
+        .or_else(|| live_case.and_then(|item| item.multi_horizon_gate_reason.clone())),
     })
+}
+
+pub(super) fn append_pattern_fragment(
+    base: Option<String>,
+    matched_pattern: Option<String>,
+) -> Option<String> {
+    match (base, matched_pattern) {
+        (Some(base), Some(pattern)) if !pattern.is_empty() => {
+            Some(format!("{base} | pattern={pattern}"))
+        }
+        (None, Some(pattern)) if !pattern.is_empty() => Some(format!("pattern={pattern}")),
+        (base, _) => base,
+    }
 }
 
 pub(super) fn us_sector_name(store: &ObjectStore, symbol: &str) -> Option<String> {

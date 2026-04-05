@@ -6,19 +6,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::cases::{
     build_case_briefing, build_case_detail, build_case_list, build_case_review,
-    filter_case_list_by_actor, filter_case_list_by_mechanism, filter_case_list_by_owner,
-    filter_case_list_by_primary_lens, filter_case_list_by_queue_pin, filter_case_list_by_reviewer,
-    filter_case_list_by_governance_reason_code, load_snapshot, refresh_case_list_governance,
-    CaseBriefingResponse, CaseDetail, CaseListResponse, CaseMarket, CaseMechanismStory,
-    CaseMechanismTransitionDigest, CaseMechanismTransitionSliceStat, CaseMechanismTransitionStat,
-    CaseReviewResponse,
+    filter_case_list_by_actor, filter_case_list_by_governance_reason_code,
+    filter_case_list_by_mechanism, filter_case_list_by_owner, filter_case_list_by_primary_lens,
+    filter_case_list_by_queue_pin, filter_case_list_by_reviewer, load_snapshot,
+    refresh_case_list_governance, CaseBriefingResponse, CaseDetail, CaseListResponse, CaseMarket,
+    CaseMechanismStory, CaseMechanismTransitionDigest, CaseMechanismTransitionSliceStat,
+    CaseMechanismTransitionStat, CaseReviewResponse,
 };
 #[cfg(feature = "persistence")]
 use crate::cases::{enrich_case_detail, enrich_case_review, enrich_case_summaries};
 
+use super::constants::CASE_STREAM_INTERVAL_SECS;
 use super::core::{matches_optional_text, parse_case_market, sse_event_from_error};
 use super::foundation::{ApiError, ApiState, JsonEventStream};
-use super::constants::CASE_STREAM_INTERVAL_SECS;
 
 #[derive(Debug, Serialize)]
 pub(super) struct CaseTransitionAnalyticsResponse {
@@ -38,8 +38,7 @@ pub(super) struct CaseTransitionAnalyticsFilters {
     pub(super) classification: Option<String>,
     pub(super) queue_pin: Option<String>,
     pub(super) primary_lens: Option<String>,
-    pub(super) governance_reason_code:
-        Option<crate::action::workflow::ActionGovernanceReasonCode>,
+    pub(super) governance_reason_code: Option<crate::action::workflow::ActionGovernanceReasonCode>,
     pub(super) limit: usize,
 }
 
@@ -52,8 +51,7 @@ pub(super) struct CaseMechanismStoryResponse {
     pub(super) workflow_state: String,
     pub(super) execution_policy: Option<crate::action::workflow::ActionExecutionPolicy>,
     pub(super) governance: Option<crate::action::workflow::ActionGovernanceContract>,
-    pub(super) governance_reason_code:
-        Option<crate::action::workflow::ActionGovernanceReasonCode>,
+    pub(super) governance_reason_code: Option<crate::action::workflow::ActionGovernanceReasonCode>,
     pub(super) governance_reason: Option<String>,
     pub(super) market_regime_bias: String,
     pub(super) current_mechanism: Option<String>,
@@ -68,8 +66,7 @@ pub(super) struct CaseQuery {
     pub(super) queue_pin: Option<String>,
     pub(super) primary_lens: Option<String>,
     pub(super) mechanism: Option<String>,
-    pub(super) governance_reason_code:
-        Option<crate::action::workflow::ActionGovernanceReasonCode>,
+    pub(super) governance_reason_code: Option<crate::action::workflow::ActionGovernanceReasonCode>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -79,8 +76,7 @@ pub(super) struct CaseTransitionAnalyticsQuery {
     pub(super) reviewer: Option<String>,
     pub(super) queue_pin: Option<String>,
     pub(super) primary_lens: Option<String>,
-    pub(super) governance_reason_code:
-        Option<crate::action::workflow::ActionGovernanceReasonCode>,
+    pub(super) governance_reason_code: Option<crate::action::workflow::ActionGovernanceReasonCode>,
     pub(super) classification: Option<String>,
     pub(super) limit: Option<usize>,
 }
@@ -110,7 +106,9 @@ pub(super) async fn get_case_review(
     Query(query): Query<CaseQuery>,
 ) -> Result<Json<CaseReviewResponse>, ApiError> {
     let market = parse_case_market(&market)?;
-    Ok(Json(load_case_review_response(&state, market, &query).await?))
+    Ok(Json(
+        load_case_review_response(&state, market, &query).await?,
+    ))
 }
 
 pub(super) async fn get_case_transition_analytics(
@@ -184,7 +182,9 @@ pub(super) async fn get_case_detail(
     Path((market, setup_id)): Path<(String, String)>,
 ) -> Result<Json<CaseDetail>, ApiError> {
     let market = parse_case_market(&market)?;
-    Ok(Json(load_case_detail_response(&state, market, &setup_id).await?))
+    Ok(Json(
+        load_case_detail_response(&state, market, &setup_id).await?,
+    ))
 }
 
 pub(super) async fn get_case_mechanism_story(
@@ -276,7 +276,9 @@ pub(super) async fn load_case_detail_response(
     {
         enrich_case_detail(&state.store, &mut detail)
             .await
-            .map_err(|error| ApiError::internal(format!("failed to enrich case detail: {error}")))?;
+            .map_err(|error| {
+                ApiError::internal(format!("failed to enrich case detail: {error}"))
+            })?;
     }
 
     Ok(detail)
@@ -297,7 +299,9 @@ pub(super) async fn load_case_review_response(
     {
         enrich_case_review(&state.store, market, &mut review)
             .await
-            .map_err(|error| ApiError::internal(format!("failed to enrich case review: {error}")))?;
+            .map_err(|error| {
+                ApiError::internal(format!("failed to enrich case review: {error}"))
+            })?;
     }
 
     Ok(review)

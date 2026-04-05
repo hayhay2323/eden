@@ -155,13 +155,17 @@ impl ActionGovernanceContract {
     }
 
     pub fn allows_transition(&self, target: ActionStage) -> bool {
-        self.allowed_transitions.iter().any(|stage| *stage == target)
+        self.allowed_transitions
+            .iter()
+            .any(|stage| *stage == target)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkflowGovernanceError {
-    MustStartFromSuggest { attempted: ActionStage },
+    MustStartFromSuggest {
+        attempted: ActionStage,
+    },
     AlreadyInStage(ActionStage),
     TransitionNotAllowed {
         current: ActionStage,
@@ -203,7 +207,10 @@ impl std::fmt::Display for WorkflowGovernanceError {
                     allowed
                 )
             }
-            Self::QueuePinOwnedByAnotherActor { current_owner, actor } => {
+            Self::QueuePinOwnedByAnotherActor {
+                current_owner,
+                actor,
+            } => {
                 if let Some(actor) = actor {
                     write!(
                         f,

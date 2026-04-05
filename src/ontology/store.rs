@@ -7,18 +7,20 @@ use super::objects::*;
 
 #[path = "store/catalog.rs"]
 mod catalog;
-#[path = "store/object_store.rs"]
-mod object_store;
 #[path = "store/init.rs"]
 mod init;
 #[path = "store/knowledge.rs"]
 mod knowledge;
+#[path = "store/object_store.rs"]
+mod object_store;
 
 pub use knowledge::{
     AccumulatedKnowledge, CalibratedWeights, InstitutionSymbolProfile, MechanismPrior,
 };
 
-pub use catalog::{canonical_sector_id, define_sectors, symbol_sector, us_sector_names, us_symbol_sector};
+pub use catalog::{
+    canonical_sector_id, define_sectors, symbol_sector, us_sector_names, us_symbol_sector,
+};
 pub use init::initialize;
 pub use object_store::ObjectStore;
 

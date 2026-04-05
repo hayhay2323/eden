@@ -34,6 +34,7 @@ pub struct UsSymbolDimensions {
     pub volume_profile: Decimal,          // OHLCV conviction from candlesticks
     pub pre_post_market_anomaly: Decimal, // extended-hours price deviation
     pub valuation: Decimal,               // PE/PB/dividend vs peer median
+    pub multi_horizon_momentum: Decimal,  // 5d/10d/ytd trend alignment
 }
 
 /// Market-wide US dimension snapshot.
@@ -53,11 +54,36 @@ impl UsDimensionSnapshot {
         store: &ObjectStore,
         timestamp: OffsetDateTime,
     ) -> Self {
+        Self::compute_with_intraday(quotes, capital_flows, calc_indexes, candlesticks, store, timestamp, &[])
+    }
+
+    /// Compute dimensions with optional intraday VWAP data.
+    pub fn compute_with_intraday(
+        quotes: &[QuoteObservation],
+        capital_flows: &[CapitalFlow],
+        calc_indexes: &[CalcIndexObservation],
+        candlesticks: &[CandlestickObservation],
+        store: &ObjectStore,
+        timestamp: OffsetDateTime,
+        intraday: &[crate::ontology::links::IntradayObservation],
+    ) -> Self {
         let flow_dir = compute_capital_flow_direction(quotes, capital_flows);
-        let momentum = compute_price_momentum(quotes);
+        let mut momentum = compute_price_momentum(quotes);
+        // Apply VWAP confirmation: if price deviates from VWAP in same direction as momentum, boost
+        for obs in intraday {
+            if let Some(mom) = momentum.get_mut(&obs.symbol) {
+                let vwap_factor = if (*mom > Decimal::ZERO) == (obs.vwap_deviation > Decimal::ZERO) {
+                    Decimal::ONE + obs.vwap_deviation.abs().min(Decimal::new(3, 1))
+                } else {
+                    Decimal::ONE - obs.vwap_deviation.abs().min(Decimal::new(2, 1))
+                };
+                *mom = clamp_signed_unit_interval(*mom * vwap_factor);
+            }
+        }
         let volume = compute_volume_profile(candlesticks);
         let prepost = compute_pre_post_market_anomaly(quotes);
         let val = compute_valuation(calc_indexes, quotes, store);
+        let multi_horizon = compute_us_multi_horizon_momentum(calc_indexes);
 
         let mut all_symbols: HashSet<Symbol> = HashSet::new();
         for s in flow_dir.keys() {
@@ -75,6 +101,9 @@ impl UsDimensionSnapshot {
         for s in val.keys() {
             all_symbols.insert(s.clone());
         }
+        for s in multi_horizon.keys() {
+            all_symbols.insert(s.clone());
+        }
 
         let zero = Decimal::ZERO;
         let dimensions = all_symbols
@@ -86,6 +115,7 @@ impl UsDimensionSnapshot {
                     volume_profile: volume.get(&sym).copied().unwrap_or(zero),
                     pre_post_market_anomaly: prepost.get(&sym).copied().unwrap_or(zero),
                     valuation: val.get(&sym).copied().unwrap_or(zero),
+                    multi_horizon_momentum: multi_horizon.get(&sym).copied().unwrap_or(zero),
                 };
                 (sym, dims)
             })
@@ -196,6 +226,30 @@ fn compute_pre_post_market_anomaly(quotes: &[QuoteObservation]) -> HashMap<Symbo
             // 3% gap = full signal (institutional moves happen in pre-market)
             let normalized = clamp_signed_unit_interval(gap / pre_post_market_anomaly_normalizer());
             Some((q.symbol.clone(), normalized))
+        })
+        .collect()
+}
+
+// ── Dimension 6: Multi-horizon momentum ──
+
+fn compute_us_multi_horizon_momentum(
+    calc_indexes: &[CalcIndexObservation],
+) -> HashMap<Symbol, Decimal> {
+    calc_indexes
+        .iter()
+        .filter_map(|idx| {
+            let five_d = idx.five_day_change_rate?;
+            let ten_d = idx.ten_day_change_rate.unwrap_or(five_d);
+            let ytd = idx.ytd_change_rate.unwrap_or(Decimal::ZERO);
+
+            let short = clamp_signed_unit_interval(five_d / Decimal::new(10, 2));
+            let mid = clamp_signed_unit_interval(ten_d / Decimal::new(15, 2));
+            let long = clamp_signed_unit_interval(ytd / Decimal::new(30, 2));
+
+            let aligned = short * Decimal::new(5, 1)
+                + mid * Decimal::new(3, 1)
+                + long * Decimal::new(2, 1);
+            Some((idx.symbol.clone(), clamp_signed_unit_interval(aligned)))
         })
         .collect()
 }
@@ -536,6 +590,13 @@ mod tests {
                 dividend_ratio_ttm: Some(dec!(0.01)),
                 amplitude: None,
                 five_minutes_change_rate: None,
+                ytd_change_rate: None,
+                five_day_change_rate: None,
+                ten_day_change_rate: None,
+                half_year_change_rate: None,
+                total_market_value: None,
+                capital_flow: None,
+                change_rate: None,
             },
             CalcIndexObservation {
                 symbol: sym("MSFT.US"),
@@ -546,6 +607,13 @@ mod tests {
                 dividend_ratio_ttm: Some(dec!(0.03)),
                 amplitude: None,
                 five_minutes_change_rate: None,
+                ytd_change_rate: None,
+                five_day_change_rate: None,
+                ten_day_change_rate: None,
+                half_year_change_rate: None,
+                total_market_value: None,
+                capital_flow: None,
+                change_rate: None,
             },
         ];
         let store = make_store(vec![
@@ -594,6 +662,13 @@ mod tests {
             dividend_ratio_ttm: Some(dec!(0.005)),
             amplitude: None,
             five_minutes_change_rate: None,
+            ytd_change_rate: None,
+            five_day_change_rate: None,
+            ten_day_change_rate: None,
+            half_year_change_rate: None,
+            total_market_value: None,
+            capital_flow: None,
+            change_rate: None,
         }];
         let candles = vec![CandlestickObservation {
             symbol: sym("NVDA.US"),

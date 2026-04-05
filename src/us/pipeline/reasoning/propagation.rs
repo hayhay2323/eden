@@ -13,11 +13,11 @@ use crate::us::graph::propagation::CrossMarketSignal;
 use super::{scope_id, scope_label, UsStructuralRankMetrics};
 
 fn diffusion_source_threshold() -> Decimal {
-    Decimal::new(3, 2)
+    Decimal::new(2, 2)
 }
 
 fn diffusion_min_confidence() -> Decimal {
-    Decimal::new(2, 2)
+    Decimal::new(2, 3)
 }
 
 pub(super) fn derive_diffusion_propagation_paths(

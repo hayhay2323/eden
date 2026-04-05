@@ -1,27 +1,31 @@
-use axum::extract::{Path, Query};
 #[cfg(feature = "persistence")]
 use axum::extract::State;
+use axum::extract::{Path, Query};
 use axum::Json;
 use serde::Deserialize;
+#[cfg(feature = "persistence")]
+use time::OffsetDateTime;
 
+#[cfg(feature = "persistence")]
+use crate::action::workflow::{
+    governance_reason, ActionExecutionPolicy, ActionGovernanceReasonCode, ActionStage,
+};
 use crate::agent::AgentRecommendationJournalRecord;
 #[cfg(feature = "persistence")]
 use crate::cases::{CaseReasoningAssessmentSnapshot, CaseWorkflowEvent};
-#[cfg(feature = "persistence")]
-use crate::persistence::action_workflow::ActionWorkflowEventRecord;
 #[cfg(feature = "persistence")]
 use crate::persistence::case_realized_outcome::CaseRealizedOutcomeRecord;
 
 use super::constants::{DEFAULT_LIMIT, MAX_LIMIT};
 use super::core::{bounded, parse_case_market};
+use super::foundation::ApiError;
 #[cfg(feature = "persistence")]
 use super::foundation::ApiState;
-use super::foundation::ApiError;
+#[cfg(feature = "persistence")]
+use super::ontology_api::load_enriched_contract_snapshot;
 use super::ontology_history_support::{
     journal_matches_recommendation, load_recommendation_journal_records,
 };
-#[cfg(feature = "persistence")]
-use super::ontology_api::load_enriched_contract_snapshot;
 
 #[derive(Debug, Deserialize, Default, Clone)]
 pub(super) struct OntologyHistoryQuery {
@@ -59,12 +63,12 @@ pub(super) async fn get_case_workflow_history(
     };
     let mut events = state
         .store
-        .action_workflow_events(workflow_id)
+        .action_workflow_event_values(workflow_id)
         .await
         .map_err(|error| ApiError::internal(format!("failed to query workflow history: {error}")))?
         .into_iter()
-        .map(case_workflow_event_from_record)
-        .collect::<Vec<_>>();
+        .map(case_workflow_event_from_value)
+        .collect::<Result<Vec<_>, _>>()?;
     if events.len() > limit {
         events = events[events.len().saturating_sub(limit)..].to_vec();
     }
@@ -158,12 +162,12 @@ pub(super) async fn get_workflow_event_history(
     let limit = bounded(query.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?;
     let mut events = state
         .store
-        .action_workflow_events(&workflow_id)
+        .action_workflow_event_values(&workflow_id)
         .await
         .map_err(|error| ApiError::internal(format!("failed to query workflow history: {error}")))?
         .into_iter()
-        .map(case_workflow_event_from_record)
-        .collect::<Vec<_>>();
+        .map(case_workflow_event_from_value)
+        .collect::<Result<Vec<_>, _>>()?;
     if events.len() > limit {
         events = events[events.len().saturating_sub(limit)..].to_vec();
     }
@@ -181,21 +185,111 @@ pub(super) async fn get_workflow_event_history(
 }
 
 #[cfg(feature = "persistence")]
-fn case_workflow_event_from_record(
-    event: ActionWorkflowEventRecord,
-) -> CaseWorkflowEvent {
-    CaseWorkflowEvent {
-        workflow_id: event.workflow_id,
-        stage: event.to_stage.as_str().to_string(),
-        from_stage: event.from_stage.map(|stage| stage.as_str().to_string()),
-        execution_policy: event.execution_policy,
-        governance_reason_code: event.governance_reason_code,
-        governance_reason: event.governance_reason(),
-        timestamp: event.recorded_at,
-        actor: event.actor,
-        owner: event.owner,
-        reviewer: event.reviewer,
-        queue_pin: event.queue_pin,
-        note: event.note,
+fn case_workflow_event_from_value(event: serde_json::Value) -> Result<CaseWorkflowEvent, ApiError> {
+    let workflow_id = get_required_string(&event, "workflow_id")?;
+    let to_stage = parse_action_stage(get_required_string(&event, "to_stage")?.as_str())?;
+    let from_stage = get_optional_string(&event, "from_stage")
+        .map(|value| parse_action_stage(value.as_str()))
+        .transpose()?
+        .map(|stage| stage.as_str().to_string());
+    let execution_policy = get_optional_string(&event, "execution_policy")
+        .map(|value| parse_execution_policy(value.as_str()))
+        .transpose()?
+        .unwrap_or(ActionExecutionPolicy::ReviewRequired);
+    let governance_reason_code = get_optional_string(&event, "governance_reason_code")
+        .map(|value| parse_governance_reason_code(value.as_str()))
+        .transpose()?
+        .unwrap_or(ActionGovernanceReasonCode::WorkflowTransitionWindow);
+    let timestamp = parse_recorded_at(&event)?;
+    let governance_reason = governance_reason(Some(to_stage), execution_policy);
+    Ok(CaseWorkflowEvent {
+        workflow_id,
+        stage: to_stage.as_str().to_string(),
+        from_stage,
+        execution_policy,
+        governance_reason_code,
+        governance_reason,
+        timestamp,
+        actor: get_optional_string(&event, "actor"),
+        owner: get_optional_string(&event, "owner"),
+        reviewer: get_optional_string(&event, "reviewer"),
+        queue_pin: get_optional_string(&event, "queue_pin"),
+        note: get_optional_string(&event, "note"),
+    })
+}
+
+#[cfg(feature = "persistence")]
+fn get_required_string(event: &serde_json::Value, field: &str) -> Result<String, ApiError> {
+    get_optional_string(event, field).ok_or_else(|| {
+        ApiError::internal(format!(
+            "failed to decode workflow history: missing field `{field}`"
+        ))
+    })
+}
+
+#[cfg(feature = "persistence")]
+fn get_optional_string(event: &serde_json::Value, field: &str) -> Option<String> {
+    event
+        .get(field)
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+}
+
+#[cfg(feature = "persistence")]
+fn parse_recorded_at(event: &serde_json::Value) -> Result<OffsetDateTime, ApiError> {
+    let raw = get_required_string(event, "recorded_at")?;
+    OffsetDateTime::parse(raw.as_str(), &time::format_description::well_known::Rfc3339).map_err(
+        |error| {
+            ApiError::internal(format!(
+                "failed to decode workflow history timestamp: {error}"
+            ))
+        },
+    )
+}
+
+#[cfg(feature = "persistence")]
+fn parse_action_stage(value: &str) -> Result<ActionStage, ApiError> {
+    match value {
+        "suggest" => Ok(ActionStage::Suggest),
+        "confirm" => Ok(ActionStage::Confirm),
+        "execute" => Ok(ActionStage::Execute),
+        "monitor" => Ok(ActionStage::Monitor),
+        "review" => Ok(ActionStage::Review),
+        _ => Err(ApiError::internal(format!(
+            "failed to decode workflow history: unknown stage `{value}`"
+        ))),
+    }
+}
+
+#[cfg(feature = "persistence")]
+fn parse_execution_policy(value: &str) -> Result<ActionExecutionPolicy, ApiError> {
+    match value {
+        "manual_only" => Ok(ActionExecutionPolicy::ManualOnly),
+        "review_required" => Ok(ActionExecutionPolicy::ReviewRequired),
+        "auto_eligible" => Ok(ActionExecutionPolicy::AutoEligible),
+        _ => Err(ApiError::internal(format!(
+            "failed to decode workflow history: unknown execution policy `{value}`"
+        ))),
+    }
+}
+
+#[cfg(feature = "persistence")]
+fn parse_governance_reason_code(value: &str) -> Result<ActionGovernanceReasonCode, ApiError> {
+    match value {
+        "workflow_not_created" => Ok(ActionGovernanceReasonCode::WorkflowNotCreated),
+        "workflow_transition_window" => Ok(ActionGovernanceReasonCode::WorkflowTransitionWindow),
+        "assignment_locked_during_execution" => {
+            Ok(ActionGovernanceReasonCode::AssignmentLockedDuringExecution)
+        }
+        "terminal_review_stage" => Ok(ActionGovernanceReasonCode::TerminalReviewStage),
+        "advisory_action" => Ok(ActionGovernanceReasonCode::AdvisoryAction),
+        "operator_action_required" => Ok(ActionGovernanceReasonCode::OperatorActionRequired),
+        "severity_requires_review" => Ok(ActionGovernanceReasonCode::SeverityRequiresReview),
+        "invalidation_rule_missing" => Ok(ActionGovernanceReasonCode::InvalidationRuleMissing),
+        "non_positive_expected_alpha" => Ok(ActionGovernanceReasonCode::NonPositiveExpectedAlpha),
+        "auto_execution_eligible" => Ok(ActionGovernanceReasonCode::AutoExecutionEligible),
+        _ => Err(ApiError::internal(format!(
+            "failed to decode workflow history: unknown governance code `{value}`"
+        ))),
     }
 }

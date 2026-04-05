@@ -6,6 +6,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 #[cfg(feature = "persistence")]
+use crate::agent::AgentDecision;
+#[cfg(feature = "persistence")]
 use crate::cases::CaseSummary;
 #[cfg(feature = "persistence")]
 use crate::live_snapshot::LiveMarket;
@@ -13,12 +15,10 @@ use crate::live_snapshot::LiveMarket;
 use crate::ontology::microstructure::TickArchive;
 #[cfg(feature = "persistence")]
 use crate::ontology::{
-    merged_knowledge_events, merged_knowledge_links, ActionNode,
-    AgentKnowledgeEvent, AgentKnowledgeLink, AgentMacroEvent, BackwardReasoningSnapshot,
-    Hypothesis, TacticalSetup, WorldStateSnapshot,
+    merged_knowledge_events, merged_knowledge_links, ActionNode, AgentKnowledgeEvent,
+    AgentKnowledgeLink, AgentMacroEvent, BackwardReasoningSnapshot, Hypothesis, TacticalSetup,
+    WorldStateSnapshot,
 };
-#[cfg(feature = "persistence")]
-use crate::agent::AgentDecision;
 #[cfg(feature = "persistence")]
 use crate::persistence::agent_graph::{
     build_knowledge_node_records, build_runtime_knowledge_events, build_runtime_knowledge_links,
@@ -36,7 +36,9 @@ use crate::persistence::lineage_snapshot::LineageSnapshotRecord;
 #[cfg(feature = "persistence")]
 use crate::persistence::store::EdenStore;
 #[cfg(feature = "persistence")]
-use crate::persistence::us_lineage_metric_row::{rows_from_us_lineage_stats, UsLineageMetricRowRecord};
+use crate::persistence::us_lineage_metric_row::{
+    rows_from_us_lineage_stats, UsLineageMetricRowRecord,
+};
 #[cfg(feature = "persistence")]
 use crate::persistence::us_lineage_snapshot::UsLineageSnapshotRecord;
 #[cfg(feature = "persistence")]
@@ -389,7 +391,11 @@ pub async fn persist_market_knowledge_projection(
         move |store_ref| {
             let market = market_event_state.clone();
             let records = knowledge_event_state_records.clone();
-            async move { store_ref.sync_knowledge_event_state(&market, &records).await }
+            async move {
+                store_ref
+                    .sync_knowledge_event_state(&market, &records)
+                    .await
+            }
         },
     )
     .await;

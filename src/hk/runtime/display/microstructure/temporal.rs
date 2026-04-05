@@ -40,7 +40,10 @@ pub(crate) fn display_hk_temporal_debug(
     }
 
     if !graph_node_delta.transitions.is_empty() {
-        eprintln!("── Node Transitions ({}) ──", graph_node_delta.transitions.len());
+        eprintln!(
+            "── Node Transitions ({}) ──",
+            graph_node_delta.transitions.len()
+        );
         for t in graph_node_delta.transitions.iter().take(10) {
             match &t.kind {
                 crate::graph::temporal::GraphNodeTransitionKind::RegimeChanged => {
@@ -105,13 +108,9 @@ pub(crate) fn display_hk_temporal_debug(
                 t.broker_symbol_id.symbol,
                 t.side,
                 t.position,
-                t.iceberg_confidence
-                    .unwrap_or_default()
-                    .round_dp(2),
+                t.iceberg_confidence.unwrap_or_default().round_dp(2),
                 t.replenish_count.unwrap_or(0),
-                t.depth_recovery_ratio
-                    .unwrap_or_default()
-                    .round_dp(2),
+                t.depth_recovery_ratio.unwrap_or_default().round_dp(2),
             );
         }
     }

@@ -18,6 +18,10 @@ pub struct AgentBriefing {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasons: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub current_investigations: Vec<AgentInvestigation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub current_judgments: Vec<AgentOperationalJudgment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub executed_tools: Vec<AgentExecutedTool>,
 }
 
@@ -47,6 +51,10 @@ pub struct AgentTurn {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub triggered_transition_summaries: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub investigations: Vec<AgentInvestigation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub judgments: Vec<AgentOperationalJudgment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub executed_tools: Vec<AgentExecutedTool>,
 }
 
@@ -73,6 +81,18 @@ pub struct AgentThread {
     pub current_leader: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invalidation_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_stage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_next_step: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub governance_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unlock_condition: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasons: Vec<String>,
 }
@@ -88,6 +108,10 @@ pub struct AgentSession {
     pub focus_symbols: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_threads: Vec<AgentThread>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub current_investigations: Vec<AgentInvestigation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub current_judgments: Vec<AgentOperationalJudgment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_turns: Vec<AgentTurn>,
 }

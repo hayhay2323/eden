@@ -1,5 +1,6 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use time::OffsetDateTime;
 
 use crate::ontology::domain::{
@@ -40,6 +41,12 @@ pub enum UsObservationRecord {
         pe_ttm_ratio: Option<Decimal>,
         pb_ratio: Option<Decimal>,
         dividend_ratio_ttm: Option<Decimal>,
+        ytd_change_rate: Option<Decimal>,
+        five_day_change_rate: Option<Decimal>,
+        ten_day_change_rate: Option<Decimal>,
+        half_year_change_rate: Option<Decimal>,
+        total_market_value: Option<Decimal>,
+        change_rate: Option<Decimal>,
     },
     Candlestick {
         symbol: Symbol,
@@ -59,7 +66,7 @@ pub struct UsObservationSnapshot {
 
 // ── Event layer ──
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UsEventKind {
     /// Pre-market price deviates > 1% from prev_close.
     PreMarketDislocation,
@@ -73,6 +80,26 @@ pub enum UsEventKind {
     GapOpen,
     /// Sector ETF momentum diverges from constituent.
     SectorMomentumShift,
+    /// A promoted macro catalyst is still active for this scope.
+    CatalystActivation,
+    /// Expected sector propagation did not occur — peers are silent.
+    PropagationAbsence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UsEventDriverKind {
+    CompanySpecific,
+    SectorWide,
+    MacroWide,
+    CrossMarket,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum UsPropagationScope {
+    Local,
+    Sector,
+    Market,
+    CrossMarket,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,6 +227,12 @@ impl UsObservationSnapshot {
                     pe_ttm_ratio: idx.pe_ttm_ratio,
                     pb_ratio: idx.pb_ratio,
                     dividend_ratio_ttm: idx.dividend_ratio_ttm,
+                    ytd_change_rate: idx.ytd_change_rate,
+                    five_day_change_rate: idx.five_day_change_rate,
+                    ten_day_change_rate: idx.ten_day_change_rate,
+                    half_year_change_rate: idx.half_year_change_rate,
+                    total_market_value: idx.total_market_value,
+                    change_rate: idx.change_rate,
                 },
                 provenance(
                     ProvenanceSource::Api,
@@ -404,8 +437,500 @@ impl UsEventSnapshot {
             }
         }
 
+        apply_us_event_attribution(&mut events, hk_moves);
+        propagate_symbol_events_to_sector(&mut events, timestamp);
+        apply_us_event_attribution(&mut events, hk_moves);
+
         Self { timestamp, events }
     }
+}
+
+fn apply_us_event_attribution(events: &mut [Event<UsEventRecord>], hk_moves: &HkCounterpartMoves) {
+    let mut corroborated_sector_counts: HashMap<SectorId, usize> = HashMap::new();
+    for event in events.iter() {
+        let UsSignalScope::Symbol(symbol) = &event.value.scope else {
+            continue;
+        };
+        if !matches!(
+            event.value.kind,
+            UsEventKind::GapOpen
+                | UsEventKind::PreMarketDislocation
+                | UsEventKind::VolumeSpike
+                | UsEventKind::CapitalFlowReversal
+        ) {
+            continue;
+        }
+        if event.value.magnitude < Decimal::new(5, 2) {
+            continue;
+        }
+        let Some(sector) = crate::us::watchlist::us_symbol_sector(&symbol.0) else {
+            continue;
+        };
+        *corroborated_sector_counts
+            .entry(SectorId(sector.to_string()))
+            .or_insert(0) += 1;
+    }
+
+    for event in events.iter_mut() {
+        match &event.value.scope {
+            UsSignalScope::Symbol(symbol) => match event.value.kind {
+                UsEventKind::CrossMarketDivergence => set_us_event_attribution(
+                    event,
+                    UsEventDriverKind::CrossMarket,
+                    UsPropagationScope::CrossMarket,
+                    "hk_counterpart_divergence",
+                    event.value.magnitude,
+                ),
+                UsEventKind::GapOpen
+                | UsEventKind::PreMarketDislocation
+                | UsEventKind::VolumeSpike
+                | UsEventKind::CapitalFlowReversal => {
+                    let Some(sector_str) = crate::us::watchlist::us_symbol_sector(&symbol.0) else {
+                        set_us_event_attribution(
+                            event,
+                            UsEventDriverKind::CompanySpecific,
+                            UsPropagationScope::Local,
+                            "isolated_symbol_move",
+                            event.value.magnitude,
+                        );
+                        continue;
+                    };
+                    let sector = SectorId(sector_str.to_string());
+                    let hk_move = hk_moves.get(symbol).copied().unwrap_or(Decimal::ZERO);
+                    if hk_move.abs() >= Decimal::new(2, 2) {
+                        set_us_event_attribution(
+                            event,
+                            UsEventDriverKind::CrossMarket,
+                            UsPropagationScope::CrossMarket,
+                            "hk_counterpart_move",
+                            event.value.magnitude.max(hk_move.abs()),
+                        );
+                    } else if corroborated_sector_counts
+                        .get(&sector)
+                        .copied()
+                        .unwrap_or(0)
+                        >= 2
+                    {
+                        set_us_event_attribution(
+                            event,
+                            UsEventDriverKind::SectorWide,
+                            UsPropagationScope::Sector,
+                            "multi_symbol_sector_move",
+                            event.value.magnitude,
+                        );
+                    } else if event.value.magnitude >= Decimal::new(8, 2) {
+                        set_us_event_attribution(
+                            event,
+                            UsEventDriverKind::CompanySpecific,
+                            UsPropagationScope::Local,
+                            "isolated_large_gap",
+                            event.value.magnitude,
+                        );
+                    } else {
+                        set_us_event_attribution(
+                            event,
+                            UsEventDriverKind::CompanySpecific,
+                            UsPropagationScope::Local,
+                            "isolated_symbol_move",
+                            event.value.magnitude,
+                        );
+                    }
+                }
+                UsEventKind::CatalystActivation => set_us_event_attribution(
+                    event,
+                    UsEventDriverKind::CompanySpecific,
+                    UsPropagationScope::Local,
+                    "symbol_catalyst",
+                    event.value.magnitude,
+                ),
+                _ => {}
+            },
+            UsSignalScope::Sector(_) => match event.value.kind {
+                UsEventKind::SectorMomentumShift | UsEventKind::CatalystActivation => {
+                    set_us_event_attribution(
+                        event,
+                        UsEventDriverKind::SectorWide,
+                        UsPropagationScope::Sector,
+                        "sector_confirmation",
+                        event.value.magnitude,
+                    )
+                }
+                _ => {}
+            },
+            UsSignalScope::Market => {
+                if matches!(event.value.kind, UsEventKind::CatalystActivation) {
+                    set_us_event_attribution(
+                        event,
+                        UsEventDriverKind::MacroWide,
+                        UsPropagationScope::Market,
+                        "macro_catalyst",
+                        event.value.magnitude,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn propagate_symbol_events_to_sector(
+    events: &mut Vec<Event<UsEventRecord>>,
+    timestamp: OffsetDateTime,
+) {
+    const SIGNIFICANT_KINDS: &[UsEventKind] = &[
+        UsEventKind::GapOpen,
+        UsEventKind::VolumeSpike,
+        UsEventKind::PreMarketDislocation,
+        UsEventKind::CapitalFlowReversal,
+    ];
+    let mut sector_magnitudes: std::collections::HashMap<SectorId, (Decimal, String)> =
+        std::collections::HashMap::new();
+
+    for ev in events.iter() {
+        if !SIGNIFICANT_KINDS.contains(&ev.value.kind) {
+            continue;
+        }
+        let symbol = match &ev.value.scope {
+            UsSignalScope::Symbol(s) => s,
+            _ => continue,
+        };
+        let Some(propagation_scope) = event_propagation_scope(ev) else {
+            continue;
+        };
+        let threshold = match propagation_scope {
+            UsPropagationScope::Sector => Decimal::new(5, 2),
+            UsPropagationScope::Market | UsPropagationScope::CrossMarket => Decimal::new(3, 2),
+            UsPropagationScope::Local => Decimal::new(15, 2),
+        };
+        if ev.value.magnitude < threshold {
+            continue;
+        }
+        if matches!(propagation_scope, UsPropagationScope::Local) {
+            continue;
+        }
+        let Some(sector_str) = crate::us::watchlist::us_symbol_sector(&symbol.0) else {
+            continue;
+        };
+        let sector = SectorId(sector_str.to_string());
+        let entry = sector_magnitudes
+            .entry(sector)
+            .or_insert((Decimal::ZERO, ev.value.summary.clone()));
+        if ev.value.magnitude > entry.0 {
+            *entry = (ev.value.magnitude, ev.value.summary.clone());
+        }
+    }
+
+    for (sector, (magnitude, trigger_summary)) in sector_magnitudes {
+        events.push(Event::new(
+            UsEventRecord {
+                scope: UsSignalScope::Sector(sector.clone()),
+                kind: UsEventKind::SectorMomentumShift,
+                magnitude: (magnitude * Decimal::new(80, 2)).min(Decimal::ONE),
+                summary: format!(
+                    "sector {} under pressure from constituent: {}",
+                    sector.0, trigger_summary
+                ),
+            },
+            provenance(
+                ProvenanceSource::Computed,
+                timestamp,
+                Some(magnitude),
+                [format!("sector_propagation:{}", sector.0)],
+            ),
+        ));
+    }
+}
+
+const ATTR_DRIVER_PREFIX: &str = "attr:driver=";
+const ATTR_SCOPE_PREFIX: &str = "attr:scope=";
+const ATTR_CONFIDENCE_PREFIX: &str = "attr:confidence=";
+const ATTR_LABEL_PREFIX: &str = "attr:label=";
+
+fn set_us_event_attribution(
+    event: &mut Event<UsEventRecord>,
+    driver: UsEventDriverKind,
+    propagation_scope: UsPropagationScope,
+    label: &str,
+    confidence: Decimal,
+) {
+    event.provenance.inputs.retain(|input| {
+        !input.starts_with(ATTR_DRIVER_PREFIX)
+            && !input.starts_with(ATTR_SCOPE_PREFIX)
+            && !input.starts_with(ATTR_CONFIDENCE_PREFIX)
+            && !input.starts_with(ATTR_LABEL_PREFIX)
+    });
+    event
+        .provenance
+        .inputs
+        .push(format!("{ATTR_DRIVER_PREFIX}{}", driver_slug(driver)));
+    event.provenance.inputs.push(format!(
+        "{ATTR_SCOPE_PREFIX}{}",
+        propagation_scope_slug(propagation_scope)
+    ));
+    event.provenance.inputs.push(format!(
+        "{ATTR_CONFIDENCE_PREFIX}{}",
+        confidence.round_dp(4)
+    ));
+    event
+        .provenance
+        .inputs
+        .push(format!("{ATTR_LABEL_PREFIX}{label}"));
+}
+
+fn driver_slug(driver: UsEventDriverKind) -> &'static str {
+    match driver {
+        UsEventDriverKind::CompanySpecific => "company_specific",
+        UsEventDriverKind::SectorWide => "sector_wide",
+        UsEventDriverKind::MacroWide => "macro_wide",
+        UsEventDriverKind::CrossMarket => "cross_market",
+    }
+}
+
+fn propagation_scope_slug(scope: UsPropagationScope) -> &'static str {
+    match scope {
+        UsPropagationScope::Local => "local",
+        UsPropagationScope::Sector => "sector",
+        UsPropagationScope::Market => "market",
+        UsPropagationScope::CrossMarket => "cross_market",
+    }
+}
+
+pub(crate) fn enrich_us_attribution_with_evidence(
+    event_snapshot: &mut UsEventSnapshot,
+    macro_events: &[crate::ontology::AgentMacroEvent],
+) {
+    use std::collections::HashSet;
+
+    let macro_affected_sectors: HashSet<String> = macro_events
+        .iter()
+        .flat_map(|e| e.impact.affected_sectors.iter().cloned())
+        .collect();
+    let macro_affected_symbols: HashSet<String> = macro_events
+        .iter()
+        .flat_map(|e| e.impact.affected_symbols.iter().cloned())
+        .collect();
+
+    for event in event_snapshot.events.iter_mut() {
+        let current_scope = event_propagation_scope(event);
+        if matches!(
+            current_scope,
+            Some(UsPropagationScope::Market | UsPropagationScope::CrossMarket)
+        ) {
+            continue;
+        }
+
+        let symbol = match &event.value.scope {
+            UsSignalScope::Symbol(s) => s,
+            _ => continue,
+        };
+
+        if macro_affected_symbols.contains(&symbol.0) {
+            set_us_event_attribution(
+                event,
+                UsEventDriverKind::MacroWide,
+                UsPropagationScope::Market,
+                "macro_event_targets_symbol",
+                event.value.magnitude,
+            );
+            continue;
+        }
+
+        if let Some(sector_str) = crate::us::watchlist::us_symbol_sector(&symbol.0) {
+            let sector_lower = sector_str.to_ascii_lowercase();
+            if macro_affected_sectors
+                .iter()
+                .any(|s| s.to_ascii_lowercase() == sector_lower)
+            {
+                let current = current_scope.unwrap_or(UsPropagationScope::Local);
+                if current < UsPropagationScope::Sector {
+                    set_us_event_attribution(
+                        event,
+                        UsEventDriverKind::MacroWide,
+                        UsPropagationScope::Market,
+                        "macro_event_covers_sector",
+                        event.value.magnitude,
+                    );
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn detect_us_propagation_absences(
+    event_snapshot: &mut UsEventSnapshot,
+    timestamp: OffsetDateTime,
+) {
+    use std::collections::{HashMap, HashSet};
+
+    let mut sector_active: HashMap<SectorId, HashSet<Symbol>> = HashMap::new();
+    let mut sector_all: HashMap<SectorId, HashSet<Symbol>> = HashMap::new();
+
+    for event in &event_snapshot.events {
+        let UsSignalScope::Symbol(symbol) = &event.value.scope else {
+            continue;
+        };
+        let Some(sector_str) = crate::us::watchlist::us_symbol_sector(&symbol.0) else {
+            continue;
+        };
+        let sector = SectorId(sector_str.to_string());
+        sector_all
+            .entry(sector.clone())
+            .or_default()
+            .insert(symbol.clone());
+
+        let scope = event_propagation_scope(event).unwrap_or(UsPropagationScope::Local);
+        if scope >= UsPropagationScope::Sector && event.value.magnitude >= Decimal::new(4, 2) {
+            sector_active
+                .entry(sector)
+                .or_default()
+                .insert(symbol.clone());
+        }
+    }
+
+    let mut new_events = Vec::new();
+    for (sector, active_symbols) in &sector_active {
+        if active_symbols.len() < 2 {
+            continue;
+        }
+        let all_symbols = match sector_all.get(sector) {
+            Some(all) => all,
+            None => continue,
+        };
+        let silent: Vec<_> = all_symbols.difference(active_symbols).collect();
+        let silent_ratio =
+            Decimal::from(silent.len() as u64) / Decimal::from(all_symbols.len().max(1) as u64);
+        if silent_ratio < Decimal::new(30, 2) {
+            continue;
+        }
+        let magnitude = (silent_ratio * Decimal::new(50, 2)).min(Decimal::ONE);
+        let mut ev = Event {
+            value: UsEventRecord {
+                scope: UsSignalScope::Sector(sector.clone()),
+                kind: UsEventKind::PropagationAbsence,
+                magnitude,
+                summary: format!(
+                    "sector {} has {} active symbols but {}/{} peers silent",
+                    sector.0,
+                    active_symbols.len(),
+                    silent.len(),
+                    all_symbols.len(),
+                ),
+            },
+            provenance: ProvenanceMetadata::new(ProvenanceSource::Computed, timestamp),
+        };
+        set_us_event_attribution(
+            &mut ev,
+            UsEventDriverKind::SectorWide,
+            UsPropagationScope::Sector,
+            "propagation_absence",
+            magnitude,
+        );
+        new_events.push(ev);
+    }
+    event_snapshot.events.extend(new_events);
+}
+
+pub(crate) fn event_propagation_scope(event: &Event<UsEventRecord>) -> Option<UsPropagationScope> {
+    event.provenance.inputs.iter().find_map(|input| {
+        input
+            .strip_prefix(ATTR_SCOPE_PREFIX)
+            .and_then(|value| match value {
+                "local" => Some(UsPropagationScope::Local),
+                "sector" => Some(UsPropagationScope::Sector),
+                "market" => Some(UsPropagationScope::Market),
+                "cross_market" => Some(UsPropagationScope::CrossMarket),
+                _ => None,
+            })
+    })
+}
+
+fn is_thematic_catalyst(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "geopolitical_policy"
+            | "rates_macro"
+            | "commodity_logistics"
+            | "sector_rotation"
+            | "informed_flow"
+            | "cross_market_propagation"
+            | "tech_sector"
+            | "healthcare"
+            | "earnings_surprise"
+    )
+}
+
+pub fn catalyst_events_from_macro_events(
+    macro_events: &[crate::ontology::AgentMacroEvent],
+    timestamp: OffsetDateTime,
+) -> Vec<Event<UsEventRecord>> {
+    let mut events = Vec::new();
+
+    for event in macro_events
+        .iter()
+        .filter(|e| is_thematic_catalyst(&e.event_type))
+    {
+        let magnitude = event.confidence.clamp(Decimal::ZERO, Decimal::ONE);
+        let summary = format!("{} catalyst remains active", event.headline);
+        let inputs = [format!("macro_event:{}", event.event_id)];
+
+        for sector in &event.impact.affected_sectors {
+            events.push(Event::new(
+                UsEventRecord {
+                    scope: UsSignalScope::Sector(SectorId(sector.clone())),
+                    kind: UsEventKind::CatalystActivation,
+                    magnitude,
+                    summary: format!(
+                        "{} catalyst remains active for sector {}",
+                        event.headline, sector
+                    ),
+                },
+                provenance(
+                    ProvenanceSource::Computed,
+                    timestamp,
+                    Some(magnitude),
+                    inputs.clone(),
+                ),
+            ));
+        }
+
+        for symbol in &event.impact.affected_symbols {
+            if !symbol.to_ascii_uppercase().ends_with(".US") {
+                continue;
+            }
+            events.push(Event::new(
+                UsEventRecord {
+                    scope: UsSignalScope::Symbol(Symbol(symbol.clone())),
+                    kind: UsEventKind::CatalystActivation,
+                    magnitude,
+                    summary: format!("{} catalyst remains active for {}", event.headline, symbol),
+                },
+                provenance(
+                    ProvenanceSource::Computed,
+                    timestamp,
+                    Some(magnitude),
+                    inputs.clone(),
+                ),
+            ));
+        }
+
+        if event.impact.affected_symbols.is_empty() && event.impact.affected_sectors.is_empty() {
+            events.push(Event::new(
+                UsEventRecord {
+                    scope: UsSignalScope::Market,
+                    kind: UsEventKind::CatalystActivation,
+                    magnitude,
+                    summary: summary.clone(),
+                },
+                provenance(
+                    ProvenanceSource::Computed,
+                    timestamp,
+                    Some(magnitude),
+                    inputs.clone(),
+                ),
+            ));
+        }
+    }
+
+    events
 }
 
 // ── DerivedSignalSnapshot ──
@@ -599,6 +1124,13 @@ mod tests {
             dividend_ratio_ttm: Some(dec!(0.005)),
             amplitude: None,
             five_minutes_change_rate: None,
+            ytd_change_rate: None,
+            five_day_change_rate: None,
+            ten_day_change_rate: None,
+            half_year_change_rate: None,
+            total_market_value: None,
+            capital_flow: None,
+            change_rate: None,
         }];
         let candles = vec![CandlestickObservation {
             symbol: sym("AAPL.US"),
@@ -692,6 +1224,43 @@ mod tests {
     }
 
     #[test]
+    fn isolated_gap_open_does_not_force_sector_propagation() {
+        let quotes = vec![make_quote("NKE.US", dec!(112), dec!(100), dec!(111))];
+        let snap = UsEventSnapshot::detect(
+            &quotes,
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            OffsetDateTime::UNIX_EPOCH,
+        );
+        assert!(!snap
+            .events
+            .iter()
+            .any(|e| matches!(e.value.kind, UsEventKind::SectorMomentumShift)));
+    }
+
+    #[test]
+    fn corroborated_sector_moves_emit_sector_propagation() {
+        let quotes = vec![
+            make_quote("NKE.US", dec!(112), dec!(100), dec!(111)),
+            make_quote("LULU.US", dec!(111), dec!(100), dec!(109)),
+        ];
+        let snap = UsEventSnapshot::detect(
+            &quotes,
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            OffsetDateTime::UNIX_EPOCH,
+        );
+        assert!(snap
+            .events
+            .iter()
+            .any(|e| matches!(e.value.kind, UsEventKind::SectorMomentumShift)));
+    }
+
+    #[test]
     fn event_detects_volume_spike() {
         let calc = vec![CalcIndexObservation {
             symbol: sym("NVDA.US"),
@@ -702,6 +1271,13 @@ mod tests {
             dividend_ratio_ttm: None,
             amplitude: None,
             five_minutes_change_rate: None,
+            ytd_change_rate: None,
+            five_day_change_rate: None,
+            ten_day_change_rate: None,
+            half_year_change_rate: None,
+            total_market_value: None,
+            capital_flow: None,
+            change_rate: None,
         }];
         let snap = UsEventSnapshot::detect(
             &[],
@@ -728,6 +1304,13 @@ mod tests {
             dividend_ratio_ttm: None,
             amplitude: None,
             five_minutes_change_rate: None,
+            ytd_change_rate: None,
+            five_day_change_rate: None,
+            ten_day_change_rate: None,
+            half_year_change_rate: None,
+            total_market_value: None,
+            capital_flow: None,
+            change_rate: None,
         }];
         let snap = UsEventSnapshot::detect(
             &[],
@@ -873,6 +1456,7 @@ mod tests {
                     volume_profile: dec!(0.4),
                     pre_post_market_anomaly: dec!(0.2),
                     valuation: dec!(0.1),
+                    multi_horizon_momentum: Decimal::ZERO,
                 },
             )]),
         };
@@ -896,6 +1480,7 @@ mod tests {
                     volume_profile: dec!(0.6),
                     pre_post_market_anomaly: dec!(0.8),
                     valuation: dec!(0),
+                    multi_horizon_momentum: Decimal::ZERO,
                 },
             )]),
         };
@@ -939,6 +1524,7 @@ mod tests {
                     volume_profile: dec!(0),
                     pre_post_market_anomaly: dec!(0),
                     valuation: dec!(0.6),
+                    multi_horizon_momentum: Decimal::ZERO,
                 },
             )]),
         };
@@ -962,6 +1548,7 @@ mod tests {
                     volume_profile: dec!(0),
                     pre_post_market_anomaly: dec!(0),
                     valuation: dec!(0.3),
+                    multi_horizon_momentum: Decimal::ZERO,
                 },
             )]),
         };
@@ -995,6 +1582,7 @@ mod tests {
             volume_profile: dec!(0.6),
             pre_post_market_anomaly: dec!(0.3),
             valuation: dec!(0.5),
+            multi_horizon_momentum: Decimal::ZERO,
         };
         // (0.2 + 0.4 + 0.6 + 0.3 + 0.5) / 5 = 2.0 / 5 = 0.4
         assert_eq!(dimension_composite(&dims), dec!(0.4));

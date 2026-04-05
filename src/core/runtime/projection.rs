@@ -3,18 +3,18 @@ use std::time::Instant;
 
 use tokio::sync::Semaphore;
 
-use crate::agent::{
-    build_recommendation_journal_record, update_recommendation_journal,
-};
+use crate::agent::{build_recommendation_journal_record, update_recommendation_journal};
 use crate::cases::CaseMarket;
 use crate::core::analyst_service::AnalystService;
 use crate::core::market::MarketId;
 use crate::core::projection::ProjectionBundle;
-use crate::live_snapshot::{json_payload, spawn_mutate_text_file, spawn_write_json_snapshots_batch};
+use crate::live_snapshot::{
+    json_payload, spawn_mutate_text_file, spawn_write_json_snapshots_batch,
+};
 use crate::ontology::build_operational_snapshot;
 
-use super::{AgentArtifactPaths, ProjectionStateCache, RuntimeCounters, RuntimeInfraConfig};
 use super::telemetry::log_runtime_tick_summary;
+use super::{AgentArtifactPaths, ProjectionStateCache, RuntimeCounters, RuntimeInfraConfig};
 
 pub fn write_projection_artifacts(
     market: MarketId,
@@ -95,11 +95,7 @@ pub fn write_projection_artifacts(
         format!("agent:{market_slug}:recommendation_journal").into(),
         paths.agent_recommendation_journal_path.clone(),
         move |existing| {
-            update_recommendation_journal(
-                &existing,
-                &journal_snapshot,
-                &recommendation_journal,
-            )
+            update_recommendation_journal(&existing, &journal_snapshot, &recommendation_journal)
         },
     );
 }

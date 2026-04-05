@@ -1,7 +1,7 @@
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use longport::quote::PushEvent;
@@ -232,7 +232,10 @@ pub(super) fn load_u64_override(
         .or_else(|| std::env::var(global_key).ok())
     {
         Some(raw) => raw.parse::<u64>().map_err(|error| {
-            format!("invalid integer for {} / {}: {}", market_key, global_key, error)
+            format!(
+                "invalid integer for {} / {}: {}",
+                market_key, global_key, error
+            )
         }),
         None => Ok(default),
     }
@@ -253,7 +256,11 @@ pub(super) fn load_optional_string_override(market_key: &str, global_key: &str) 
         .filter(|value| !value.is_empty())
 }
 
-pub(super) fn emit_runtime_log(config: &RuntimeInfraConfig, event: &str, payload: serde_json::Value) {
+pub(super) fn emit_runtime_log(
+    config: &RuntimeInfraConfig,
+    event: &str,
+    payload: serde_json::Value,
+) {
     let Some(path) = config.runtime_log_path.as_deref() else {
         return;
     };

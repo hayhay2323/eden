@@ -1,5 +1,5 @@
-use super::*;
 use super::driver::run_analysis;
+use super::*;
 
 pub fn spawn_analysis_if_enabled(
     market: CaseMarket,

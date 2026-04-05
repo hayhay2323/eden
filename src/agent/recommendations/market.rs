@@ -101,7 +101,8 @@ pub(super) fn build_market_recommendation(
         )
     };
 
-    let governance = ActionGovernanceContract::for_recommendation(ActionExecutionPolicy::ManualOnly);
+    let governance =
+        ActionGovernanceContract::for_recommendation(ActionExecutionPolicy::ManualOnly);
     let governance_reason = governance_reason_for_signal_action(
         best_action,
         "high",

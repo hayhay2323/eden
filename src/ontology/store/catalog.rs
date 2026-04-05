@@ -222,12 +222,12 @@ pub fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "600.HK",
     ];
     const FINANCE: &[&str] = &[
-        "5.HK", "388.HK", "1398.HK", "3988.HK", "939.HK", "1288.HK", "2388.HK", "11.HK",
-        "3328.HK", "1658.HK", "6881.HK", "6030.HK", "3908.HK", "6886.HK", "3968.HK", "1988.HK",
-        "998.HK", "1963.HK", "6818.HK", "2066.HK", "6837.HK", "1776.HK", "1359.HK", "6199.HK",
-        "2799.HK", "3618.HK", "1916.HK", "2611.HK", "3698.HK", "1578.HK", "2016.HK", "6196.HK",
-        "1461.HK", "2356.HK", "440.HK", "23.HK", "1111.HK", "6178.HK", "1336.HK", "3958.HK",
-        "1375.HK", "3903.HK", "412.HK", "2858.HK", "6099.HK", "2888.HK",
+        "5.HK", "388.HK", "1398.HK", "3988.HK", "939.HK", "1288.HK", "2388.HK", "11.HK", "3328.HK",
+        "1658.HK", "6881.HK", "6030.HK", "3908.HK", "6886.HK", "3968.HK", "1988.HK", "998.HK",
+        "1963.HK", "6818.HK", "2066.HK", "6837.HK", "1776.HK", "1359.HK", "6199.HK", "2799.HK",
+        "3618.HK", "1916.HK", "2611.HK", "3698.HK", "1578.HK", "2016.HK", "6196.HK", "1461.HK",
+        "2356.HK", "440.HK", "23.HK", "1111.HK", "6178.HK", "1336.HK", "3958.HK", "1375.HK",
+        "3903.HK", "412.HK", "2858.HK", "6099.HK", "2888.HK",
     ];
     const ENERGY: &[&str] = &[
         "883.HK", "857.HK", "386.HK", "1088.HK", "2688.HK", "384.HK", "1193.HK", "135.HK",
@@ -235,12 +235,11 @@ pub fn symbol_sector(symbol: &str) -> Option<SectorId> {
     ];
     const TELECOM: &[&str] = &["941.HK", "762.HK", "728.HK", "6823.HK", "215.HK"];
     const PROPERTY: &[&str] = &[
-        "16.HK", "1109.HK", "688.HK", "1113.HK", "17.HK", "12.HK", "101.HK", "823.HK",
-        "1997.HK", "960.HK", "3383.HK", "884.HK", "2202.HK", "1030.HK", "123.HK", "119.HK",
-        "3900.HK", "2777.HK", "81.HK", "754.HK", "2669.HK", "1918.HK", "813.HK", "2007.HK",
-        "83.HK", "14.HK", "1972.HK", "778.HK", "87001.HK", "405.HK", "1908.HK", "6158.HK",
-        "9979.HK", "3377.HK", "1638.HK", "272.HK", "2868.HK", "1238.HK", "2778.HK", "435.HK",
-        "808.HK",
+        "16.HK", "1109.HK", "688.HK", "1113.HK", "17.HK", "12.HK", "101.HK", "823.HK", "1997.HK",
+        "960.HK", "3383.HK", "884.HK", "2202.HK", "1030.HK", "123.HK", "119.HK", "3900.HK",
+        "2777.HK", "81.HK", "754.HK", "2669.HK", "1918.HK", "813.HK", "2007.HK", "83.HK", "14.HK",
+        "1972.HK", "778.HK", "87001.HK", "405.HK", "1908.HK", "6158.HK", "9979.HK", "3377.HK",
+        "1638.HK", "272.HK", "2868.HK", "1238.HK", "2778.HK", "435.HK", "808.HK",
     ];
     const CONSUMER: &[&str] = &[
         "1929.HK", "2020.HK", "6862.HK", "9633.HK", "2319.HK", "291.HK", "168.HK", "322.HK",
@@ -262,7 +261,9 @@ pub fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "1868.HK", "579.HK", "956.HK", "371.HK", "270.HK", "855.HK", "2380.HK", "1798.HK",
         "1799.HK", "968.HK", "2208.HK",
     ];
-    const INSURANCE: &[&str] = &["2318.HK", "1299.HK", "2628.HK", "2601.HK", "966.HK", "1339.HK", "1508.HK"];
+    const INSURANCE: &[&str] = &[
+        "2318.HK", "1299.HK", "2628.HK", "2601.HK", "966.HK", "1339.HK", "1508.HK",
+    ];
     const AUTO: &[&str] = &[
         "9868.HK", "2015.HK", "1211.HK", "175.HK", "2333.HK", "9863.HK", "2238.HK", "1114.HK",
         "6978.HK", "1958.HK", "2039.HK", "1268.HK", "489.HK", "2488.HK",
@@ -278,9 +279,9 @@ pub fn symbol_sector(symbol: &str) -> Option<SectorId> {
         "548.HK", "995.HK", "177.HK", "576.HK", "1882.HK", "1618.HK", "1133.HK", "2357.HK",
     ];
     const CONGLOMERATE: &[&str] = &[
-        "1.HK", "19.HK", "4.HK", "267.HK", "27.HK", "10.HK", "66.HK", "293.HK", "683.HK",
-        "659.HK", "20.HK", "880.HK", "1128.HK", "2282.HK", "6883.HK", "1928.HK", "142.HK",
-        "242.HK", "493.HK",
+        "1.HK", "19.HK", "4.HK", "267.HK", "27.HK", "10.HK", "66.HK", "293.HK", "683.HK", "659.HK",
+        "20.HK", "880.HK", "1128.HK", "2282.HK", "6883.HK", "1928.HK", "142.HK", "242.HK",
+        "493.HK",
     ];
     const MEDIA: &[&str] = &["1060.HK", "2400.HK", "799.HK", "777.HK", "484.HK"];
     const LOGISTICS: &[&str] = &[
@@ -292,14 +293,42 @@ pub fn symbol_sector(symbol: &str) -> Option<SectorId> {
 
     let (sectors, names): (&[&[&str]], &[&str]) = (
         &[
-            TECH, SEMICONDUCTOR, FINANCE, ENERGY, TELECOM, PROPERTY, CONSUMER, HEALTHCARE,
-            UTILITIES, INSURANCE, AUTO, MATERIALS, INDUSTRIAL, CONGLOMERATE, MEDIA, LOGISTICS,
+            TECH,
+            SEMICONDUCTOR,
+            FINANCE,
+            ENERGY,
+            TELECOM,
+            PROPERTY,
+            CONSUMER,
+            HEALTHCARE,
+            UTILITIES,
+            INSURANCE,
+            AUTO,
+            MATERIALS,
+            INDUSTRIAL,
+            CONGLOMERATE,
+            MEDIA,
+            LOGISTICS,
             EDUCATION,
         ],
         &[
-            "tech", "semiconductor", "finance", "energy", "telecom", "property", "consumer",
-            "healthcare", "utilities", "insurance", "auto", "materials", "industrial",
-            "conglomerate", "media", "logistics", "education",
+            "tech",
+            "semiconductor",
+            "finance",
+            "energy",
+            "telecom",
+            "property",
+            "consumer",
+            "healthcare",
+            "utilities",
+            "insurance",
+            "auto",
+            "materials",
+            "industrial",
+            "conglomerate",
+            "media",
+            "logistics",
+            "education",
         ],
     );
 

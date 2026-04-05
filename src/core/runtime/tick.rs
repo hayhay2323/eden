@@ -2,17 +2,13 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 
-use crate::runtime_loop::{next_tick, TickAdvance, TickState, spawn_periodic_fetch};
+use crate::runtime_loop::{next_tick, spawn_periodic_fetch, TickAdvance, TickState};
 
-use super::{RuntimeCounters, RuntimeInfraConfig};
 use super::telemetry::{emit_runtime_log, log_runtime_issue, RuntimeIssueLevel};
+use super::{RuntimeCounters, RuntimeInfraConfig};
 
 pub fn log_runtime_monitoring_active(runtime_config: &RuntimeInfraConfig, label: &str) {
-    println!(
-        "\n{} (debounce: {}ms)\n",
-        label,
-        runtime_config.debounce_ms,
-    );
+    println!("\n{} (debounce: {}ms)\n", label, runtime_config.debounce_ms,);
     emit_runtime_log(
         runtime_config,
         "monitoring_active",
@@ -53,16 +49,7 @@ pub async fn advance_runtime_tick<P, U, S>(
 where
     S: TickState<P, U>,
 {
-    match next_tick(
-        bootstrap_pending,
-        push_rx,
-        update_rx,
-        debounce,
-        state,
-        tick,
-    )
-    .await
-    {
+    match next_tick(bootstrap_pending, push_rx, update_rx, debounce, state, tick).await {
         Ok(result) => result,
         Err(()) => {
             log_runtime_issue(
@@ -104,5 +91,8 @@ where
     if advance.received_update {
         runtime_counters.record_rest_update();
     }
-    Some(RuntimeTickBoundary { advance, started_at })
+    Some(RuntimeTickBoundary {
+        advance,
+        started_at,
+    })
 }

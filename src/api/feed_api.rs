@@ -103,7 +103,9 @@ pub(super) async fn get_feed_transitions(
     Path(market): Path<String>,
     Query(query): Query<AgentFeedQuery>,
 ) -> Result<Json<FeedTransitionsResponse>, ApiError> {
-    Ok(Json(build_feed_transitions_response(&market, &query).await?))
+    Ok(Json(
+        build_feed_transitions_response(&market, &query).await?,
+    ))
 }
 
 async fn load_feed_snapshot_for_market(raw_market: &str) -> Result<AgentSnapshot, ApiError> {

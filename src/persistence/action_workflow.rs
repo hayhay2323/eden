@@ -9,6 +9,14 @@ use crate::action::workflow::{
     ActionWorkflowState,
 };
 
+fn default_execution_policy() -> ActionExecutionPolicy {
+    ActionExecutionPolicy::ReviewRequired
+}
+
+fn default_governance_reason_code() -> ActionGovernanceReasonCode {
+    ActionGovernanceReasonCode::WorkflowTransitionWindow
+}
+
 /// Persistence row for the latest known workflow state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionWorkflowRecord {
@@ -16,7 +24,9 @@ pub struct ActionWorkflowRecord {
     pub title: String,
     pub payload: Value,
     pub current_stage: ActionStage,
+    #[serde(default = "default_execution_policy")]
     pub execution_policy: ActionExecutionPolicy,
+    #[serde(default = "default_governance_reason_code")]
     pub governance_reason_code: ActionGovernanceReasonCode,
     #[serde(with = "rfc3339")]
     pub recorded_at: OffsetDateTime,
@@ -80,7 +90,9 @@ pub struct ActionWorkflowEventRecord {
     pub payload: Value,
     pub from_stage: Option<ActionStage>,
     pub to_stage: ActionStage,
+    #[serde(default = "default_execution_policy")]
     pub execution_policy: ActionExecutionPolicy,
+    #[serde(default = "default_governance_reason_code")]
     pub governance_reason_code: ActionGovernanceReasonCode,
     #[serde(with = "rfc3339")]
     pub recorded_at: OffsetDateTime,
@@ -144,7 +156,8 @@ impl ActionWorkflowEventRecord {
     }
 
     pub fn governance_summary(&self) -> String {
-        let contract = ActionGovernanceContract::for_workflow(Some(self.to_stage), self.execution_policy);
+        let contract =
+            ActionGovernanceContract::for_workflow(Some(self.to_stage), self.execution_policy);
         let allowed = contract
             .allowed_transitions
             .iter()

@@ -17,6 +17,12 @@ pub(crate) fn select_backward_investigation_targets<'a>(
     previous_investigation_map: &HashMap<String, &'a BackwardInvestigation>,
 ) -> Vec<&'a InvestigationSelection> {
     const MAX_BACKWARD_INVESTIGATIONS: usize = 6;
+    let enter_selection_count = reasoning
+        .investigation_selections
+        .iter()
+        .filter(|selection| selection.attention_hint == "enter")
+        .count();
+    let backward_budget = MAX_BACKWARD_INVESTIGATIONS.max(enter_selection_count.saturating_add(2));
 
     let mut candidates = reasoning
         .investigation_selections
@@ -80,7 +86,7 @@ pub(crate) fn select_backward_investigation_targets<'a>(
 
     candidates
         .into_iter()
-        .take(MAX_BACKWARD_INVESTIGATIONS)
+        .take(backward_budget)
         .map(|(_, selection)| selection)
         .collect()
 }

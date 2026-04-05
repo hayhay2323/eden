@@ -154,6 +154,54 @@ pub(super) fn print_polymarket_snapshot(
     }
 }
 
+pub(super) fn print_runtime_tasks(tasks: &[RuntimeTaskRecord]) {
+    if tasks.is_empty() {
+        println!("No runtime tasks found.");
+        return;
+    }
+
+    println!(
+        "Runtime Tasks  total={}  latest_update={}",
+        tasks.len(),
+        tasks[0].updated_at
+    );
+    for task in tasks {
+        println!(
+            "  {}  kind={}  status={}  market={}  owner={}  updated={}",
+            task.id,
+            task.kind,
+            task.status,
+            task.market.as_deref().unwrap_or("*"),
+            task.owner.as_deref().unwrap_or("*"),
+            task.updated_at
+        );
+        println!("          {}", task.label);
+        if let Some(detail) = &task.detail {
+            println!("          detail={detail}");
+        }
+        if let Some(error) = &task.last_error {
+            println!("          error={error}");
+        }
+    }
+}
+
+pub(super) fn print_operator_commands(commands: &[OperatorCommandDescriptor]) {
+    if commands.is_empty() {
+        println!("No operator commands available.");
+        return;
+    }
+
+    println!("Operator Commands  total={}", commands.len());
+    for command in commands {
+        println!(
+            "  {}  category={:?}  json={}",
+            command.name, command.category, command.supports_json
+        );
+        println!("          {}", command.summary);
+        println!("          usage={}", command.usage);
+    }
+}
+
 #[cfg(feature = "persistence")]
 pub(super) fn print_lineage_report(
     stats: &crate::temporal::lineage::LineageStats,
@@ -238,12 +286,7 @@ pub(super) fn select_lineage_rows(
         .cloned()
         .filter(|row| {
             row_matches_filters(row, filters)
-                && matches_lineage_alignment(
-                    row.mean_external_delta
-                        .parse::<Decimal>()
-                        .unwrap_or(Decimal::ZERO),
-                    alignment,
-                )
+                && matches_lineage_alignment(row.mean_external_delta, alignment)
         })
         .collect::<Vec<_>>();
 
@@ -270,14 +313,12 @@ fn lineage_row_metric(
     sort_by: LineageSortKey,
 ) -> Decimal {
     match sort_by {
-        LineageSortKey::NetReturn => row.mean_net_return.parse().unwrap_or(Decimal::ZERO),
-        LineageSortKey::FollowExpectancy => row.follow_expectancy.parse().unwrap_or(Decimal::ZERO),
-        LineageSortKey::FadeExpectancy => row.fade_expectancy.parse().unwrap_or(Decimal::ZERO),
-        LineageSortKey::WaitExpectancy => row.wait_expectancy.parse().unwrap_or(Decimal::ZERO),
-        LineageSortKey::ConvergenceScore => {
-            row.mean_convergence_score.parse().unwrap_or(Decimal::ZERO)
-        }
-        LineageSortKey::ExternalDelta => row.mean_external_delta.parse().unwrap_or(Decimal::ZERO),
+        LineageSortKey::NetReturn => row.mean_net_return,
+        LineageSortKey::FollowExpectancy => row.follow_expectancy,
+        LineageSortKey::FadeExpectancy => row.fade_expectancy,
+        LineageSortKey::WaitExpectancy => row.wait_expectancy,
+        LineageSortKey::ConvergenceScore => row.mean_convergence_score,
+        LineageSortKey::ExternalDelta => row.mean_external_delta,
     }
 }
 
@@ -311,25 +352,18 @@ pub(super) fn print_lineage_rows(
             row.session.as_deref().unwrap_or("-"),
             row.market_regime.as_deref().unwrap_or("-"),
             row.resolved,
-            (row.follow_expectancy.parse::<Decimal>().unwrap_or(Decimal::ZERO) * pct).round_dp(2),
-            (row.fade_expectancy.parse::<Decimal>().unwrap_or(Decimal::ZERO) * pct).round_dp(2),
-            (row.wait_expectancy.parse::<Decimal>().unwrap_or(Decimal::ZERO) * pct).round_dp(2),
-            (row.mean_convergence_score.parse::<Decimal>().unwrap_or(Decimal::ZERO) * pct).round_dp(0),
-            (row.mean_net_return.parse::<Decimal>().unwrap_or(Decimal::ZERO) * pct).round_dp(2),
-            (row.mean_mfe.parse::<Decimal>().unwrap_or(Decimal::ZERO) * pct).round_dp(2),
-            (row.mean_mae.parse::<Decimal>().unwrap_or(Decimal::ZERO) * pct).round_dp(2),
-            (row.follow_through_rate.parse::<Decimal>().unwrap_or(Decimal::ZERO) * pct).round_dp(0),
-            (row.structure_retention_rate.parse::<Decimal>().unwrap_or(Decimal::ZERO) * pct)
-                .round_dp(0),
-            (row.invalidation_rate.parse::<Decimal>().unwrap_or(Decimal::ZERO) * pct).round_dp(0),
-            (row.mean_external_delta.parse::<Decimal>().unwrap_or(Decimal::ZERO) * pct)
-                .round_dp(2),
-            (row
-                .external_follow_through_rate
-                .parse::<Decimal>()
-                .unwrap_or(Decimal::ZERO)
-                * pct)
-                .round_dp(0),
+            (row.follow_expectancy * pct).round_dp(2),
+            (row.fade_expectancy * pct).round_dp(2),
+            (row.wait_expectancy * pct).round_dp(2),
+            (row.mean_convergence_score * pct).round_dp(0),
+            (row.mean_net_return * pct).round_dp(2),
+            (row.mean_mfe * pct).round_dp(2),
+            (row.mean_mae * pct).round_dp(2),
+            (row.follow_through_rate * pct).round_dp(0),
+            (row.structure_retention_rate * pct).round_dp(0),
+            (row.invalidation_rate * pct).round_dp(0),
+            (row.mean_external_delta * pct).round_dp(2),
+            (row.external_follow_through_rate * pct).round_dp(0),
         );
     }
 }

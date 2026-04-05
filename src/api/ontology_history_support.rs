@@ -31,25 +31,31 @@ pub(in crate::api) fn journal_matches_recommendation(
 ) -> bool {
     row.market_recommendation
         .as_ref()
-        .map(|item| item.recommendation_id.eq_ignore_ascii_case(recommendation_id))
+        .map(|item| {
+            item.recommendation_id
+                .eq_ignore_ascii_case(recommendation_id)
+        })
         .unwrap_or(false)
         || row
             .decisions
             .iter()
             .any(|item| decision_matches_recommendation(item, recommendation_id))
-        || row
-            .items
-            .iter()
-            .any(|item| item.recommendation_id.eq_ignore_ascii_case(recommendation_id))
+        || row.items.iter().any(|item| {
+            item.recommendation_id
+                .eq_ignore_ascii_case(recommendation_id)
+        })
 }
 
-fn decision_matches_recommendation(
-    decision: &AgentDecision,
-    recommendation_id: &str,
-) -> bool {
+fn decision_matches_recommendation(decision: &AgentDecision, recommendation_id: &str) -> bool {
     match decision {
-        AgentDecision::Market(item) => item.recommendation_id.eq_ignore_ascii_case(recommendation_id),
-        AgentDecision::Sector(item) => item.recommendation_id.eq_ignore_ascii_case(recommendation_id),
-        AgentDecision::Symbol(item) => item.recommendation_id.eq_ignore_ascii_case(recommendation_id),
+        AgentDecision::Market(item) => item
+            .recommendation_id
+            .eq_ignore_ascii_case(recommendation_id),
+        AgentDecision::Sector(item) => item
+            .recommendation_id
+            .eq_ignore_ascii_case(recommendation_id),
+        AgentDecision::Symbol(item) => item
+            .recommendation_id
+            .eq_ignore_ascii_case(recommendation_id),
     }
 }

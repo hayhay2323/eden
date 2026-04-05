@@ -1,4 +1,237 @@
 use super::*;
+use crate::live_snapshot::LiveSuccessPattern;
+use crate::temporal::pyramid::build_us_live_temporal_bars;
+use crate::temporal::session::{event_half_life_secs, freshness_score_from_age_secs};
+use crate::us::temporal::lineage::{
+    compute_us_convergence_success_patterns, compute_us_multi_horizon_lineage_metrics,
+};
+
+fn diversified_investigation_frontier<'a>(
+    selections: &'a [crate::ontology::reasoning::InvestigationSelection],
+    limit: usize,
+) -> Vec<&'a crate::ontology::reasoning::InvestigationSelection> {
+    let mut family_counts = std::collections::HashMap::<&str, usize>::new();
+    let mut selected = Vec::new();
+    let mut deferred = Vec::new();
+
+    for selection in selections {
+        let family = selection.family_key.as_str();
+        let count = family_counts.get(family).copied().unwrap_or(0);
+        let cap = if matches!(
+            family,
+            "structural_diffusion"
+                | "peer_relay"
+                | "sector_diffusion"
+                | "cross_market_diffusion"
+                | "cross_mechanism_chain"
+        ) {
+            2
+        } else {
+            1
+        };
+        if count >= cap {
+            deferred.push(selection);
+            continue;
+        }
+        family_counts.insert(family, count + 1);
+        selected.push(selection);
+        if selected.len() == limit {
+            return selected;
+        }
+    }
+
+    if selected.len() < limit {
+        for selection in deferred {
+            selected.push(selection);
+            if selected.len() == limit {
+                break;
+            }
+        }
+    }
+
+    selected
+}
+
+fn investigation_operator_next_step(attention_hint: &str) -> &'static str {
+    match attention_hint {
+        "enter" | "review" => "review_desk",
+        "observe" => "collect_confirmation",
+        _ => "monitor",
+    }
+}
+
+fn operator_focus_summary(
+    selections: &[crate::ontology::reasoning::InvestigationSelection],
+    workflows: &[UsActionWorkflow],
+) -> Option<String> {
+    if !workflows.is_empty() {
+        let items = workflows
+            .iter()
+            .take(3)
+            .map(|workflow| format!("{}@{}", workflow.symbol, workflow.stage))
+            .collect::<Vec<_>>();
+        return Some(format!("workflow_active -> {}", items.join(", ")));
+    }
+
+    let queue = diversified_investigation_frontier(selections, 3);
+    if queue.is_empty() {
+        return None;
+    }
+    let next_step = investigation_operator_next_step(queue[0].attention_hint.as_str());
+    let items = queue
+        .iter()
+        .map(|item| item.scope.label())
+        .collect::<Vec<_>>();
+    Some(format!("{next_step} -> {}", items.join(", ")))
+}
+
+fn operator_step_rank(step: &str) -> usize {
+    match step {
+        "execute" => 0,
+        "review_gate" => 1,
+        "review_desk" => 2,
+        "collect_confirmation" => 3,
+        "monitor" => 4,
+        "review" => 5,
+        "complete" => 6,
+        _ => 10,
+    }
+}
+
+fn lifecycle_step_score(thread: &crate::agent::AgentThread) -> i32 {
+    match (
+        thread.workflow_stage.as_deref(),
+        thread.workflow_next_step.as_deref(),
+    ) {
+        (Some("reviewed"), _) | (_, Some("complete")) => 70,
+        (Some("monitoring"), _) | (_, Some("monitor")) => 60,
+        (Some("executed"), _) | (_, Some("execute")) => 50,
+        (Some("confirmed"), _) => 45,
+        (Some("suggested"), _) => 40,
+        (_, Some("review_gate")) => 30,
+        (_, Some("review_desk")) => 20,
+        (_, Some("collect_confirmation")) => 10,
+        _ => 0,
+    }
+}
+
+fn is_blocked_step(step: Option<&str>) -> bool {
+    matches!(
+        step,
+        Some("review_gate" | "review_desk" | "collect_confirmation")
+    )
+}
+
+fn lifecycle_label(thread: &crate::agent::AgentThread) -> String {
+    thread
+        .headline
+        .clone()
+        .or_else(|| thread.title.clone())
+        .unwrap_or_else(|| thread.symbol.clone())
+}
+
+fn lifecycle_transition_feed(
+    session: &crate::agent::AgentSession,
+    previous_session: Option<&crate::agent::AgentSession>,
+) -> Vec<(String, Vec<String>)> {
+    let Some(previous_session) = previous_session else {
+        return Vec::new();
+    };
+    let previous = previous_session
+        .active_threads
+        .iter()
+        .map(|thread| (thread.symbol.to_ascii_lowercase(), thread))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let mut newly_blocked = Vec::new();
+    let mut newly_unlocked = Vec::new();
+    let mut promoted = Vec::new();
+    let mut degraded = Vec::new();
+
+    for thread in &session.active_threads {
+        let key = thread.symbol.to_ascii_lowercase();
+        let Some(prev) = previous.get(&key).copied() else {
+            continue;
+        };
+        let current_step = thread.workflow_next_step.as_deref();
+        let previous_step = prev.workflow_next_step.as_deref();
+        let current_blocked = is_blocked_step(current_step);
+        let previous_blocked = is_blocked_step(previous_step);
+        let label = lifecycle_label(thread);
+
+        if current_blocked && (!previous_blocked || current_step != previous_step) {
+            newly_blocked.push(label);
+            continue;
+        }
+        if previous_blocked && !current_blocked {
+            newly_unlocked.push(label);
+            continue;
+        }
+
+        let current_score = lifecycle_step_score(thread);
+        let previous_score = lifecycle_step_score(prev);
+        if current_score > previous_score {
+            promoted.push(label);
+        } else if current_score < previous_score {
+            degraded.push(label);
+        }
+    }
+
+    let mut sections = Vec::new();
+    if !newly_blocked.is_empty() {
+        sections.push(("newly_blocked".into(), newly_blocked));
+    }
+    if !newly_unlocked.is_empty() {
+        sections.push(("newly_unlocked".into(), newly_unlocked));
+    }
+    if !promoted.is_empty() {
+        sections.push(("promoted".into(), promoted));
+    }
+    if !degraded.is_empty() {
+        sections.push(("degraded".into(), degraded));
+    }
+    sections
+}
+
+fn session_focus_summary(session: &crate::agent::AgentSession) -> Option<String> {
+    let mut grouped = std::collections::BTreeMap::<(usize, String), Vec<String>>::new();
+    for thread in &session.active_threads {
+        let Some(step) = thread.workflow_next_step.as_deref() else {
+            continue;
+        };
+        grouped
+            .entry((operator_step_rank(step), step.to_string()))
+            .or_default()
+            .push(thread.symbol.clone());
+    }
+    if grouped.is_empty() {
+        return None;
+    }
+    let parts = grouped
+        .into_iter()
+        .take(2)
+        .map(|((_, step), symbols)| {
+            let labels = symbols.into_iter().take(3).collect::<Vec<_>>().join(", ");
+            format!("{step} -> {labels}")
+        })
+        .collect::<Vec<_>>();
+    Some(parts.join(" | "))
+}
+
+fn multi_horizon_gate_reason(notes: &[String]) -> Option<String> {
+    notes
+        .iter()
+        .find_map(|note| note.strip_prefix("multi_horizon_gate=blocked: "))
+        .map(|value| value.to_string())
+}
+
+fn matched_success_pattern_signature(notes: &[String]) -> Option<String> {
+    notes
+        .iter()
+        .find_map(|note| note.strip_prefix("matched_success_pattern="))
+        .map(|value| value.to_string())
+        .filter(|value| !value.is_empty())
+}
 
 pub(super) fn build_us_live_snapshot(
     tick: u64,
@@ -16,7 +249,6 @@ pub(super) fn build_us_live_snapshot(
     cross_market_signals: &[crate::bridges::hk_to_us::CrossMarketSignal],
     dynamics: &HashMap<Symbol, crate::us::temporal::analysis::UsSignalDynamics>,
     tick_history: &UsTickHistory,
-    lineage_stats: &UsLineageStats,
     position_tracker: &UsPositionTracker,
     workflows: &[UsActionWorkflow],
     propagation_senses: &[crate::us::graph::insights::UsPropagationSense],
@@ -60,6 +292,25 @@ pub(super) fn build_us_live_snapshot(
             },
             magnitude: item.value.magnitude,
             summary: item.value.summary.clone(),
+            age_secs: Some(
+                (tick_history
+                    .latest()
+                    .map(|record| record.timestamp)
+                    .unwrap_or(item.provenance.observed_at)
+                    - item.provenance.observed_at)
+                    .whole_seconds()
+                    .max(0),
+            ),
+            freshness: Some(freshness_score_from_age_secs(
+                (tick_history
+                    .latest()
+                    .map(|record| record.timestamp)
+                    .unwrap_or(item.provenance.observed_at)
+                    - item.provenance.observed_at)
+                    .whole_seconds()
+                    .max(0),
+                event_half_life_secs(&format!("{:?}", item.value.kind)),
+            )),
         })
         .collect::<Vec<_>>();
     let mut structural_delta_events = dynamics
@@ -83,6 +334,8 @@ pub(super) fn build_us_live_snapshot(
                 item.composite_acceleration.round_dp(4),
                 item.composite_duration
             ),
+            age_secs: None,
+            freshness: None,
         })
         .collect::<Vec<_>>();
     structural_delta_events.sort_by(|a, b| b.magnitude.cmp(&a.magnitude));
@@ -99,6 +352,8 @@ pub(super) fn build_us_live_snapshot(
             item.propagation_strength.round_dp(4),
             item.lag_gap.round_dp(4)
         ),
+        age_secs: None,
+        freshness: None,
     }));
     live_events.sort_by(|a, b| b.magnitude.cmp(&a.magnitude));
     live_events.truncate(24);
@@ -115,6 +370,10 @@ pub(super) fn build_us_live_snapshot(
             node.sector = us_sector_name(store, &fingerprint.symbol);
             node
         })
+        .collect::<Vec<_>>();
+    let temporal_symbols = top_signals
+        .iter()
+        .map(|item| item.symbol.clone())
         .collect::<Vec<_>>();
 
     LiveSnapshot {
@@ -187,8 +446,23 @@ pub(super) fn build_us_live_snapshot(
                     confidence_gap: item.confidence_gap,
                     heuristic_edge: item.heuristic_edge,
                     entry_rationale: item.entry_rationale.clone(),
+                    review_reason_code: item
+                        .review_reason_code
+                        .map(|code| code.as_str().to_string()),
+                    policy_primary: item
+                        .policy_verdict
+                        .as_ref()
+                        .map(|verdict| verdict.primary.as_str().to_string()),
+                    policy_reason: item
+                        .policy_verdict
+                        .as_ref()
+                        .map(|verdict| verdict.rationale.clone()),
+                    multi_horizon_gate_reason: multi_horizon_gate_reason(&item.risk_notes),
                     family_label,
                     counter_label,
+                    matched_success_pattern_signature: matched_success_pattern_signature(
+                        &item.risk_notes,
+                    ),
                 }
             })
             .collect(),
@@ -249,6 +523,7 @@ pub(super) fn build_us_live_snapshot(
                 conclusion: item.conclusion.clone(),
                 primary_driver: item.primary_driver.clone(),
                 confidence: item.confidence,
+                freshness: None,
                 evidence: item
                     .evidence
                     .iter()
@@ -329,26 +604,43 @@ pub(super) fn build_us_live_snapshot(
                 lag_gap: item.lag_gap,
             })
             .collect(),
-        lineage: if !lineage_stats.is_empty() {
-            lineage_stats
-                .by_template
-                .iter()
-                .map(|item| LiveLineageMetric {
-                    template: item.template.clone(),
-                    total: item.total,
-                    resolved: item.resolved,
-                    hits: item.hits,
-                    hit_rate: item.hit_rate,
-                    mean_return: item.mean_return,
-                })
-                .collect()
-        } else {
-            Vec::new()
-        },
+        temporal_bars: build_us_live_temporal_bars(tick_history, &temporal_symbols),
+        lineage: compute_us_multi_horizon_lineage_metrics(tick_history)
+            .into_iter()
+            .map(|item| LiveLineageMetric {
+                horizon: Some(item.horizon),
+                template: item.template,
+                total: item.total,
+                resolved: item.resolved,
+                hits: item.hits,
+                hit_rate: item.hit_rate,
+                mean_return: item.mean_return,
+            })
+            .collect(),
+        success_patterns: compute_us_convergence_success_patterns(
+            tick_history,
+            crate::us::common::SIGNAL_RESOLUTION_LAG,
+        )
+        .into_iter()
+        .take(6)
+        .map(|item| LiveSuccessPattern {
+            family: item.top_family,
+            signature: item.channel_signature,
+            dominant_channels: item.dominant_channels,
+            samples: item.samples,
+            mean_net_return: item.mean_net_return,
+            mean_strength: item.mean_strength,
+            mean_coherence: item.mean_coherence,
+            mean_channel_diversity: Some(item.mean_channel_diversity),
+            center_kind: None,
+            role: None,
+        })
+        .collect(),
     }
 }
 
 pub(super) fn display_us_runtime_summary(
+    live_snapshot: &LiveSnapshot,
     tick: u64,
     timestamp_str: &str,
     graph: &UsGraph,
@@ -360,11 +652,13 @@ pub(super) fn display_us_runtime_summary(
     sorted_convergence: &[(&Symbol, &crate::us::graph::decision::UsConvergenceScore)],
     cross_market_signals: &[crate::bridges::hk_to_us::CrossMarketSignal],
     sorted_events: &[crate::ontology::domain::Event<crate::us::pipeline::signals::UsEventRecord>],
-    lineage_stats: &UsLineageStats,
     insights: &UsGraphInsights,
     backward: &crate::us::pipeline::world::UsBackwardSnapshot,
     position_tracker: &UsPositionTracker,
     workflows: &[UsActionWorkflow],
+    briefing: &crate::agent::AgentBriefing,
+    session: &crate::agent::AgentSession,
+    previous_session: Option<&crate::agent::AgentSession>,
 ) {
     println!(
         "\n[US tick {}] {} | {} stocks | {} edges | regime={} | {} events | {} hyps | {} setups | scorecard {}/{} ({:.0}%) | {} push",
@@ -381,6 +675,23 @@ pub(super) fn display_us_runtime_summary(
         scorecard.hit_rate * Decimal::from(100),
         live_push_count,
     );
+    if let Some(focus) = session_focus_summary(session)
+        .or_else(|| briefing.headline.as_deref().map(str::to_string))
+        .or_else(|| operator_focus_summary(&reasoning.investigation_selections, workflows))
+    {
+        println!("  Focus: {}", focus);
+    }
+    let lifecycle_feed = lifecycle_transition_feed(session, previous_session);
+    if !lifecycle_feed.is_empty() {
+        println!("  Lifecycle:");
+        for (label, items) in lifecycle_feed.iter().take(4) {
+            println!(
+                "    {}: {}",
+                label,
+                items.iter().take(4).cloned().collect::<Vec<_>>().join(", ")
+            );
+        }
+    }
 
     if !sorted_convergence.is_empty() {
         println!("  Convergence:");
@@ -421,34 +732,111 @@ pub(super) fn display_us_runtime_summary(
 
     if !sorted_events.is_empty() {
         println!("  Events:");
-        for e in sorted_events.iter().take(5) {
+        for (event, live_event) in sorted_events
+            .iter()
+            .zip(live_snapshot.events.iter())
+            .take(5)
+        {
             println!(
-                "    [{:?}] mag={} {}",
-                e.value.kind, e.value.magnitude, e.value.summary
+                "    [{:?}] mag={} fresh={} age={}s {}",
+                event.value.kind,
+                event.value.magnitude,
+                live_event
+                    .freshness
+                    .map(|value| value.round_dp(2).to_string())
+                    .unwrap_or_else(|| "-".into()),
+                live_event
+                    .age_secs
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".into()),
+                event.value.summary
+            );
+        }
+    }
+
+    if !reasoning.investigation_selections.is_empty() {
+        println!("  Investigations:");
+        for selection in diversified_investigation_frontier(&reasoning.investigation_selections, 5)
+        {
+            let gate = multi_horizon_gate_reason(&selection.notes)
+                .map(|reason| format!(" gate={reason}"))
+                .unwrap_or_default();
+            println!(
+                "    {} [{}] prio={} conf={} gap={}{}",
+                selection.title,
+                selection.attention_hint,
+                selection.priority_score.round_dp(3),
+                selection.confidence.round_dp(3),
+                selection.confidence_gap.round_dp(3),
+                gate,
             );
         }
     }
 
     if !reasoning.tactical_setups.is_empty() {
         println!("  Tactical setups:");
-        for setup in reasoning.tactical_setups.iter().take(5) {
+        for setup in
+            crate::ontology::reasoning::diversified_tactical_frontier(&reasoning.tactical_setups, 5)
+        {
+            let gate = live_snapshot
+                .tactical_cases
+                .iter()
+                .find(|item| item.setup_id == setup.setup_id)
+                .and_then(|item| item.multi_horizon_gate_reason.clone())
+                .map(|reason| format!(" gate={reason}"))
+                .unwrap_or_default();
+            let policy = live_snapshot
+                .tactical_cases
+                .iter()
+                .find(|item| item.setup_id == setup.setup_id)
+                .and_then(|item| item.policy_primary.clone())
+                .map(|primary| format!(" policy={primary}"))
+                .unwrap_or_default();
             println!(
-                "    {} [{}] conf={} gap={} edge={}",
+                "    {} [{}] conf={} gap={} edge={}{}{}",
                 setup.title,
                 setup.action,
                 setup.confidence,
                 setup.confidence_gap,
                 setup.heuristic_edge,
+                policy,
+                gate,
             );
         }
     }
 
-    if !lineage_stats.is_empty() {
+    if !live_snapshot.lineage.is_empty() {
         println!("  Lineage:");
-        for ls in &lineage_stats.by_template {
+        for ls in live_snapshot.lineage.iter().take(6) {
             println!(
-                "    {} {}/{} resolved, hit_rate={} mean_ret={}",
-                ls.template, ls.resolved, ls.total, ls.hit_rate, ls.mean_return,
+                "    [{}] {} {}/{} resolved, hit_rate={} mean_ret={}",
+                ls.horizon.as_deref().unwrap_or("tick"),
+                ls.template,
+                ls.resolved,
+                ls.total,
+                ls.hit_rate.round_dp(3),
+                ls.mean_return.round_dp(4),
+            );
+        }
+    }
+
+    if !live_snapshot.temporal_bars.is_empty() {
+        println!("  Temporal bars:");
+        for bar in live_snapshot.temporal_bars.iter().take(4) {
+            println!(
+                "    [{}] {} o={} c={} mean={} flow={} events={} persistence={}t",
+                bar.horizon,
+                bar.symbol,
+                bar.open
+                    .map(|value| value.round_dp(3).to_string())
+                    .unwrap_or_else(|| "-".into()),
+                bar.close
+                    .map(|value| value.round_dp(3).to_string())
+                    .unwrap_or_else(|| "-".into()),
+                bar.composite_mean.round_dp(3),
+                bar.capital_flow_delta.round_dp(3),
+                bar.event_count,
+                bar.signal_persistence,
             );
         }
     }
@@ -474,10 +862,120 @@ pub(super) fn display_us_runtime_summary(
     if !backward.chains.is_empty() {
         println!("  Backward:");
         for c in backward.chains.iter().take(3) {
-            println!("    {} [{}]", c.conclusion, c.primary_driver);
+            let freshness = live_snapshot
+                .backward_chains
+                .iter()
+                .find(|item| item.symbol.eq_ignore_ascii_case(&c.symbol.0))
+                .and_then(|item| item.freshness);
+            println!(
+                "    {} [{}] fresh={}",
+                c.conclusion,
+                c.primary_driver,
+                freshness
+                    .map(|value| value.round_dp(2).to_string())
+                    .unwrap_or_else(|| "-".into()),
+            );
         }
     }
-    if !position_tracker.active_fingerprints().is_empty() {
+
+    let operator_queue = session
+        .active_threads
+        .iter()
+        .filter(|thread| {
+            matches!(
+                thread.workflow_next_step.as_deref(),
+                Some("review_gate" | "review_desk" | "collect_confirmation")
+            )
+        })
+        .take(5)
+        .collect::<Vec<_>>();
+    let operator_workflows = session
+        .active_threads
+        .iter()
+        .filter(|thread| thread.workflow_stage.is_some())
+        .take(5)
+        .collect::<Vec<_>>();
+    if !operator_queue.is_empty()
+        || !operator_workflows.is_empty()
+        || !workflows.is_empty()
+        || !live_snapshot.active_position_nodes.is_empty()
+    {
+        println!("  Operator:");
+        if !operator_queue.is_empty() {
+            let mut grouped = std::collections::BTreeMap::<
+                (usize, String),
+                Vec<&crate::agent::AgentThread>,
+            >::new();
+            for thread in &operator_queue {
+                let step = thread
+                    .workflow_next_step
+                    .clone()
+                    .unwrap_or_else(|| "monitor".into());
+                grouped
+                    .entry((operator_step_rank(step.as_str()), step))
+                    .or_default()
+                    .push(*thread);
+            }
+            for ((_, step), threads) in grouped.into_iter() {
+                println!("    {}:", step);
+                for thread in threads.into_iter().take(3) {
+                    println!(
+                        "      {} prio={} {}",
+                        thread
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| thread.symbol.clone()),
+                        thread.priority.round_dp(3),
+                        thread
+                            .headline
+                            .clone()
+                            .unwrap_or_else(|| thread.symbol.clone()),
+                    );
+                    if let Some(reason) = thread.blocked_reason.as_deref() {
+                        println!("        why={}", reason);
+                    }
+                    if let Some(unlock) = thread.unlock_condition.as_deref() {
+                        println!("        unlock={}", unlock);
+                    }
+                }
+            }
+        }
+        if !operator_workflows.is_empty() {
+            println!("    Workflows:");
+            for thread in operator_workflows.iter().take(3) {
+                let active_node = live_snapshot
+                    .active_position_nodes
+                    .iter()
+                    .find(|item| item.symbol.0.eq_ignore_ascii_case(&thread.symbol));
+                let pnl = active_node
+                    .and_then(|item| item.pnl)
+                    .map(|value| value.round_dp(3).to_string())
+                    .unwrap_or_else(|| "-".into());
+                let age = active_node.map(|item| item.age_ticks).unwrap_or(0);
+                let exit_flag = active_node.map(|item| item.exit_forming).unwrap_or(false);
+                println!(
+                    "      {} stage={} next={} pnl={} age={}t exit={}",
+                    thread.symbol,
+                    thread.workflow_stage.as_deref().unwrap_or("-"),
+                    thread.workflow_next_step.as_deref().unwrap_or("monitor"),
+                    pnl,
+                    age,
+                    if exit_flag { "yes" } else { "no" },
+                );
+                if let Some(reason) = thread.blocked_reason.as_deref() {
+                    println!("        why={}", reason);
+                }
+                if let Some(unlock) = thread.unlock_condition.as_deref() {
+                    println!("        unlock={}", unlock);
+                }
+            }
+        } else if !position_tracker.active_fingerprints().is_empty() {
+            println!(
+                "    Positions: {} active",
+                position_tracker.active_fingerprints().len()
+            );
+        }
+    } else if !position_tracker.active_fingerprints().is_empty() {
         println!(
             "  Positions: {} active, {} workflows",
             position_tracker.active_fingerprints().len(),

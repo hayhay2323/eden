@@ -1,27 +1,29 @@
-use axum::extract::{Path, Query};
 #[cfg(feature = "persistence")]
 use axum::extract::State;
+use axum::extract::{Path, Query};
 use axum::Json;
 use serde::Deserialize;
 
 use crate::agent;
 use crate::agent::AgentSectorFlow;
-use crate::agent_llm;
+use crate::agent::llm;
 use crate::cases;
 #[cfg(feature = "persistence")]
 use crate::cases::enrich_case_summaries;
+#[cfg(feature = "persistence")]
+use crate::ontology::rebuild_operational_case_graph;
+use crate::ontology::world::BackwardInvestigation;
 use crate::ontology::{
     build_operational_snapshot, load_operational_snapshot, CaseContract, MacroEventContract,
-    MarketSessionContract, OperationalNavigation, OperationalNeighborhood,
-    OperationalObjectKind, OperationalSnapshot, RecommendationContract, SymbolStateContract,
+    MarketSessionContract, OperationalNavigation, OperationalNeighborhood, OperationalObjectKind,
+    OperationalSnapshot, OperatorWorkItem, RecommendationContract, SymbolStateContract,
     ThreadContract, WorkflowContract,
 };
-use crate::ontology::world::BackwardInvestigation;
 
 use super::core::parse_case_market;
+use super::foundation::ApiError;
 #[cfg(feature = "persistence")]
 use super::foundation::ApiState;
-use super::foundation::ApiError;
 #[cfg(feature = "persistence")]
 use super::ontology_history_enrichment::enrich_history_refs;
 
@@ -51,7 +53,7 @@ pub(in crate::api) async fn load_or_build_operational_snapshot(
     let recommendations = agent::load_recommendations(market)
         .await
         .unwrap_or_else(|_| agent::build_recommendations(&snapshot, Some(&session)));
-    let narration = agent_llm::load_narration(market).await.ok();
+    let narration = llm::load_narration(market).await.ok();
 
     let operational = build_operational_snapshot(
         &live_snapshot,
@@ -77,7 +79,9 @@ async fn enrich_with_persistent_workflows(
     let mut cases = cases::build_case_summaries(&live_snapshot);
     enrich_case_summaries(&state.store, &mut cases)
         .await
-        .map_err(|error| ApiError::internal(format!("failed to enrich operational cases: {error}")))?;
+        .map_err(|error| {
+            ApiError::internal(format!("failed to enrich operational cases: {error}"))
+        })?;
     rebuild_operational_case_graph(snapshot, &cases);
     Ok(())
 }
@@ -237,35 +241,6 @@ pub(super) async fn get_macro_event_contracts(
     Ok(Json(items))
 }
 
-pub(super) async fn get_thread_contracts(
-    #[cfg(feature = "persistence")] State(state): State<ApiState>,
-    Path(market): Path<String>,
-    Query(query): Query<OntologyObjectQuery>,
-) -> Result<Json<Vec<ThreadContract>>, ApiError> {
-    let market = parse_case_market(&market)?;
-    #[cfg(feature = "persistence")]
-    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
-    #[cfg(not(feature = "persistence"))]
-    let snapshot = load_contract_snapshot(market).await?;
-    let mut items = snapshot.threads;
-    if let Some(symbol) = normalized_query(query.symbol.as_deref()) {
-        items.retain(|item| item.thread.symbol.eq_ignore_ascii_case(symbol));
-    }
-    Ok(Json(items))
-}
-
-pub(super) async fn get_workflow_contracts(
-    #[cfg(feature = "persistence")] State(state): State<ApiState>,
-    Path(market): Path<String>,
-) -> Result<Json<Vec<WorkflowContract>>, ApiError> {
-    let market = parse_case_market(&market)?;
-    #[cfg(feature = "persistence")]
-    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
-    #[cfg(not(feature = "persistence"))]
-    let snapshot = load_contract_snapshot(market).await?;
-    Ok(Json(snapshot.workflows))
-}
-
 pub(super) async fn get_workflow_contract(
     #[cfg(feature = "persistence")] State(state): State<ApiState>,
     Path((market, workflow_id)): Path<(String, String)>,
@@ -275,10 +250,9 @@ pub(super) async fn get_workflow_contract(
     let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
-    let item = snapshot
-        .workflow(&workflow_id)
-        .cloned()
-        .ok_or_else(|| ApiError::not_found(format!("workflow contract `{workflow_id}` not found")))?;
+    let item = snapshot.workflow(&workflow_id).cloned().ok_or_else(|| {
+        ApiError::not_found(format!("workflow contract `{workflow_id}` not found"))
+    })?;
     Ok(Json(item))
 }
 
@@ -343,10 +317,9 @@ pub(super) async fn get_macro_event_contract(
     let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
-    let item = snapshot
-        .macro_event(&event_id)
-        .cloned()
-        .ok_or_else(|| ApiError::not_found(format!("macro event contract `{event_id}` not found")))?;
+    let item = snapshot.macro_event(&event_id).cloned().ok_or_else(|| {
+        ApiError::not_found(format!("macro event contract `{event_id}` not found"))
+    })?;
     Ok(Json(item))
 }
 
@@ -377,9 +350,9 @@ pub(super) async fn get_operational_neighborhood(
     let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
-    let neighborhood = snapshot
-        .neighborhood(kind, &id)
-        .ok_or_else(|| ApiError::not_found(format!("object neighborhood `{kind:?}:{id}` not found")))?;
+    let neighborhood = snapshot.neighborhood(kind, &id).ok_or_else(|| {
+        ApiError::not_found(format!("object neighborhood `{kind:?}:{id}` not found"))
+    })?;
     Ok(Json(neighborhood))
 }
 
@@ -394,10 +367,9 @@ pub(super) async fn get_operational_navigation(
     let snapshot = load_enriched_contract_snapshot(&state, market).await?;
     #[cfg(not(feature = "persistence"))]
     let snapshot = load_contract_snapshot(market).await?;
-    let navigation = snapshot
-        .navigation(kind, &id)
-        .cloned()
-        .ok_or_else(|| ApiError::not_found(format!("object navigation `{kind:?}:{id}` not found")))?;
+    let navigation = snapshot.navigation(kind, &id).cloned().ok_or_else(|| {
+        ApiError::not_found(format!("object navigation `{kind:?}:{id}` not found"))
+    })?;
     Ok(Json(navigation))
 }
 
@@ -414,6 +386,36 @@ pub(super) async fn get_sector_flow_sidecars(
     let mut items = snapshot.sidecars.sector_flows;
     if let Some(sector) = normalized_query(query.sector.as_deref()) {
         items.retain(|item| item.sector.eq_ignore_ascii_case(sector));
+    }
+    Ok(Json(items))
+}
+
+pub(super) async fn get_operator_work_item_sidecars(
+    #[cfg(feature = "persistence")] State(state): State<ApiState>,
+    Path(market): Path<String>,
+    Query(query): Query<OntologyObjectQuery>,
+) -> Result<Json<Vec<OperatorWorkItem>>, ApiError> {
+    let market = parse_case_market(&market)?;
+    #[cfg(feature = "persistence")]
+    let snapshot = load_enriched_contract_snapshot(&state, market).await?;
+    #[cfg(not(feature = "persistence"))]
+    let snapshot = load_contract_snapshot(market).await?;
+    let mut items = snapshot.sidecars.operator_work_items;
+    if let Some(symbol) = normalized_query(query.symbol.as_deref()) {
+        items.retain(|item| {
+            item.symbol
+                .as_deref()
+                .map(|value| value.eq_ignore_ascii_case(symbol))
+                .unwrap_or(false)
+        });
+    }
+    if let Some(action) = normalized_query(query.action.as_deref()) {
+        items.retain(|item| {
+            item.best_action
+                .as_deref()
+                .map(|value| value.eq_ignore_ascii_case(action))
+                .unwrap_or(false)
+        });
     }
     Ok(Json(items))
 }

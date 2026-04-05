@@ -123,7 +123,13 @@ pub(crate) fn display_hk_market_microstructure(
                 OrderDirection::Sell => SignalType::OrderSell,
             };
             let price = price_map.get(&s.symbol).copied().unwrap_or(Decimal::ZERO);
-            scorecard.record(tick, s.symbol.clone(), signal_type, s.convergence.composite, price);
+            scorecard.record(
+                tick,
+                s.symbol.clone(),
+                signal_type,
+                s.convergence.composite,
+                price,
+            );
         }
 
         for p in graph_insights

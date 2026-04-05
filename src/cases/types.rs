@@ -4,13 +4,13 @@ use serde::{Deserialize, Serialize};
 use time::serde::rfc3339;
 use time::OffsetDateTime;
 
+use crate::action::workflow::{
+    ActionExecutionPolicy, ActionGovernanceContract, ActionGovernanceReasonCode,
+};
 use crate::live_snapshot::{
     LiveBackwardChain, LiveCausalLeader, LiveCrossMarketAnomaly, LiveCrossMarketSignal, LiveEvent,
     LiveHypothesisTrack, LiveLineageMetric, LiveMarket, LiveMarketRegime, LivePressure,
     LiveScorecard, LiveSignal, LiveStressSnapshot, LiveTacticalCase,
-};
-use crate::action::workflow::{
-    ActionExecutionPolicy, ActionGovernanceContract, ActionGovernanceReasonCode,
 };
 use crate::ontology::CaseReasoningProfile;
 use crate::pipeline::learning_loop::ReasoningLearningFeedback;
@@ -312,6 +312,8 @@ pub struct CaseSummary {
     pub confidence: rust_decimal::Decimal,
     pub confidence_gap: rust_decimal::Decimal,
     pub heuristic_edge: rust_decimal::Decimal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_reason_code: Option<String>,
     pub why_now: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary_lens: Option<String>,
@@ -407,6 +409,7 @@ pub struct CaseReasoningAssessmentSnapshot {
     pub market: String,
     pub symbol: String,
     pub title: String,
+    pub family_label: Option<String>,
     pub sector: Option<String>,
     pub recommended_action: String,
     pub source: String,

@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, HashSet};
 
-use crate::live_snapshot::{
-    LiveBackwardChain, LiveCausalLeader, LiveCrossMarketAnomaly, LiveCrossMarketSignal,
-    LiveHypothesisTrack, LiveMarket, LivePressure, LiveSignal, LiveSnapshot, LiveTacticalCase,
-};
 use crate::action::workflow::{
     governance_reason, governance_reason_code, ActionExecutionPolicy, ActionGovernanceContract,
     ActionGovernanceReasonCode,
+};
+use crate::live_snapshot::{
+    LiveBackwardChain, LiveCausalLeader, LiveCrossMarketAnomaly, LiveCrossMarketSignal,
+    LiveHypothesisTrack, LiveMarket, LivePressure, LiveSignal, LiveSnapshot, LiveTacticalCase,
 };
 use crate::ontology::CaseReasoningProfile;
 use crate::pipeline::learning_loop::{apply_learning_feedback, ReasoningLearningFeedback};
@@ -20,8 +20,8 @@ use super::review_analytics::build_case_review_analytics;
 use super::types::{
     CaseBriefingMetrics, CaseBriefingResponse, CaseBriefingWatchouts, CaseDetail, CaseEvidence,
     CaseGovernanceBuckets, CaseGovernanceReasonBuckets, CaseLineageContext, CaseListResponse,
-    CaseMarketContext, CaseMechanismStory, CasePrimaryLensBuckets, CaseQueuePinBuckets, CaseReviewBuckets,
-    CaseReviewMetrics, CaseReviewResponse, CaseSummary, SnapshotCaseLookups,
+    CaseMarketContext, CaseMechanismStory, CasePrimaryLensBuckets, CaseQueuePinBuckets,
+    CaseReviewBuckets, CaseReviewMetrics, CaseReviewResponse, CaseSummary, SnapshotCaseLookups,
 };
 
 pub fn build_case_list(snapshot: &LiveSnapshot) -> CaseListResponse {
@@ -144,8 +144,14 @@ pub fn filter_case_list_by_queue_pin(response: &mut CaseListResponse, queue_pin:
     });
 }
 
-pub fn filter_case_list_by_primary_lens(response: &mut CaseListResponse, primary_lens: Option<&str>) {
-    let Some(primary_lens) = primary_lens.map(str::trim).filter(|value| !value.is_empty()) else {
+pub fn filter_case_list_by_primary_lens(
+    response: &mut CaseListResponse,
+    primary_lens: Option<&str>,
+) {
+    let Some(primary_lens) = primary_lens
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return;
     };
 
@@ -525,8 +531,17 @@ fn build_case_summary(
         confidence: tactical_case.confidence,
         confidence_gap: tactical_case.confidence_gap,
         heuristic_edge: tactical_case.heuristic_edge,
+        review_reason_code: tactical_case.review_reason_code.clone(),
         why_now: derive_why_now(tactical_case, chain, pressure, causal, track, signal),
-        primary_lens: derive_primary_lens(snapshot, tactical_case, chain, pressure, causal, track, signal),
+        primary_lens: derive_primary_lens(
+            snapshot,
+            tactical_case,
+            chain,
+            pressure,
+            causal,
+            track,
+            signal,
+        ),
         primary_driver: chain.map(|item| item.primary_driver.clone()),
         family_label: tactical_case.family_label.clone(),
         counter_label: tactical_case.counter_label.clone(),
@@ -626,7 +641,12 @@ fn build_summary_reasoning_profile_with_adjustments(
     });
     let human_review = derive_human_review_context(workflow_state, workflow_note);
     let predicates = augment_predicates_with_workflow(&predicates, workflow_state, workflow_note);
-    build_reasoning_profile_with_adjustments(&predicates, invalidation_rules, human_review, factor_adjustments)
+    build_reasoning_profile_with_adjustments(
+        &predicates,
+        invalidation_rules,
+        human_review,
+        factor_adjustments,
+    )
 }
 
 fn derive_why_now(
@@ -687,7 +707,8 @@ fn default_execution_policy(action: &str) -> ActionExecutionPolicy {
 }
 
 fn count_cases_by_policy(cases: &[CaseSummary], policy: ActionExecutionPolicy) -> usize {
-    cases.iter()
+    cases
+        .iter()
         .filter(|case| case.execution_policy == Some(policy))
         .count()
 }
@@ -695,7 +716,10 @@ fn count_cases_by_policy(cases: &[CaseSummary], policy: ActionExecutionPolicy) -
 fn build_case_governance_buckets(cases: &[CaseSummary]) -> CaseGovernanceBuckets {
     let mut buckets = CaseGovernanceBuckets::default();
     for case in cases {
-        match case.execution_policy.unwrap_or(ActionExecutionPolicy::ReviewRequired) {
+        match case
+            .execution_policy
+            .unwrap_or(ActionExecutionPolicy::ReviewRequired)
+        {
             ActionExecutionPolicy::ManualOnly => buckets.manual_only.push(case.clone()),
             ActionExecutionPolicy::ReviewRequired => buckets.review_required.push(case.clone()),
             ActionExecutionPolicy::AutoEligible => buckets.auto_eligible.push(case.clone()),
@@ -710,7 +734,10 @@ fn build_case_governance_reason_buckets(cases: &[CaseSummary]) -> CaseGovernance
         let code = case
             .governance_reason_code
             .unwrap_or_else(|| inferred_governance_reason_code(case));
-        buckets.entry(code).or_insert_with(Vec::new).push(case.clone());
+        buckets
+            .entry(code)
+            .or_insert_with(Vec::new)
+            .push(case.clone());
     }
 
     CaseGovernanceReasonBuckets { buckets }
@@ -724,7 +751,10 @@ fn build_case_primary_lens_buckets(cases: &[CaseSummary]) -> CasePrimaryLensBuck
             .clone()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "unknown".into());
-        buckets.entry(key).or_insert_with(Vec::new).push(case.clone());
+        buckets
+            .entry(key)
+            .or_insert_with(Vec::new)
+            .push(case.clone());
     }
 
     CasePrimaryLensBuckets { buckets }
@@ -757,7 +787,8 @@ fn governance_bucket_label(policy: ActionExecutionPolicy) -> &'static str {
 }
 
 fn count_queue_pinned_cases(cases: &[CaseSummary]) -> usize {
-    cases.iter()
+    cases
+        .iter()
         .filter(|case| {
             case.queue_pin
                 .as_deref()
@@ -808,7 +839,9 @@ fn derive_primary_lens(
 
 fn case_governance_reason_priority(left: &CaseSummary, right: &CaseSummary) -> std::cmp::Ordering {
     governance_reason_rank(inferred_governance_reason_code(left))
-        .cmp(&governance_reason_rank(inferred_governance_reason_code(right)))
+        .cmp(&governance_reason_rank(inferred_governance_reason_code(
+            right,
+        )))
         .then_with(|| right.confidence.cmp(&left.confidence))
         .then_with(|| left.symbol.cmp(&right.symbol))
 }

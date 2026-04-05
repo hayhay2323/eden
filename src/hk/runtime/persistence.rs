@@ -167,26 +167,23 @@ pub(super) async fn run_hk_projection_stage<S: AnalystService>(
         .iter()
         .map(|case| (case.setup_id.clone(), case.primary_lens.clone()))
         .collect::<std::collections::HashMap<_, _>>();
-    let realized_outcomes = compute_case_realized_outcomes_adaptive(
-        history,
-        LINEAGE_WINDOW,
-    )
-    .into_iter()
-    .map(|outcome| {
-        let primary_lens = case_primary_lens
-            .get(&outcome.setup_id)
-            .cloned()
-            .flatten();
-        CaseRealizedOutcomeRecord::from_outcome(&outcome, "hk", primary_lens)
-    })
-    .collect::<Vec<_>>();
+    let realized_outcomes = compute_case_realized_outcomes_adaptive(history, LINEAGE_WINDOW)
+        .into_iter()
+        .map(|outcome| {
+            let primary_lens = case_primary_lens.get(&outcome.setup_id).cloned().flatten();
+            CaseRealizedOutcomeRecord::from_outcome(&outcome, "hk", primary_lens)
+        })
+        .collect::<Vec<_>>();
 
     runtime
         .publish_projection_with_followups_from_inputs(
             MarketId::Hk,
             crate::cases::CaseMarket::Hk,
             artifact_projection,
-            vec![(bridge_snapshot_path.to_string(), json_payload(hk_bridge_snapshot))],
+            vec![(
+                bridge_snapshot_path.to_string(),
+                json_payload(hk_bridge_snapshot),
+            )],
             analyst_service,
             tick,
             live_push_count,

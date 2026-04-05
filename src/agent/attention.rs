@@ -169,6 +169,40 @@ pub(crate) fn build_hk_notices(
             }
         }
 
+        if let Some(reason) = super::shared::multi_horizon_gate_reason(symbol) {
+            notices.push(AgentNotice {
+                notice_id: format!("lineage-gate:{}:{}", tick, symbol.symbol),
+                tick,
+                kind: "lineage_gate".into(),
+                symbol: Some(symbol.symbol.clone()),
+                sector: symbol.sector.clone(),
+                title: format!("{} lineage gate", symbol.symbol),
+                summary: format!("{} blocked: {}", symbol.symbol, reason),
+                significance: symbol_priority(symbol)
+                    .unwrap_or(Decimal::new(60, 2))
+                    .max(Decimal::new(60, 2))
+                    .min(Decimal::ONE),
+            });
+        }
+
+        if let Some(reason) = super::shared::policy_reason(symbol) {
+            let primary =
+                super::shared::policy_primary(symbol).unwrap_or_else(|| "review_required".into());
+            notices.push(AgentNotice {
+                notice_id: format!("policy-gate:{}:{}", tick, symbol.symbol),
+                tick,
+                kind: "policy_gate".into(),
+                symbol: Some(symbol.symbol.clone()),
+                sector: symbol.sector.clone(),
+                title: format!("{} policy {}", symbol.symbol, primary),
+                summary: format!("{} policy[{}]: {}", symbol.symbol, primary, reason),
+                significance: symbol_priority(symbol)
+                    .unwrap_or(Decimal::new(55, 2))
+                    .max(Decimal::new(55, 2))
+                    .min(Decimal::ONE),
+            });
+        }
+
         if let Some(depth) = &symbol.depth {
             if depth.imbalance_change.abs() >= Decimal::new(15, 2)
                 || depth.bid_total_volume_change.abs() >= 10_000
@@ -286,6 +320,7 @@ pub(crate) fn build_us_notices(
 }
 
 pub(crate) fn build_wake_state(
+    market: LiveMarket,
     tick: u64,
     notices: &[AgentNotice],
     transitions: &[AgentTransition],
@@ -311,15 +346,25 @@ pub(crate) fn build_wake_state(
 
     let mut focus_symbols = Vec::new();
     for transition in &current_tick_transitions {
-        push_unique(&mut focus_symbols, transition.symbol.clone());
+        if symbol_matches_market(market, &transition.symbol) {
+            push_unique(&mut focus_symbols, transition.symbol.clone());
+        }
     }
     for notice in &high_priority_notices {
         if let Some(symbol) = &notice.symbol {
-            push_unique(&mut focus_symbols, symbol.clone());
+            if symbol_matches_market(market, symbol) {
+                push_unique(&mut focus_symbols, symbol.clone());
+            }
         }
     }
     for signal in cross_market_signals.iter().take(3) {
-        push_unique(&mut focus_symbols, signal.us_symbol.clone());
+        let candidate = match market {
+            LiveMarket::Us => &signal.us_symbol,
+            LiveMarket::Hk => &signal.hk_symbol,
+        };
+        if symbol_matches_market(market, candidate) {
+            push_unique(&mut focus_symbols, candidate.clone());
+        }
     }
     focus_symbols.truncate(4);
 
@@ -357,12 +402,31 @@ pub(crate) fn build_wake_state(
     let headline = current_tick_transitions
         .first()
         .map(|item| item.summary.clone())
-        .or_else(|| high_priority_notices.first().map(|item| item.summary.clone()));
+        .or_else(|| {
+            high_priority_notices
+                .first()
+                .map(|item| item.summary.clone())
+        })
+        .or_else(|| {
+            high_priority_notices
+                .iter()
+                .find(|item| {
+                    item.symbol
+                        .as_deref()
+                        .map(|symbol| symbol_matches_market(market, symbol))
+                        .unwrap_or(true)
+                })
+                .map(|item| item.summary.clone())
+        });
 
     let priority = high_priority_notices
         .iter()
         .map(|item| item.significance)
-        .chain(current_tick_transitions.iter().map(|item| item.confidence.abs()))
+        .chain(
+            current_tick_transitions
+                .iter()
+                .map(|item| item.confidence.abs()),
+        )
         .max()
         .unwrap_or(Decimal::ZERO);
 
@@ -373,6 +437,17 @@ pub(crate) fn build_wake_state(
 
     let mut suggested_tools = Vec::new();
     if should_speak {
+        suggested_tools.push(AgentSuggestedToolCall {
+            tool: "investigations".into(),
+            args: json!({ "limit": 5 }),
+            reason: "Start from the active investigations before compressing them into judgments."
+                .into(),
+        });
+        suggested_tools.push(AgentSuggestedToolCall {
+            tool: "judgments".into(),
+            args: json!({ "limit": 5 }),
+            reason: "Use operational judgments after reviewing the active investigations.".into(),
+        });
         suggested_tools.push(AgentSuggestedToolCall {
             tool: "market_session".into(),
             args: json!({}),
@@ -415,7 +490,10 @@ pub(crate) fn build_wake_state(
             suggested_tools.push(AgentSuggestedToolCall {
                 tool: "depth_change".into(),
                 args: json!({ "symbol": symbol }),
-                reason: format!("Check whether the order book confirms the move in {}", symbol),
+                reason: format!(
+                    "Check whether the order book confirms the move in {}",
+                    symbol
+                ),
             });
         }
         if symbols
@@ -449,5 +527,12 @@ pub(crate) fn build_wake_state(
         focus_symbols,
         reasons,
         suggested_tools,
+    }
+}
+
+fn symbol_matches_market(market: LiveMarket, symbol: &str) -> bool {
+    match market {
+        LiveMarket::Us => symbol.ends_with(".US"),
+        LiveMarket::Hk => symbol.ends_with(".HK"),
     }
 }

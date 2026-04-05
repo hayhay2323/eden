@@ -6,9 +6,7 @@ use crate::agent::{
     self, AgentAlertScoreboard, AgentBriefing, AgentEodReview, AgentRecommendations, AgentSession,
     AgentWatchlist,
 };
-use crate::agent_llm::{
-    AgentAnalysis, AgentAnalystReview, AgentAnalystScoreboard, AgentNarration,
-};
+use crate::agent::llm::{AgentAnalysis, AgentAnalystReview, AgentAnalystScoreboard, AgentNarration};
 use crate::cases::CaseMarket;
 use crate::ontology::{
     derive_agent_briefing, derive_agent_eod_review, derive_agent_narration,
@@ -17,12 +15,11 @@ use crate::ontology::{
 };
 
 use super::agent_api::{AgentFeedQuery, AgentThreadsResponse, AgentTurnsResponse};
+use super::constants::{DEFAULT_LIMIT, MAX_LIMIT};
 use super::core::{
-    bounded, case_market_slug, normalized_query_value, parse_case_market,
-    ticks_within_window,
+    bounded, case_market_slug, normalized_query_value, parse_case_market, ticks_within_window,
 };
 use super::foundation::{ApiError, JsonEventStream};
-use super::constants::{DEFAULT_LIMIT, MAX_LIMIT};
 use super::ontology_api::load_contract_snapshot;
 use super::stream_support::{json_poll_sse, latest_file_revision};
 
@@ -91,7 +88,7 @@ pub(super) async fn stream_agent_analysis(
         market,
         AgentArtifact::Analysis,
         move || async move {
-            crate::agent_llm::load_analysis(market)
+            crate::agent::llm::load_analysis(market)
                 .await
                 .map_err(|error| {
                     ApiError::internal(format!("failed to load agent analysis: {error}"))
@@ -129,9 +126,7 @@ pub(super) async fn stream_agent_analyst_scoreboard(
     Ok(agent_json_sse(
         market,
         AgentArtifact::AnalystScoreboard,
-        move || async move {
-            load_agent_analyst_scoreboard_for_market(case_market_slug(market)).await
-        },
+        move || async move { load_agent_analyst_scoreboard_for_market(case_market_slug(market)).await },
     ))
 }
 
@@ -164,9 +159,7 @@ pub(super) async fn stream_agent_recommendations(
     Ok(agent_json_sse(
         market,
         AgentArtifact::Recommendations,
-        move || async move {
-            load_agent_recommendations_for_market(case_market_slug(market)).await
-        },
+        move || async move { load_agent_recommendations_for_market(case_market_slug(market)).await },
     ))
 }
 
@@ -294,23 +287,23 @@ fn agent_stream_revision_candidates(market: CaseMarket, artifact: AgentArtifact)
     match artifact {
         AgentArtifact::Snapshot => vec![resolve(agent::load_agent_snapshot_path(market))],
         AgentArtifact::Briefing => vec![resolve(agent::load_briefing_path(market))],
-        AgentArtifact::Analysis => vec![resolve(crate::agent_llm::analysis_path(market))],
+        AgentArtifact::Analysis => vec![resolve(crate::agent::llm::analysis_path(market))],
         AgentArtifact::Narration => vec![
-            resolve(crate::agent_llm::narration_path(market)),
-            resolve(crate::agent_llm::runtime_narration_path(market)),
+            resolve(crate::agent::llm::narration_path(market)),
+            resolve(crate::agent::llm::runtime_narration_path(market)),
         ],
         AgentArtifact::AnalystReview => vec![
-            resolve(crate::agent_llm::analyst_review_path(market)),
-            resolve(crate::agent_llm::analysis_path(market)),
-            resolve(crate::agent_llm::narration_path(market)),
-            resolve(crate::agent_llm::runtime_narration_path(market)),
+            resolve(crate::agent::llm::analyst_review_path(market)),
+            resolve(crate::agent::llm::analysis_path(market)),
+            resolve(crate::agent::llm::narration_path(market)),
+            resolve(crate::agent::llm::runtime_narration_path(market)),
         ],
         AgentArtifact::AnalystScoreboard => vec![
-            resolve(crate::agent_llm::analyst_scoreboard_path(market)),
-            resolve(crate::agent_llm::analyst_review_path(market)),
-            resolve(crate::agent_llm::analysis_path(market)),
-            resolve(crate::agent_llm::narration_path(market)),
-            resolve(crate::agent_llm::runtime_narration_path(market)),
+            resolve(crate::agent::llm::analyst_scoreboard_path(market)),
+            resolve(crate::agent::llm::analyst_review_path(market)),
+            resolve(crate::agent::llm::analysis_path(market)),
+            resolve(crate::agent::llm::narration_path(market)),
+            resolve(crate::agent::llm::runtime_narration_path(market)),
         ],
         AgentArtifact::Session => vec![resolve(agent::load_session_path(market))],
         AgentArtifact::Watchlist | AgentArtifact::Recommendations => vec![
@@ -339,7 +332,7 @@ fn analysis_is_fresh_codex(snapshot_tick: u64, analysis: Option<&AgentAnalysis>)
                 && ticks_within_window(
                     snapshot_tick,
                     item.tick,
-                    crate::agent_llm::CODEX_FRESH_TICK_WINDOW,
+                    crate::agent::llm::CODEX_FRESH_TICK_WINDOW,
                 )
         })
         .unwrap_or(false)
@@ -369,7 +362,7 @@ pub(super) fn should_return_loaded_final_narration(
                     && ticks_within_window(
                         snapshot_tick,
                         item.tick,
-                        crate::agent_llm::CODEX_FRESH_TICK_WINDOW,
+                        crate::agent::llm::CODEX_FRESH_TICK_WINDOW,
                     )
             })
             .unwrap_or(false)
@@ -381,17 +374,13 @@ pub(super) async fn load_agent_session_for_market(raw: &str) -> Result<AgentSess
     Ok(derive_agent_session(&snapshot))
 }
 
-pub(super) async fn load_agent_briefing_for_market(
-    raw: &str,
-) -> Result<AgentBriefing, ApiError> {
+pub(super) async fn load_agent_briefing_for_market(raw: &str) -> Result<AgentBriefing, ApiError> {
     let market = parse_case_market(raw)?;
     let snapshot = load_contract_snapshot(market).await?;
     Ok(derive_agent_briefing(&snapshot))
 }
 
-pub(super) async fn load_agent_watchlist_for_market(
-    raw: &str,
-) -> Result<AgentWatchlist, ApiError> {
+pub(super) async fn load_agent_watchlist_for_market(raw: &str) -> Result<AgentWatchlist, ApiError> {
     let market = parse_case_market(raw)?;
     let snapshot = load_contract_snapshot(market).await?;
     Ok(derive_agent_watchlist(&snapshot, 8))
@@ -428,21 +417,21 @@ pub(super) async fn load_agent_analyst_review_for_market(
     raw: &str,
 ) -> Result<AgentAnalystReview, ApiError> {
     let market = parse_case_market(raw)?;
-    if let Ok(review) = crate::agent_llm::load_analyst_review(market).await {
+    if let Ok(review) = crate::agent::llm::load_analyst_review(market).await {
         return Ok(review);
     }
-    let analysis = crate::agent_llm::load_analysis(market)
+    let analysis = crate::agent::llm::load_analysis(market)
         .await
         .map_err(|error| ApiError::internal(format!("failed to load agent analysis: {error}")))?;
-    let narration = crate::agent_llm::load_final_narration(market)
+    let narration = crate::agent::llm::load_final_narration(market)
         .await
         .map_err(|error| ApiError::internal(format!("failed to load agent narration: {error}")))?;
-    let runtime = crate::agent_llm::load_runtime_narration(market)
+    let runtime = crate::agent::llm::load_runtime_narration(market)
         .await
         .map_err(|error| {
             ApiError::internal(format!("failed to load runtime narration: {error}"))
         })?;
-    Ok(crate::agent_llm::build_analyst_review_from_artifacts(
+    Ok(crate::agent::llm::build_analyst_review_from_artifacts(
         &analysis, &narration, &runtime,
     ))
 }
@@ -451,11 +440,11 @@ pub(super) async fn load_agent_analyst_scoreboard_for_market(
     raw: &str,
 ) -> Result<AgentAnalystScoreboard, ApiError> {
     let market = parse_case_market(raw)?;
-    if let Ok(scoreboard) = crate::agent_llm::load_analyst_scoreboard(market).await {
+    if let Ok(scoreboard) = crate::agent::llm::load_analyst_scoreboard(market).await {
         return Ok(scoreboard);
     }
     let review = load_agent_analyst_review_for_market(raw).await?;
-    Ok(crate::agent_llm::build_analyst_scoreboard_from_review(
+    Ok(crate::agent::llm::build_analyst_scoreboard_from_review(
         &review, None,
     ))
 }
@@ -463,19 +452,21 @@ pub(super) async fn load_agent_analyst_scoreboard_for_market(
 pub(super) async fn load_agent_narration_for_market(raw: &str) -> Result<AgentNarration, ApiError> {
     let market = parse_case_market(raw)?;
     let operational = load_contract_snapshot(market).await?;
-    let loaded_final = crate::agent_llm::load_final_narration(market).await.ok();
-    let analysis = crate::agent_llm::load_analysis(market).await.ok();
+    let loaded_final = crate::agent::llm::load_final_narration(market).await.ok();
+    let analysis = crate::agent::llm::load_analysis(market).await.ok();
     let codex_fresh = analysis_is_fresh_codex(operational.source_tick, analysis.as_ref());
     if should_return_loaded_final_narration(
         operational.source_tick,
         analysis.as_ref(),
         loaded_final.as_ref(),
-    )
-    {
+    ) {
         return Ok(loaded_final.expect("checked Some above"));
     }
     if !codex_fresh {
-        return Ok(derive_stale_agent_narration(&operational, analysis.as_ref()));
+        return Ok(derive_stale_agent_narration(
+            &operational,
+            analysis.as_ref(),
+        ));
     }
     Ok(derive_agent_narration(&operational, analysis.as_ref()))
 }

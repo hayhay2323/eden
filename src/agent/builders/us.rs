@@ -1,8 +1,8 @@
-use super::*;
 use super::shared::{
-    alpha_horizon_label, build_us_invalidation, setup_family, us_events_by_symbol,
-    us_recent_transitions, us_sector_name, us_signal_state, primary_invalidation_rule,
+    alpha_horizon_label, append_pattern_fragment, build_us_invalidation, primary_invalidation_rule,
+    setup_family, us_events_by_symbol, us_recent_transitions, us_sector_name, us_signal_state,
 };
+use super::*;
 
 pub fn build_us_agent_snapshot(
     live: &LiveSnapshot,
@@ -18,6 +18,11 @@ pub fn build_us_agent_snapshot(
         .expect("US agent snapshot requires at least one tick");
     let _previous_tick = history.latest_n(2).into_iter().rev().nth(1);
     let previous_symbols = previous_agent_symbol_map(previous_agent);
+    let live_cases = live
+        .tactical_cases
+        .iter()
+        .map(|item| (item.setup_id.as_str(), item))
+        .collect::<HashMap<_, _>>();
 
     let setups = latest
         .tactical_setups
@@ -79,6 +84,9 @@ pub fn build_us_agent_snapshot(
             let setup = setups.get(symbol.as_str()).copied();
             let hypothesis =
                 setup.and_then(|item| hypotheses.get(item.hypothesis_id.as_str()).copied());
+            let live_case = setup.and_then(|item| live_cases.get(item.setup_id.as_str()).copied());
+            let matched_pattern =
+                live_case.and_then(|item| item.matched_success_pattern_signature.clone());
             let context_prior = hypothesis.and_then(|item| {
                 best_us_context_prior(
                     item.family_key.as_str(),
@@ -107,9 +115,12 @@ pub fn build_us_agent_snapshot(
                 leader_streak: causal_by_symbol
                     .get(symbol.as_str())
                     .map(|item| item.leader_streak),
-                leader_transition_summary: backward_by_symbol
-                    .get(symbol.as_str())
-                    .map(|item| item.primary_driver.clone()),
+                leader_transition_summary: append_pattern_fragment(
+                    backward_by_symbol
+                        .get(symbol.as_str())
+                        .map(|item| item.primary_driver.clone()),
+                    matched_pattern,
+                ),
                 thesis_family: hypothesis
                     .map(|item| item.family_label.clone())
                     .or_else(|| setup_family(item)),
@@ -139,6 +150,7 @@ pub fn build_us_agent_snapshot(
                     setup,
                     hypothesis,
                     backward_by_symbol.get(symbol.as_str()).copied(),
+                    live_case,
                 ),
                 pressure: pressures.get(symbol.as_str()).cloned().cloned(),
                 active_position: positions.get(symbol.as_str()).cloned().cloned(),
@@ -149,8 +161,6 @@ pub fn build_us_agent_snapshot(
             }
         })
         .collect::<Vec<_>>();
-
-    let _ = reasoning;
 
     sort_symbol_states(&mut symbols);
     let active_structures = collect_active_structures(&symbols);
@@ -165,6 +175,7 @@ pub fn build_us_agent_snapshot(
         &live.cross_market_signals,
     );
     let wake = build_wake_state(
+        live.market,
         live.tick,
         &notices,
         &recent_transitions,
@@ -210,6 +221,7 @@ pub fn build_us_agent_snapshot(
         notices,
         active_structures,
         recent_transitions,
+        investigation_selections: reasoning.investigation_selections.clone(),
         sector_flows,
         symbols,
         events: live.events.clone(),

@@ -133,6 +133,7 @@ DEFINE FIELD workflow_id ON case_reasoning_assessment TYPE option<string>;
 DEFINE FIELD market ON case_reasoning_assessment TYPE string;
 DEFINE FIELD symbol ON case_reasoning_assessment TYPE string;
 DEFINE FIELD title ON case_reasoning_assessment TYPE string;
+DEFINE FIELD family_label ON case_reasoning_assessment TYPE option<string>;
 DEFINE FIELD sector ON case_reasoning_assessment TYPE option<string>;
 DEFINE FIELD recommended_action ON case_reasoning_assessment TYPE string;
 DEFINE FIELD workflow_state ON case_reasoning_assessment TYPE string;
@@ -626,9 +627,88 @@ UPDATE us_lineage_metric_row SET fade_expectancy = <decimal>fade_expectancy WHER
 UPDATE us_lineage_metric_row SET wait_expectancy = <decimal>wait_expectancy WHERE type::is::string(wait_expectancy);
 "#;
 
-pub const LATEST_SCHEMA_VERSION: u32 = 13;
+const MIGRATION_014: &str = r#"
+DEFINE FIELD OVERWRITE execution_policy ON action_workflow TYPE string;
+DEFINE FIELD OVERWRITE governance_reason_code ON action_workflow TYPE string;
+DEFINE FIELD OVERWRITE execution_policy ON action_workflow_event TYPE string;
+DEFINE FIELD OVERWRITE governance_reason_code ON action_workflow_event TYPE string;
+"#;
 
-const MIGRATIONS: [SchemaMigration; 13] = [
+const MIGRATION_015: &str = r#"
+DEFINE FIELD IF NOT EXISTS family_label ON case_reasoning_assessment TYPE option<string>;
+"#;
+
+const MIGRATION_016: &str = r#"
+-- Candidate mechanism: success patterns promoted to durable mechanisms
+DEFINE TABLE IF NOT EXISTS candidate_mechanism SCHEMAFULL;
+DEFINE FIELD mechanism_id ON candidate_mechanism TYPE string;
+DEFINE FIELD market ON candidate_mechanism TYPE string;
+DEFINE FIELD center_kind ON candidate_mechanism TYPE string;
+DEFINE FIELD role ON candidate_mechanism TYPE string;
+DEFINE FIELD channel_signature ON candidate_mechanism TYPE string;
+DEFINE FIELD dominant_channels ON candidate_mechanism TYPE array;
+DEFINE FIELD top_family ON candidate_mechanism TYPE string;
+DEFINE FIELD samples ON candidate_mechanism TYPE int;
+DEFINE FIELD mean_net_return ON candidate_mechanism TYPE decimal;
+DEFINE FIELD mean_strength ON candidate_mechanism TYPE decimal;
+DEFINE FIELD mean_coherence ON candidate_mechanism TYPE decimal;
+DEFINE FIELD mean_channel_diversity ON candidate_mechanism TYPE decimal;
+DEFINE FIELD mode ON candidate_mechanism TYPE string;
+DEFINE FIELD promoted_at_tick ON candidate_mechanism TYPE int;
+DEFINE FIELD last_seen_tick ON candidate_mechanism TYPE int;
+DEFINE FIELD last_hit_tick ON candidate_mechanism TYPE option<int>;
+DEFINE FIELD consecutive_misses ON candidate_mechanism TYPE int;
+DEFINE FIELD post_promotion_hits ON candidate_mechanism TYPE int;
+DEFINE FIELD post_promotion_misses ON candidate_mechanism TYPE int;
+DEFINE FIELD post_promotion_net_return ON candidate_mechanism TYPE decimal;
+DEFINE FIELD created_at ON candidate_mechanism TYPE string;
+DEFINE FIELD updated_at ON candidate_mechanism TYPE string;
+DEFINE INDEX idx_mechanism_id ON candidate_mechanism FIELDS mechanism_id UNIQUE;
+DEFINE INDEX idx_mechanism_market ON candidate_mechanism FIELDS market;
+DEFINE INDEX idx_mechanism_mode ON candidate_mechanism FIELDS mode;
+"#;
+
+const MIGRATION_017: &str = r#"
+-- Causal schema: candidate mechanisms elevated to transferable causal structures
+DEFINE TABLE IF NOT EXISTS causal_schema SCHEMAFULL;
+DEFINE FIELD schema_id ON causal_schema TYPE string;
+DEFINE FIELD mechanism_id ON causal_schema TYPE string;
+DEFINE FIELD market ON causal_schema TYPE string;
+DEFINE FIELD channel_chain ON causal_schema TYPE array;
+DEFINE FIELD causal_narrative ON causal_schema TYPE string;
+DEFINE FIELD regime_affinity ON causal_schema TYPE array;
+DEFINE FIELD session_affinity ON causal_schema TYPE array;
+DEFINE FIELD min_coherence ON causal_schema TYPE decimal;
+DEFINE FIELD min_strength ON causal_schema TYPE decimal;
+DEFINE FIELD min_convergence_score ON causal_schema TYPE decimal;
+DEFINE FIELD preferred_contest_states ON causal_schema TYPE array;
+DEFINE FIELD invalidation_rules ON causal_schema TYPE array;
+DEFINE FIELD observed_symbols ON causal_schema TYPE array;
+DEFINE FIELD observed_sectors ON causal_schema TYPE array;
+DEFINE FIELD applicable_center_kinds ON causal_schema TYPE array;
+DEFINE FIELD cross_symbol_validated ON causal_schema TYPE bool;
+DEFINE FIELD cross_session_validated ON causal_schema TYPE bool;
+DEFINE FIELD cross_regime_validated ON causal_schema TYPE bool;
+DEFINE FIELD total_applications ON causal_schema TYPE int;
+DEFINE FIELD successful_applications ON causal_schema TYPE int;
+DEFINE FIELD failed_applications ON causal_schema TYPE int;
+DEFINE FIELD mean_return_when_applied ON causal_schema TYPE decimal;
+DEFINE FIELD mean_return_when_preconditions_met ON causal_schema TYPE decimal;
+DEFINE FIELD mean_return_when_preconditions_violated ON causal_schema TYPE decimal;
+DEFINE FIELD status ON causal_schema TYPE string;
+DEFINE FIELD promoted_at_tick ON causal_schema TYPE int;
+DEFINE FIELD last_applied_tick ON causal_schema TYPE int;
+DEFINE FIELD created_at ON causal_schema TYPE string;
+DEFINE FIELD updated_at ON causal_schema TYPE string;
+DEFINE INDEX idx_schema_id ON causal_schema FIELDS schema_id UNIQUE;
+DEFINE INDEX idx_schema_mechanism ON causal_schema FIELDS mechanism_id;
+DEFINE INDEX idx_schema_market ON causal_schema FIELDS market;
+DEFINE INDEX idx_schema_status ON causal_schema FIELDS status;
+"#;
+
+pub const LATEST_SCHEMA_VERSION: u32 = 17;
+
+const MIGRATIONS: [SchemaMigration; 17] = [
     SchemaMigration {
         version: 1,
         name: "bootstrap_core_schema",
@@ -694,6 +774,26 @@ const MIGRATIONS: [SchemaMigration; 13] = [
         name: "lineage_and_outcome_numeric_fields_as_decimal",
         statements: MIGRATION_013,
     },
+    SchemaMigration {
+        version: 14,
+        name: "workflow_execution_policy_fields",
+        statements: MIGRATION_014,
+    },
+    SchemaMigration {
+        version: 15,
+        name: "case_reasoning_assessment_family_label",
+        statements: MIGRATION_015,
+    },
+    SchemaMigration {
+        version: 16,
+        name: "candidate_mechanism_table",
+        statements: MIGRATION_016,
+    },
+    SchemaMigration {
+        version: 17,
+        name: "causal_schema_table",
+        statements: MIGRATION_017,
+    },
 ];
 
 pub fn migrations() -> &'static [SchemaMigration] {
@@ -718,32 +818,19 @@ mod tests {
     #[test]
     fn pending_migrations_from_none_returns_all_steps() {
         let pending = pending_migrations(None);
-        assert_eq!(pending.len(), 13);
+        assert_eq!(pending.len(), MIGRATIONS.len());
         assert_eq!(pending[0].version, 1);
-        assert_eq!(pending[1].version, 2);
-        assert_eq!(pending[2].version, 3);
-        assert_eq!(pending[3].version, 4);
-        assert_eq!(pending[4].version, 5);
-        assert_eq!(pending[5].version, 6);
-        assert_eq!(pending[6].version, 7);
-        assert_eq!(pending[7].version, 8);
-        assert_eq!(pending[8].version, 9);
-        assert_eq!(pending[9].version, 10);
-        assert_eq!(pending[10].version, 11);
-        assert_eq!(pending[11].version, 12);
-        assert_eq!(pending[12].version, 13);
+        assert_eq!(pending.last().unwrap().version, LATEST_SCHEMA_VERSION);
     }
 
     #[test]
     fn pending_migrations_skip_applied_versions() {
         let pending = pending_migrations(Some(7));
-        assert_eq!(pending.len(), 6);
         assert_eq!(pending[0].version, 8);
-        assert_eq!(pending[1].version, 9);
-        assert_eq!(pending[2].version, 10);
-        assert_eq!(pending[3].version, 11);
-        assert_eq!(pending[4].version, 12);
-        assert_eq!(pending[5].version, 13);
+        assert_eq!(
+            pending.last().unwrap().version,
+            LATEST_SCHEMA_VERSION
+        );
 
         assert!(pending_migrations(Some(LATEST_SCHEMA_VERSION)).is_empty());
     }

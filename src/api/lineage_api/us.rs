@@ -137,8 +137,9 @@ pub(in crate::api) async fn get_us_causal_timeline(
         .map_err(|error| {
             ApiError::internal(format!("failed to load US causal timeline: {error}"))
         })?;
-    let timeline =
-        timeline.ok_or_else(|| ApiError::not_found(format!("no US causal timeline found for `{symbol}`")))?;
+    let timeline = timeline.ok_or_else(|| {
+        ApiError::not_found(format!("no US causal timeline found for `{symbol}`"))
+    })?;
 
     Ok(Json(UsCausalTimelineResponse {
         window_size: limit,

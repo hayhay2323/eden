@@ -12,14 +12,14 @@ use crate::ontology::{institution_numeric_node_id, sector_node_id, symbol_node_i
 
 use super::graph::{BrainGraph, EdgeKind, NodeKind};
 
-#[path = "temporal/shared.rs"]
-mod shared;
+#[path = "temporal/broker.rs"]
+mod broker;
 #[path = "temporal/edge.rs"]
 mod edge;
 #[path = "temporal/node.rs"]
 mod node;
-#[path = "temporal/broker.rs"]
-mod broker;
+#[path = "temporal/shared.rs"]
+mod shared;
 
 pub use broker::*;
 pub use edge::*;
@@ -182,6 +182,7 @@ mod tests {
             order_books: vec![],
             quotes: vec![],
             trade_activities: vec![],
+            intraday: vec![],
         }
     }
 
@@ -200,6 +201,7 @@ mod tests {
             order_books: vec![],
             quotes: vec![],
             trade_activities: vec![],
+            intraday: vec![],
         }
     }
 

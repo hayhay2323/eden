@@ -17,8 +17,10 @@ impl EdenStore {
         &self,
         records: &[MacroEventHistoryRecord],
     ) -> Result<(), StoreError> {
-        upsert_batch_checked(&self.db, "macro_event_history", records, |record| &record.record_id)
-            .await
+        upsert_batch_checked(&self.db, "macro_event_history", records, |record| {
+            &record.record_id
+        })
+        .await
     }
 
     pub async fn write_knowledge_link_history(
@@ -81,9 +83,13 @@ impl EdenStore {
         market: &str,
         records: &[KnowledgeLinkStateRecord],
     ) -> Result<(), StoreError> {
-        sync_market_state_checked(&self.db, "knowledge_link_state", market, records, |record| {
-            &record.state_id
-        })
+        sync_market_state_checked(
+            &self.db,
+            "knowledge_link_state",
+            market,
+            records,
+            |record| &record.state_id,
+        )
         .await
     }
 
@@ -132,9 +138,13 @@ impl EdenStore {
         market: &str,
         records: &[KnowledgeEventStateRecord],
     ) -> Result<(), StoreError> {
-        sync_market_state_checked(&self.db, "knowledge_event_state", market, records, |record| {
-            &record.state_id
-        })
+        sync_market_state_checked(
+            &self.db,
+            "knowledge_event_state",
+            market,
+            records,
+            |record| &record.state_id,
+        )
         .await
     }
 
@@ -223,9 +233,13 @@ impl EdenStore {
         market: &str,
         records: &[KnowledgeNodeStateRecord],
     ) -> Result<(), StoreError> {
-        sync_market_state_checked(&self.db, "knowledge_node_state", market, records, |record| {
-            &record.state_id
-        })
+        sync_market_state_checked(
+            &self.db,
+            "knowledge_node_state",
+            market,
+            records,
+            |record| &record.state_id,
+        )
         .await
     }
 

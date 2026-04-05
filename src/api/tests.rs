@@ -1,16 +1,10 @@
 use super::*;
-#[cfg(feature = "persistence")]
-use axum::extract::{Path, State};
-use axum::http::header::AUTHORIZATION;
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
-#[cfg(feature = "persistence")]
-use axum::Json;
-use crate::agent_llm::{AgentAnalysis, AgentNarration};
+use crate::action::workflow::{ActionExecutionPolicy, ActionGovernanceContract};
+use crate::agent::llm::{AgentAnalysis, AgentNarration};
 use crate::api::case_api::CaseTransitionAnalyticsQuery;
-use crate::api::foundation::API_KEY_PREFIX;
 #[cfg(feature = "persistence")]
 use crate::api::foundation::ApiState;
-use crate::action::workflow::{ActionExecutionPolicy, ActionGovernanceContract};
+use crate::api::foundation::API_KEY_PREFIX;
 use crate::cases::{
     CaseHumanReviewReasonStat, CaseMechanismDriftPoint, CaseMechanismStat,
     CaseMechanismTransitionDigest, CaseMechanismTransitionSliceStat, CaseMechanismTransitionStat,
@@ -23,7 +17,15 @@ use crate::persistence::action_workflow::ActionWorkflowRecord;
 use crate::persistence::store::EdenStore;
 #[cfg(feature = "persistence")]
 use crate::persistence::tactical_setup::TacticalSetupRecord;
+#[cfg(feature = "persistence")]
+use axum::extract::{Path, State};
+use axum::http::header::AUTHORIZATION;
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
+#[cfg(feature = "persistence")]
+use axum::Json;
 use rust_decimal_macros::dec;
+#[cfg(feature = "persistence")]
+use std::net::{Ipv4Addr, SocketAddr};
 #[cfg(feature = "persistence")]
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -59,14 +61,26 @@ fn invalid_prefix_is_rejected() {
 
 #[test]
 fn readonly_scope_blocks_mutations() {
-    assert!(super::core::scope_allows_method("frontend:readonly", &Method::GET));
-    assert!(!super::core::scope_allows_method("frontend:readonly", &Method::POST));
+    assert!(super::core::scope_allows_method(
+        "frontend:readonly",
+        &Method::GET
+    ));
+    assert!(!super::core::scope_allows_method(
+        "frontend:readonly",
+        &Method::POST
+    ));
 }
 
 #[test]
 fn write_scope_allows_mutations() {
-    assert!(super::core::scope_allows_method("frontend:write", &Method::POST));
-    assert!(super::core::scope_allows_method("frontend:write", &Method::GET));
+    assert!(super::core::scope_allows_method(
+        "frontend:write",
+        &Method::POST
+    ));
+    assert!(super::core::scope_allows_method(
+        "frontend:write",
+        &Method::GET
+    ));
 }
 
 #[test]
@@ -78,7 +92,10 @@ fn query_param_auth_is_rejected() {
 #[test]
 fn bearer_auth_is_accepted() {
     let mut headers = HeaderMap::new();
-    headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer eden_pk_test"));
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer eden_pk_test"),
+    );
     assert_eq!(
         super::core::extract_api_key(&headers).as_deref(),
         Some("eden_pk_test")
@@ -179,27 +196,21 @@ fn sample_tactical_setup(setup_id: &str, workflow_id: &str) -> TacticalSetupReco
 #[cfg(feature = "persistence")]
 #[test]
 fn workflow_must_start_from_suggest() {
-    assert!(
-        super::case_workflow_api::validate_transition(
-            None,
-            crate::action::workflow::ActionStage::Suggest,
-        )
-        .is_ok()
-    );
-    assert!(
-        super::case_workflow_api::validate_transition(
-            None,
-            crate::action::workflow::ActionStage::Confirm,
-        )
-        .is_err()
-    );
-    assert!(
-        super::case_workflow_api::validate_transition(
-            None,
-            crate::action::workflow::ActionStage::Review,
-        )
-        .is_err()
-    );
+    assert!(super::case_workflow_api::validate_transition(
+        None,
+        crate::action::workflow::ActionStage::Suggest,
+    )
+    .is_ok());
+    assert!(super::case_workflow_api::validate_transition(
+        None,
+        crate::action::workflow::ActionStage::Confirm,
+    )
+    .is_err());
+    assert!(super::case_workflow_api::validate_transition(
+        None,
+        crate::action::workflow::ActionStage::Review,
+    )
+    .is_err());
 }
 
 #[cfg(feature = "persistence")]
@@ -281,16 +292,17 @@ fn fresh_codex_prefers_loaded_final_narration() {
             ),
             governance_reason_code:
                 crate::action::workflow::ActionGovernanceReasonCode::AdvisoryAction,
-            governance_reason: "market-level recommendations stay advisory until an explicit workflow exists"
-                .into(),
+            governance_reason:
+                "market-level recommendations stay advisory until an explicit workflow exists"
+                    .into(),
         }),
-        dominant_lenses: vec![crate::agent_llm::AgentDominantLens {
+        dominant_lenses: vec![crate::agent::llm::AgentDominantLens {
             lens_name: "iceberg".into(),
             card_count: 1,
             max_confidence: dec!(0.72),
             mean_confidence: dec!(0.72),
         }],
-        action_cards: vec![crate::agent_llm::AgentNarrationActionCard {
+        action_cards: vec![crate::agent::llm::AgentNarrationActionCard {
             card_id: "card:100:700.HK".into(),
             scope_kind: "symbol".into(),
             symbol: "700.HK".into(),
@@ -349,8 +361,8 @@ fn fresh_codex_prefers_loaded_final_narration() {
             execution_policy: ActionExecutionPolicy::ReviewRequired,
             governance_reason_code:
                 crate::action::workflow::ActionGovernanceReasonCode::SeverityRequiresReview,
-            governance_reason:
-                "severity=`high` forces human review before `buy` can execute".into(),
+            governance_reason: "severity=`high` forces human review before `buy` can execute"
+                .into(),
         }],
     };
 
@@ -518,8 +530,7 @@ fn transition_analytics_response_filters_and_limits() {
                 count: 1,
             }],
             invalidation_patterns: vec![],
-            learning_feedback:
-                crate::pipeline::learning_loop::ReasoningLearningFeedback::default(),
+            learning_feedback: crate::pipeline::learning_loop::ReasoningLearningFeedback::default(),
         },
     };
 
@@ -585,13 +596,16 @@ async fn post_case_assign_rejects_queue_pin_owned_by_another_actor() {
         .unwrap();
 
     let auth = ApiKeyCipher::from_secret("test-master-secret").expect("cipher");
-    let revocations = ApiKeyRevocationStore::load(
-        path.join("revocations.json").to_str().unwrap(),
-    )
-    .expect("revocations");
+    let revocations = ApiKeyRevocationStore::load(path.join("revocations.json").to_str().unwrap())
+        .expect("revocations");
     let state = ApiState {
+        bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 8787)),
         auth,
         revocations,
+        runtime_tasks: crate::runtime_tasks::RuntimeTaskStore::load(
+            path.join("runtime_tasks.json"),
+        )
+        .expect("runtime task store"),
         store: store.clone(),
     };
 
@@ -610,7 +624,9 @@ async fn post_case_assign_rejects_queue_pin_owned_by_another_actor() {
 
     let error = result.expect_err("queue pin reassignment should be rejected");
     assert_eq!(error.status, StatusCode::BAD_REQUEST);
-    assert!(error.message.contains("queue pin is owned by `frontend-review-list`"));
+    assert!(error
+        .message
+        .contains("queue pin is owned by `frontend-review-list`"));
 
     drop(store);
     let _ = std::fs::remove_dir_all(path);
@@ -625,22 +641,22 @@ async fn post_case_queue_pin_sets_and_clears_marker() {
     store.write_tactical_setup(&setup).await.unwrap();
 
     let auth = ApiKeyCipher::from_secret("test-master-secret").expect("cipher");
-    let revocations = ApiKeyRevocationStore::load(
-        path.join("revocations.json").to_str().unwrap(),
-    )
-    .expect("revocations");
+    let revocations = ApiKeyRevocationStore::load(path.join("revocations.json").to_str().unwrap())
+        .expect("revocations");
     let state = ApiState {
+        bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 8787)),
         auth,
         revocations,
+        runtime_tasks: crate::runtime_tasks::RuntimeTaskStore::load(
+            path.join("runtime_tasks.json"),
+        )
+        .expect("runtime task store"),
         store: store.clone(),
     };
 
     let pinned = super::case_workflow_api::post_case_queue_pin(
         State(state.clone()),
-        Path((
-            "hk".to_string(),
-            "setup:queue-pin-endpoint".to_string(),
-        )),
+        Path(("hk".to_string(), "setup:queue-pin-endpoint".to_string())),
         Json(super::case_workflow_api::CaseQueuePinBody {
             pinned: true,
             label: None,
@@ -664,10 +680,7 @@ async fn post_case_queue_pin_sets_and_clears_marker() {
 
     let cleared = super::case_workflow_api::post_case_queue_pin(
         State(state),
-        Path((
-            "hk".to_string(),
-            "setup:queue-pin-endpoint".to_string(),
-        )),
+        Path(("hk".to_string(), "setup:queue-pin-endpoint".to_string())),
         Json(super::case_workflow_api::CaseQueuePinBody {
             pinned: false,
             label: None,
@@ -679,7 +692,12 @@ async fn post_case_queue_pin_sets_and_clears_marker() {
     .expect("queue pin clear");
 
     assert_eq!(cleared.0.queue_pin, None);
-    assert!(cleared.0.note.as_deref().unwrap_or("").contains("queue pin cleared"));
+    assert!(cleared
+        .0
+        .note
+        .as_deref()
+        .unwrap_or("")
+        .contains("queue pin cleared"));
 
     let stored = store
         .action_workflow_by_id("wf:queue-pin-endpoint")
@@ -703,5 +721,7 @@ fn queue_pin_conflict_rule_matches_api_expectation() {
     .expect_err("queue pin reassignment should be rejected");
     let api_error = ApiError::bad_request(error.to_string());
     assert_eq!(api_error.status, StatusCode::BAD_REQUEST);
-    assert!(api_error.message.contains("queue pin is owned by `frontend-review-list`"));
+    assert!(api_error
+        .message
+        .contains("queue pin is owned by `frontend-review-list`"));
 }

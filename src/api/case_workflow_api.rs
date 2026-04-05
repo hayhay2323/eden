@@ -7,19 +7,25 @@ use serde::Deserialize;
 use time::OffsetDateTime;
 
 #[cfg(feature = "persistence")]
-use crate::action::workflow::ActionStage;
-#[cfg(feature = "persistence")]
 use crate::action::workflow as action_workflow;
 #[cfg(feature = "persistence")]
-use crate::cases::{build_case_detail, load_snapshot, CaseMarket};
+use crate::action::workflow::{ActionExecutionPolicy, ActionStage};
 #[cfg(feature = "persistence")]
 use crate::cases::enrich_case_detail;
 #[cfg(feature = "persistence")]
+use crate::cases::{
+    build_case_detail, build_case_summaries, load_snapshot, CaseMarket, CaseSummary,
+};
+#[cfg(feature = "persistence")]
 use crate::cases::{workflow_record_payload, CaseWorkflowState};
+#[cfg(feature = "persistence")]
+use crate::ontology::contracts::market_slug;
 #[cfg(feature = "persistence")]
 use crate::persistence::case_reasoning_assessment::CaseReasoningAssessmentRecord;
 #[cfg(feature = "persistence")]
 use crate::persistence::store::EdenStore;
+#[cfg(feature = "persistence")]
+use crate::persistence::tactical_setup::TacticalSetupRecord;
 
 #[cfg(feature = "persistence")]
 use super::core::parse_case_market;
@@ -109,6 +115,81 @@ fn default_queue_pin_label(label: Option<String>) -> Option<String> {
 }
 
 #[cfg(feature = "persistence")]
+#[derive(Debug, Clone)]
+struct CaseWorkflowSeed {
+    setup_id: String,
+    workflow_id: String,
+    title: String,
+    payload: serde_json::Value,
+    execution_policy: ActionExecutionPolicy,
+}
+
+#[cfg(feature = "persistence")]
+async fn resolve_case_workflow_seed(
+    store: &EdenStore,
+    market: CaseMarket,
+    setup_id: &str,
+) -> Result<CaseWorkflowSeed, ApiError> {
+    if let Some(setup) = store
+        .tactical_setup_by_id(setup_id)
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to load tactical setup: {error}")))?
+    {
+        return Ok(CaseWorkflowSeed {
+            setup_id: setup.setup_id.clone(),
+            workflow_id: setup
+                .workflow_id
+                .clone()
+                .unwrap_or_else(|| format!("workflow:{}", setup.setup_id)),
+            title: setup.title.clone(),
+            payload: workflow_record_payload(&setup),
+            execution_policy: ActionExecutionPolicy::ReviewRequired,
+        });
+    }
+
+    let live_snapshot = load_snapshot(market)
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to load case snapshot: {error}")))?;
+    let case = build_case_summaries(&live_snapshot)
+        .into_iter()
+        .find(|item| item.setup_id == setup_id)
+        .ok_or_else(|| ApiError::not_found(format!("case `{setup_id}` not found")))?;
+    Ok(case_workflow_seed_from_summary(case))
+}
+
+#[cfg(feature = "persistence")]
+fn case_workflow_seed_from_summary(case: CaseSummary) -> CaseWorkflowSeed {
+    let workflow_id = case
+        .workflow_id
+        .clone()
+        .unwrap_or_else(|| format!("workflow:{}", case.setup_id));
+    let payload = serde_json::json!({
+        "setup_id": case.setup_id,
+        "case_id": case.case_id,
+        "symbol": case.symbol,
+        "title": case.title,
+        "market": market_slug(case.market),
+        "recommended_action": case.recommended_action,
+        "workflow_state": case.workflow_state,
+        "governance_reason_code": case.governance_reason_code.map(|value| value.as_str().to_string()),
+        "governance_reason": case.governance_reason,
+        "why_now": case.why_now,
+        "primary_lens": case.primary_lens,
+        "family_label": case.family_label,
+    });
+
+    CaseWorkflowSeed {
+        setup_id: case.setup_id,
+        workflow_id,
+        title: case.title,
+        payload,
+        execution_policy: case
+            .execution_policy
+            .unwrap_or(ActionExecutionPolicy::ReviewRequired),
+    }
+}
+
+#[cfg(feature = "persistence")]
 async fn apply_case_assign_update(
     state: &ApiState,
     market: CaseMarket,
@@ -116,21 +197,16 @@ async fn apply_case_assign_update(
     body: CaseAssignBody,
 ) -> Result<Json<CaseWorkflowState>, ApiError> {
     let store = &state.store;
-    let setup = store
-        .tactical_setup_by_id(&setup_id)
-        .await
-        .map_err(|error| ApiError::internal(format!("failed to load tactical setup: {error}")))?
-        .ok_or_else(|| ApiError::not_found(format!("case `{setup_id}` not found")))?;
-    let workflow_id = setup
-        .workflow_id
-        .clone()
-        .unwrap_or_else(|| format!("setup:{}", setup.setup_id));
+    let seed = resolve_case_workflow_seed(store, market, setup_id).await?;
+    let workflow_id = seed.workflow_id.clone();
     let current = store
         .action_workflow_by_id(&workflow_id)
         .await
         .map_err(|error| ApiError::internal(format!("failed to load workflow: {error}")))?;
-    action_workflow::validate_assignment_update(current.as_ref().map(|record| record.current_stage))
-        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    action_workflow::validate_assignment_update(
+        current.as_ref().map(|record| record.current_stage),
+    )
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
 
     let timestamp = OffsetDateTime::now_utc();
     let actor = normalize_optional_string(body.actor.clone()).or(Some("frontend".into()));
@@ -138,7 +214,9 @@ async fn apply_case_assign_update(
     let requested_reviewer = normalize_assignment_update(body.reviewer.clone());
     let requested_queue_pin = normalize_assignment_update(body.queue_pin.clone());
     action_workflow::validate_queue_pin_update(
-        current.as_ref().and_then(|record| record.queue_pin.as_deref()),
+        current
+            .as_ref()
+            .and_then(|record| record.queue_pin.as_deref()),
         requested_queue_pin.as_ref(),
         actor.as_deref(),
     )
@@ -155,14 +233,13 @@ async fn apply_case_assign_update(
         Some(next) => next.clone(),
         None => current.as_ref().and_then(|record| record.queue_pin.clone()),
     };
-    let note = body
-        .note
-        .clone()
-        .or_else(|| assignment_note(
+    let note = body.note.clone().or_else(|| {
+        assignment_note(
             requested_owner.as_ref(),
             requested_reviewer.as_ref(),
             requested_queue_pin.as_ref(),
-        ));
+        )
+    });
     let stage = current
         .as_ref()
         .map(|record| record.current_stage)
@@ -170,21 +247,25 @@ async fn apply_case_assign_update(
     let title = current
         .as_ref()
         .map(|record| record.title.clone())
-        .unwrap_or_else(|| setup.title.clone());
+        .unwrap_or_else(|| seed.title.clone());
     let payload = current
         .as_ref()
         .map(|record| record.payload.clone())
-        .unwrap_or_else(|| workflow_record_payload(&setup));
+        .unwrap_or_else(|| seed.payload.clone());
+    let execution_policy = current
+        .as_ref()
+        .map(|item| item.execution_policy)
+        .unwrap_or(seed.execution_policy);
 
     let record = crate::persistence::action_workflow::ActionWorkflowRecord {
         workflow_id: workflow_id.clone(),
         title: title.clone(),
         payload: payload.clone(),
         current_stage: stage,
-        execution_policy: crate::action::workflow::ActionExecutionPolicy::ReviewRequired,
+        execution_policy,
         governance_reason_code: crate::action::workflow::governance_reason_code(
             Some(stage),
-            crate::action::workflow::ActionExecutionPolicy::ReviewRequired,
+            execution_policy,
         ),
         recorded_at: timestamp,
         actor: actor.clone(),
@@ -200,10 +281,10 @@ async fn apply_case_assign_update(
         payload,
         from_stage: current.as_ref().map(|item| item.current_stage),
         to_stage: stage,
-        execution_policy: crate::action::workflow::ActionExecutionPolicy::ReviewRequired,
+        execution_policy,
         governance_reason_code: crate::action::workflow::governance_reason_code(
             Some(stage),
-            crate::action::workflow::ActionExecutionPolicy::ReviewRequired,
+            execution_policy,
         ),
         recorded_at: timestamp,
         actor: actor.clone(),
@@ -225,8 +306,14 @@ async fn apply_case_assign_update(
         .map_err(|error| {
             ApiError::internal(format!("failed to write assignment state: {error}"))
         })?;
-    persist_reasoning_assessment_snapshot(&store, market, &setup_id, timestamp, "workflow_update")
-        .await;
+    persist_reasoning_assessment_snapshot(
+        store,
+        market,
+        &seed.setup_id,
+        timestamp,
+        "workflow_update",
+    )
+    .await;
 
     Ok(Json(CaseWorkflowState {
         workflow_id,
@@ -282,8 +369,7 @@ pub(super) async fn post_case_queue_pin(
     };
     let note = body.note.clone().or_else(|| {
         if body.pinned {
-            default_queue_pin_label(body.label.clone())
-                .map(|label| format!("queue pin -> {label}"))
+            default_queue_pin_label(body.label.clone()).map(|label| format!("queue pin -> {label}"))
         } else {
             Some("queue pin cleared".into())
         }
@@ -312,15 +398,8 @@ pub(super) async fn post_case_transition(
     let target_stage = parse_action_stage(&body.target_stage)?;
     let market = parse_case_market(&market)?;
     let store = &state.store;
-    let setup = store
-        .tactical_setup_by_id(&setup_id)
-        .await
-        .map_err(|error| ApiError::internal(format!("failed to load tactical setup: {error}")))?
-        .ok_or_else(|| ApiError::not_found(format!("case `{setup_id}` not found")))?;
-    let workflow_id = setup
-        .workflow_id
-        .clone()
-        .unwrap_or_else(|| format!("setup:{}", setup.setup_id));
+    let seed = resolve_case_workflow_seed(store, market, &setup_id).await?;
+    let workflow_id = seed.workflow_id.clone();
     let current = store
         .action_workflow_by_id(&workflow_id)
         .await
@@ -336,30 +415,28 @@ pub(super) async fn post_case_transition(
     let title = current
         .as_ref()
         .map(|record| record.title.clone())
-        .unwrap_or_else(|| setup.title.clone());
+        .unwrap_or_else(|| seed.title.clone());
     let owner = current.as_ref().and_then(|record| record.owner.clone());
     let reviewer = current.as_ref().and_then(|record| record.reviewer.clone());
     let queue_pin = current.as_ref().and_then(|record| record.queue_pin.clone());
     let payload = current
         .as_ref()
         .map(|record| record.payload.clone())
-        .unwrap_or_else(|| workflow_record_payload(&setup));
+        .unwrap_or_else(|| seed.payload.clone());
+    let execution_policy = current
+        .as_ref()
+        .map(|item| item.execution_policy)
+        .unwrap_or(seed.execution_policy);
 
     let record = crate::persistence::action_workflow::ActionWorkflowRecord {
         workflow_id: workflow_id.clone(),
         title: title.clone(),
         payload: payload.clone(),
         current_stage: target_stage,
-        execution_policy: current
-            .as_ref()
-            .map(|item| item.execution_policy)
-            .unwrap_or(crate::action::workflow::ActionExecutionPolicy::ReviewRequired),
+        execution_policy,
         governance_reason_code: crate::action::workflow::governance_reason_code(
             Some(target_stage),
-            current
-                .as_ref()
-                .map(|item| item.execution_policy)
-                .unwrap_or(crate::action::workflow::ActionExecutionPolicy::ReviewRequired),
+            execution_policy,
         ),
         recorded_at: timestamp,
         actor: actor.clone(),
@@ -379,10 +456,10 @@ pub(super) async fn post_case_transition(
         payload,
         from_stage: current.as_ref().map(|item| item.current_stage),
         to_stage: target_stage,
-        execution_policy: record.execution_policy,
+        execution_policy,
         governance_reason_code: crate::action::workflow::governance_reason_code(
             Some(target_stage),
-            record.execution_policy,
+            execution_policy,
         ),
         recorded_at: timestamp,
         actor: actor.clone(),
@@ -400,8 +477,14 @@ pub(super) async fn post_case_transition(
         .write_action_workflow(&record)
         .await
         .map_err(|error| ApiError::internal(format!("failed to write workflow state: {error}")))?;
-    persist_reasoning_assessment_snapshot(&store, market, &setup_id, timestamp, "workflow_update")
-        .await;
+    persist_reasoning_assessment_snapshot(
+        store,
+        market,
+        &seed.setup_id,
+        timestamp,
+        "workflow_update",
+    )
+    .await;
 
     Ok(Json(CaseWorkflowState {
         workflow_id,

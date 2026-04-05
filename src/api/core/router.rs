@@ -3,14 +3,14 @@ use axum::routing::{get, post};
 use axum::Router;
 
 use super::super::agent_api::{
-    get_agent_analysis, get_agent_analyst_review, get_agent_analyst_scoreboard,
-    get_agent_backward, get_agent_brokers, get_agent_briefing, get_agent_depth,
-    get_agent_eod_review, get_agent_invalidation, get_agent_narration, get_agent_notices,
-    get_agent_query, get_agent_recommendations, get_agent_scoreboard, get_agent_sector_flows,
-    get_agent_session, get_agent_snapshot, get_agent_structure, get_agent_structures,
-    get_agent_symbol, get_agent_thread, get_agent_threads, get_agent_tools, get_agent_turns,
-    get_agent_transitions, get_agent_watchlist, get_agent_wake, get_agent_world,
-    post_agent_analyze, post_agent_analyze_codex_cli,
+    get_agent_analysis, get_agent_analyst_review, get_agent_analyst_scoreboard, get_agent_backward,
+    get_agent_briefing, get_agent_brokers, get_agent_depth, get_agent_eod_review,
+    get_agent_invalidation, get_agent_narration, get_agent_notices, get_agent_query,
+    get_agent_recommendations, get_agent_scoreboard, get_agent_sector_flows, get_agent_session,
+    get_agent_snapshot, get_agent_structure, get_agent_structures, get_agent_symbol,
+    get_agent_thread, get_agent_threads, get_agent_tools, get_agent_transitions, get_agent_turns,
+    get_agent_wake, get_agent_watchlist, get_agent_world, post_agent_analyze,
+    post_agent_analyze_codex_cli,
 };
 use super::super::agent_graph::{
     get_agent_graph_links, get_agent_graph_node, get_agent_knowledge_link_history,
@@ -32,10 +32,15 @@ use super::super::case_api::{
     stream_case_mechanism_story, stream_case_review, stream_case_transition_analytics,
     stream_cases,
 };
-use super::super::case_workflow_api::{post_case_assign, post_case_queue_pin, post_case_transition};
-use super::super::foundation::{ApiError, ApiState};
+use super::super::case_workflow_api::{
+    post_case_assign, post_case_queue_pin, post_case_transition,
+};
+use super::super::context_api::get_context_status;
+#[cfg(feature = "coordinator")]
+use super::super::coordinator_api::get_coordinator_snapshot;
 use super::super::feed_api::{get_feed_notices, get_feed_transitions};
 use super::super::feed_surface::{stream_feed_notices, stream_feed_transitions};
+use super::super::foundation::{ApiError, ApiState};
 use super::super::lineage_api::{
     get_causal_flips, get_causal_timeline, get_lineage, get_lineage_history, get_lineage_rows,
     get_us_causal_flips, get_us_causal_timeline, get_us_lineage, get_us_lineage_history,
@@ -45,9 +50,9 @@ use super::super::ontology_api::{
     get_backward_investigation_sidecar, get_case_contract, get_case_contracts,
     get_macro_event_contract, get_macro_event_contracts, get_market_session_contract,
     get_operational_navigation, get_operational_neighborhood, get_operational_snapshot,
-    get_recommendation_contract, get_recommendation_contracts, get_sector_flow_sidecars,
-    get_symbol_state_contract, get_symbol_state_contracts, get_thread_contract,
-    get_thread_contracts, get_workflow_contract, get_workflow_contracts,
+    get_operator_work_item_sidecars, get_recommendation_contract, get_recommendation_contracts,
+    get_sector_flow_sidecars, get_symbol_state_contract, get_symbol_state_contracts,
+    get_thread_contract, get_workflow_contract,
 };
 use super::super::ontology_graph_api::{
     get_graph_links, get_graph_node, get_knowledge_link_history, get_knowledge_link_state,
@@ -58,12 +63,16 @@ use super::super::ontology_history_api::{
     get_recommendation_journal_history, get_workflow_event_history,
 };
 use super::super::ontology_query_api::{
-    get_ontology_knowledge_links, get_ontology_macro_event_candidates,
-    get_ontology_world,
+    get_ontology_knowledge_links, get_ontology_macro_event_candidates, get_ontology_world,
 };
 use super::super::ontology_query_surface::stream_ontology_world;
+use super::super::runtime_tasks_api::{
+    get_runtime_task, get_runtime_tasks, post_runtime_task, post_runtime_task_status,
+};
 use super::auth::{audit_request, build_cors_layer, require_api_key};
-use super::health::{get_live_snapshot, get_polymarket, get_us_live_snapshot, health, health_report};
+use super::health::{
+    get_live_snapshot, get_polymarket, get_us_live_snapshot, health, health_report,
+};
 
 pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> {
     let auth_state = state.clone();
@@ -127,6 +136,16 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
         .route("/agent/:market/transitions", get(get_agent_transitions))
         .route("/feed/:market/notices", get(get_feed_notices))
         .route("/feed/:market/transitions", get(get_feed_transitions))
+        .route(
+            "/runtime/tasks",
+            get(get_runtime_tasks).post(post_runtime_task),
+        )
+        .route("/runtime/tasks/:task_id", get(get_runtime_task))
+        .route(
+            "/runtime/tasks/:task_id/status",
+            post(post_runtime_task_status),
+        )
+        .route("/status/context", get(get_context_status))
         .route("/agent/:market/structures", get(get_agent_structures))
         .route(
             "/agent/:market/structures/:symbol",
@@ -167,7 +186,10 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
             get(get_ontology_knowledge_links),
         )
         .route("/ontology/:market/symbols", get(get_symbol_state_contracts))
-        .route("/ontology/:market/symbols/:symbol", get(get_symbol_state_contract))
+        .route(
+            "/ontology/:market/symbols/:symbol",
+            get(get_symbol_state_contract),
+        )
         .route("/ontology/:market/cases", get(get_case_contracts))
         .route("/ontology/:market/cases/:case_id", get(get_case_contract))
         .route(
@@ -218,20 +240,28 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
             "/ontology/:market/graph/state/knowledge-links",
             get(get_knowledge_link_state),
         )
-        .route(
-            "/ontology/:market/graph/node/:node_id",
-            get(get_graph_node),
-        )
+        .route("/ontology/:market/graph/node/:node_id", get(get_graph_node))
         .route("/ontology/:market/graph/links", get(get_graph_links))
-        .route("/ontology/:market/threads", get(get_thread_contracts))
-        .route("/ontology/:market/threads/:thread_id", get(get_thread_contract))
-        .route("/ontology/:market/workflows", get(get_workflow_contracts))
-        .route("/ontology/:market/workflows/:workflow_id", get(get_workflow_contract))
+        .route(
+            "/ontology/:market/threads/:thread_id",
+            get(get_thread_contract),
+        )
+        .route(
+            "/ontology/:market/workflows/:workflow_id",
+            get(get_workflow_contract),
+        )
         .route(
             "/ontology/:market/workflows/:workflow_id/history",
             get(get_workflow_event_history),
         )
-        .route("/ontology/:market/sector-flows", get(get_sector_flow_sidecars))
+        .route(
+            "/ontology/:market/sector-flows",
+            get(get_sector_flow_sidecars),
+        )
+        .route(
+            "/ontology/:market/operator-work-items",
+            get(get_operator_work_item_sidecars),
+        )
         .route(
             "/ontology/:market/backward/:symbol",
             get(get_backward_investigation_sidecar),
@@ -272,7 +302,10 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
         .route("/stream/agent/:market/threads", get(stream_agent_threads))
         .route("/stream/agent/:market/turns", get(stream_agent_turns))
         .route("/stream/feed/:market/notices", get(stream_feed_notices))
-        .route("/stream/feed/:market/transitions", get(stream_feed_transitions))
+        .route(
+            "/stream/feed/:market/transitions",
+            get(stream_feed_transitions),
+        )
         .route("/stream/ontology/:market/world", get(stream_ontology_world))
         .route("/cases/:market", get(get_cases))
         .route("/briefing/:market", get(get_case_briefing))
@@ -299,7 +332,10 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
             get(get_case_mechanism_story),
         )
         .route("/cases/:market/:setup_id/assign", post(post_case_assign))
-        .route("/cases/:market/:setup_id/queue-pin", post(post_case_queue_pin))
+        .route(
+            "/cases/:market/:setup_id/queue-pin",
+            post(post_case_queue_pin),
+        )
         .route(
             "/cases/:market/:setup_id/transition",
             post(post_case_transition),
@@ -322,7 +358,12 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
             "/archive/capital-flows/:symbol",
             get(get_archive_capital_flows),
         )
-        .route("/history/symbol/:symbol", get(get_symbol_history))
+        .route("/history/symbol/:symbol", get(get_symbol_history));
+
+    #[cfg(feature = "coordinator")]
+    let api_routes = api_routes.route("/coordinator/snapshot", get(get_coordinator_snapshot));
+
+    let api_routes = api_routes
         .with_state(state)
         .layer(middleware::from_fn_with_state(auth_state, require_api_key));
 

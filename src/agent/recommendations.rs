@@ -4,16 +4,14 @@ mod market;
 mod outcomes;
 mod symbol;
 use market::{build_market_recommendation, build_sector_recommendations};
-use symbol::build_symbol_recommendation;
 pub(crate) use outcomes::{
     best_counterfactual_action, counterfactual_regret, realized_return_for_action,
     recommendation_resolution_status, resolve_market_recommendation_outcome,
-    resolve_recommendation_outcome, resolve_sector_recommendation_outcome,
-    sector_reference_value, symbol_mark_price,
+    resolve_recommendation_outcome, resolve_sector_recommendation_outcome, sector_reference_value,
+    symbol_mark_price,
 };
-pub(crate) use symbol::{
-    agent_bias_for_symbol, decision_alert_record, symbol_status,
-};
+use symbol::build_symbol_recommendation;
+pub(crate) use symbol::{agent_bias_for_symbol, decision_alert_record, symbol_status};
 
 pub fn build_recommendations(
     snapshot: &AgentSnapshot,
@@ -150,5 +148,3 @@ fn recommendation_focus_symbols(
     focus_symbols.truncate(8);
     focus_symbols
 }
-
-

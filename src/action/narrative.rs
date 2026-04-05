@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
 
-use crate::logic::tension::{Dimension, DimensionPair, SymbolTension, TensionSnapshot};
+use crate::pipeline::tension::{Dimension, DimensionPair, SymbolTension, TensionSnapshot};
 use crate::ontology::objects::Symbol;
 use crate::pipeline::dimensions::{DimensionSnapshot, SymbolDimensions};
 

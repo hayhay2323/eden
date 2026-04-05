@@ -61,10 +61,11 @@ pub(crate) async fn initialize_us_store(
     })
 }
 
-pub(crate) async fn fetch_us_rest_data(
-    ctx: &QuoteContext,
-    watchlist: &[Symbol],
-) -> UsRestSnapshot {
+pub(crate) async fn fetch_us_rest_data(ctx: &QuoteContext, watchlist: &[Symbol]) -> UsRestSnapshot {
+    if !is_us_regular_market_hours(time::OffsetDateTime::now_utc()) {
+        return UsRestSnapshot::empty();
+    }
+
     const BATCH_CONCURRENCY: usize = 8;
 
     let flow_future = stream::iter(watchlist.iter().cloned())
@@ -95,6 +96,13 @@ pub(crate) async fn fetch_us_rest_data(
                     CalcIndex::Amplitude,
                     CalcIndex::FiveMinutesChangeRate,
                     CalcIndex::DividendRatioTtm,
+                    CalcIndex::YtdChangeRate,
+                    CalcIndex::FiveDayChangeRate,
+                    CalcIndex::TenDayChangeRate,
+                    CalcIndex::HalfYearChangeRate,
+                    CalcIndex::TotalMarketValue,
+                    CalcIndex::CapitalFlow,
+                    CalcIndex::ChangeRate,
                 ],
             )
             .await
@@ -125,11 +133,149 @@ pub(crate) async fn fetch_us_rest_data(
             }
         }
     };
-    let (flow_results, calc_indexes, quotes) = tokio::join!(flow_future, calc_future, quote_future);
+    let intraday_future = stream::iter(watchlist.iter().cloned())
+        .map(|sym| {
+            let ctx = ctx.clone();
+            async move {
+                match ctx.intraday(sym.0.clone(), TradeSessions::Intraday).await {
+                    Ok(lines) => Some((sym, lines)),
+                    Err(e) => {
+                        eprintln!("Warning: intraday({}) failed: {}", sym, e);
+                        None
+                    }
+                }
+            }
+        })
+        .buffer_unordered(BATCH_CONCURRENCY)
+        .collect::<Vec<_>>();
+
+    let (flow_results, calc_indexes, quotes, intraday_results) =
+        tokio::join!(flow_future, calc_future, quote_future, intraday_future);
 
     UsRestSnapshot {
         quotes,
         calc_indexes,
         capital_flows: flow_results.into_iter().flatten().collect(),
+        intraday_lines: intraday_results.into_iter().flatten().collect(),
+        option_surfaces: Vec::new(),
     }
+}
+
+#[allow(dead_code)]
+pub(crate) async fn fetch_us_option_surfaces(
+    ctx: &QuoteContext,
+    watchlist: &[Symbol],
+    quotes: &HashMap<Symbol, SecurityQuote>,
+) -> Vec<OptionSurfaceObservation> {
+    let mut surfaces = Vec::new();
+
+    for sym in watchlist {
+        let last_price = match quotes.get(sym) {
+            Some(q) if q.last_done > Decimal::ZERO => q.last_done,
+            _ => continue,
+        };
+
+        let expiry_dates = match ctx.option_chain_expiry_date_list(sym.0.clone()).await {
+            Ok(dates) if !dates.is_empty() => dates,
+            _ => continue,
+        };
+
+        let nearest_expiry = expiry_dates[0];
+
+        let chain = match ctx
+            .option_chain_info_by_date(sym.0.clone(), nearest_expiry)
+            .await
+        {
+            Ok(c) if !c.is_empty() => c,
+            _ => continue,
+        };
+
+        let mut best_call: Option<String> = None;
+        let mut best_put: Option<String> = None;
+        let mut best_call_dist = Decimal::MAX;
+        let mut best_put_dist = Decimal::MAX;
+
+        for info in &chain {
+            let strike = info.price;
+            let dist = (strike - last_price).abs();
+            if !info.call_symbol.is_empty() && dist < best_call_dist {
+                best_call_dist = dist;
+                best_call = Some(info.call_symbol.clone());
+            }
+            if !info.put_symbol.is_empty() && dist < best_put_dist {
+                best_put_dist = dist;
+                best_put = Some(info.put_symbol.clone());
+            }
+        }
+
+        let mut option_symbols = Vec::new();
+        if let Some(ref c) = best_call {
+            option_symbols.push(c.clone());
+        }
+        if let Some(ref p) = best_put {
+            option_symbols.push(p.clone());
+        }
+        if option_symbols.is_empty() {
+            continue;
+        }
+
+        let greeks = match ctx
+            .calc_indexes(
+                option_symbols,
+                [
+                    CalcIndex::ImpliedVolatility,
+                    CalcIndex::Delta,
+                    CalcIndex::Vega,
+                    CalcIndex::OpenInterest,
+                ],
+            )
+            .await
+        {
+            Ok(g) => g,
+            Err(_) => continue,
+        };
+
+        let call_greeks = best_call
+            .as_ref()
+            .and_then(|cs| greeks.iter().find(|g| &g.symbol == cs));
+        let put_greeks = best_put
+            .as_ref()
+            .and_then(|ps| greeks.iter().find(|g| &g.symbol == ps));
+
+        let call_iv = call_greeks.and_then(|g| g.implied_volatility);
+        let put_iv = put_greeks.and_then(|g| g.implied_volatility);
+        let skew = match (put_iv, call_iv) {
+            (Some(p), Some(c)) if c > Decimal::ZERO => Some(p / c - Decimal::ONE),
+            _ => None,
+        };
+        let call_oi = call_greeks.and_then(|g| g.open_interest).unwrap_or(0);
+        let put_oi = put_greeks.and_then(|g| g.open_interest).unwrap_or(0);
+        let pc_ratio = if call_oi > 0 {
+            Some(Decimal::from(put_oi) / Decimal::from(call_oi))
+        } else {
+            None
+        };
+
+        let expiry_label = format!(
+            "{:04}-{:02}-{:02}",
+            nearest_expiry.year(),
+            nearest_expiry.month() as u8,
+            nearest_expiry.day(),
+        );
+
+        surfaces.push(OptionSurfaceObservation {
+            underlying: sym.clone(),
+            expiry_label,
+            atm_call_iv: call_iv,
+            atm_put_iv: put_iv,
+            put_call_skew: skew,
+            total_call_oi: call_oi,
+            total_put_oi: put_oi,
+            put_call_oi_ratio: pc_ratio,
+            atm_delta: call_greeks.and_then(|g| g.delta),
+            atm_vega: call_greeks.and_then(|g| g.vega),
+        });
+    }
+
+    surfaces
 }

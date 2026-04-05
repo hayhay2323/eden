@@ -22,6 +22,9 @@ struct HistoryStats {
 }
 
 #[cfg(feature = "persistence")]
+const HISTORY_REF_ENRICH_LIMIT: usize = 10_000;
+
+#[cfg(feature = "persistence")]
 pub(in crate::api) async fn enrich_history_refs(
     state: &ApiState,
     market: CaseMarket,
@@ -54,14 +57,16 @@ pub(in crate::api) async fn enrich_history_refs(
     for workflow_id in workflow_ids {
         let events = state
             .store
-            .action_workflow_events(&workflow_id)
+            .action_workflow_event_values(&workflow_id)
             .await
-            .map_err(|error| ApiError::internal(format!("failed to query workflow history: {error}")))?;
+            .map_err(|error| {
+                ApiError::internal(format!("failed to query workflow history: {error}"))
+            })?;
         workflow_stats.insert(
             workflow_id,
             HistoryStats {
                 count: events.len(),
-                latest_at: events.iter().map(|item| item.recorded_at).max(),
+                latest_at: events.iter().filter_map(workflow_event_recorded_at).max(),
             },
         );
     }
@@ -71,7 +76,7 @@ pub(in crate::api) async fn enrich_history_refs(
     for setup_id in setup_ids {
         let assessments = state
             .store
-            .recent_case_reasoning_assessments(&setup_id, usize::MAX)
+            .recent_case_reasoning_assessments(&setup_id, HISTORY_REF_ENRICH_LIMIT)
             .await
             .map_err(|error| {
                 ApiError::internal(format!("failed to query case reasoning history: {error}"))
@@ -86,7 +91,7 @@ pub(in crate::api) async fn enrich_history_refs(
 
         let outcomes = state
             .store
-            .recent_case_realized_outcomes(&setup_id, usize::MAX)
+            .recent_case_realized_outcomes(&setup_id, HISTORY_REF_ENRICH_LIMIT)
             .await
             .map_err(|error| {
                 ApiError::internal(format!("failed to query case outcome history: {error}"))
@@ -168,6 +173,12 @@ pub(in crate::api) async fn enrich_history_refs(
     }
 
     Ok(())
+}
+
+#[cfg(feature = "persistence")]
+fn workflow_event_recorded_at(event: &serde_json::Value) -> Option<OffsetDateTime> {
+    let raw = event.get("recorded_at")?.as_str()?;
+    OffsetDateTime::parse(raw, &time::format_description::well_known::Rfc3339).ok()
 }
 
 #[cfg(feature = "persistence")]

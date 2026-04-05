@@ -39,12 +39,7 @@ pub(crate) fn us_dst_boundary_utc(
         .expect("valid DST boundary")
 }
 
-pub(crate) fn nth_weekday_of_month(
-    year: i32,
-    month: u32,
-    weekday: Weekday,
-    ordinal: u8,
-) -> u32 {
+pub(crate) fn nth_weekday_of_month(year: i32, month: u32, weekday: Weekday, ordinal: u8) -> u32 {
     let first = NaiveDate::from_ymd_opt(year, month, 1).expect("valid month");
     let shift = (7 + weekday.num_days_from_monday() as i64
         - first.weekday().num_days_from_monday() as i64)

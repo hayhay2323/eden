@@ -1,16 +1,16 @@
-use axum::extract::{Path, Query};
 #[cfg(feature = "persistence")]
 use axum::extract::State;
+use axum::extract::{Path, Query};
 use axum::Json;
 
 use crate::ontology::{world::WorldStateSnapshot, AgentKnowledgeLink, AgentMacroEventCandidate};
 
 use super::agent_api::AgentFeedQuery;
-use super::core::{bounded, normalized_query_value, parse_case_market};
 use super::constants::{DEFAULT_LIMIT, MAX_LIMIT};
+use super::core::{bounded, normalized_query_value, parse_case_market};
+use super::foundation::ApiError;
 #[cfg(feature = "persistence")]
 use super::foundation::ApiState;
-use super::foundation::ApiError;
 use super::ontology_api::load_contract_snapshot;
 #[cfg(feature = "persistence")]
 use super::ontology_api::load_enriched_contract_snapshot;

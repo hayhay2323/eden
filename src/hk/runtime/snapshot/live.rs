@@ -1,4 +1,23 @@
 use super::*;
+use crate::live_snapshot::LiveSuccessPattern;
+use crate::temporal::lineage::compute_vortex_success_patterns;
+use crate::temporal::pyramid::build_hk_live_temporal_bars;
+use crate::temporal::session::{event_half_life_secs, freshness_score_from_age_secs};
+
+fn multi_horizon_gate_reason(notes: &[String]) -> Option<String> {
+    notes
+        .iter()
+        .find_map(|note| note.strip_prefix("multi_horizon_gate=blocked: "))
+        .map(|value| value.to_string())
+}
+
+fn matched_success_pattern_signature(notes: &[String]) -> Option<String> {
+    notes
+        .iter()
+        .find_map(|note| note.strip_prefix("matched_success_pattern="))
+        .map(|value| value.to_string())
+        .filter(|value| !value.is_empty())
+}
 
 pub(crate) fn build_hk_live_snapshot(
     tick: u64,
@@ -12,10 +31,10 @@ pub(crate) fn build_hk_live_snapshot(
     observation_snapshot: &ObservationSnapshot,
     scorecard: &SignalScorecard,
     dim_snapshot: &DimensionSnapshot,
+    history: &TickHistory,
     latest: &TickRecord,
     tracker: &PositionTracker,
     causal_timelines: &std::collections::HashMap<String, CausalTimeline>,
-    lineage_stats: &eden::temporal::lineage::LineageStats,
     dynamics: &std::collections::HashMap<Symbol, eden::temporal::analysis::SignalDynamics>,
 ) -> LiveSnapshot {
     let hypothesis_map: HashMap<&str, &eden::Hypothesis> = reasoning_snapshot
@@ -55,6 +74,10 @@ pub(crate) fn build_hk_live_snapshot(
         .collect::<Vec<_>>();
     top_signals.sort_by(|a, b| b.composite.abs().cmp(&a.composite.abs()));
     top_signals.truncate(120);
+    let temporal_symbols = top_signals
+        .iter()
+        .map(|item| item.symbol.clone())
+        .collect::<Vec<_>>();
 
     let mut tactical_cases = reasoning_snapshot
         .tactical_setups
@@ -68,6 +91,18 @@ pub(crate) fn build_hk_live_snapshot(
             confidence_gap: item.confidence_gap,
             heuristic_edge: item.heuristic_edge,
             entry_rationale: item.entry_rationale.clone(),
+            review_reason_code: item
+                .review_reason_code
+                .map(|code| code.as_str().to_string()),
+            policy_primary: item
+                .policy_verdict
+                .as_ref()
+                .map(|verdict| verdict.primary.as_str().to_string()),
+            policy_reason: item
+                .policy_verdict
+                .as_ref()
+                .map(|verdict| verdict.rationale.clone()),
+            multi_horizon_gate_reason: multi_horizon_gate_reason(&item.risk_notes),
             family_label: hypothesis_map
                 .get(item.hypothesis_id.as_str())
                 .map(|hypothesis| hypothesis.family_label.clone()),
@@ -76,6 +111,7 @@ pub(crate) fn build_hk_live_snapshot(
                 .as_ref()
                 .and_then(|id| hypothesis_map.get(id.as_str()))
                 .map(|hypothesis| hypothesis.family_label.clone()),
+            matched_success_pattern_signature: matched_success_pattern_signature(&item.risk_notes),
         })
         .collect::<Vec<_>>();
     tactical_cases.sort_by(|a, b| {
@@ -126,6 +162,17 @@ pub(crate) fn build_hk_live_snapshot(
             symbol: None,
             magnitude: item.value.magnitude,
             summary: item.value.summary.clone(),
+            age_secs: Some(
+                (latest.timestamp - item.provenance.observed_at)
+                    .whole_seconds()
+                    .max(0),
+            ),
+            freshness: Some(freshness_score_from_age_secs(
+                (latest.timestamp - item.provenance.observed_at)
+                    .whole_seconds()
+                    .max(0),
+                event_half_life_secs(&format!("{:?}", item.value.kind)),
+            )),
         })
         .collect::<Vec<_>>();
     let structural_deltas = build_hk_structural_deltas(store, dynamics);
@@ -134,10 +181,8 @@ pub(crate) fn build_hk_live_snapshot(
         .active_fingerprints()
         .iter()
         .map(|fingerprint| {
-            let mut node = eden::ontology::ActionNode::from_hk_fingerprint(
-                &fingerprint.symbol,
-                fingerprint,
-            );
+            let mut node =
+                eden::ontology::ActionNode::from_hk_fingerprint(&fingerprint.symbol, fingerprint);
             node.sector = store
                 .sector_name_for_symbol(&fingerprint.symbol)
                 .map(str::to_string);
@@ -185,7 +230,24 @@ pub(crate) fn build_hk_live_snapshot(
         cross_market_anomalies: Vec::new(),
         structural_deltas,
         propagation_senses,
-        lineage: build_hk_lineage_metrics(lineage_stats),
+        temporal_bars: build_hk_live_temporal_bars(history, &temporal_symbols),
+        lineage: build_hk_lineage_metrics(history),
+        success_patterns: compute_vortex_success_patterns(history, LINEAGE_WINDOW)
+            .into_iter()
+            .take(6)
+            .map(|item| LiveSuccessPattern {
+                family: item.top_family,
+                signature: item.channel_signature,
+                dominant_channels: item.dominant_channels,
+                samples: item.samples,
+                mean_net_return: item.mean_net_return,
+                mean_strength: item.mean_strength,
+                mean_coherence: item.mean_coherence,
+                mean_channel_diversity: Some(item.mean_channel_diversity),
+                center_kind: Some(item.center_kind),
+                role: Some(item.role),
+            })
+            .collect(),
     }
 }
 

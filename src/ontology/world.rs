@@ -73,11 +73,64 @@ pub struct EntityState {
     pub drivers: Vec<String>,
 }
 
+/// A convergence point where multiple causal flow paths meet.
+/// Vortices emerge when independent leaf-level events (price moves, volume spikes,
+/// broker activity) feed into the same branch/trunk-level entity through different
+/// channels. The more independent paths converge, the stronger the vortex.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Vortex {
+    pub vortex_id: String,
+    pub center_entity_id: String,
+    pub center_scope: ReasoningScope,
+    pub layer: WorldLayer,
+    pub flow_paths: Vec<FlowPath>,
+    pub strength: Decimal,
+    pub channel_diversity: usize,
+    pub coherence: Decimal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narrative: Option<String>,
+}
+
+/// A single causal flow path feeding into a vortex center.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowPath {
+    pub source_entity_id: String,
+    pub source_scope: ReasoningScope,
+    pub channel: String,
+    pub weight: Decimal,
+    pub polarity: FlowPolarity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FlowPolarity {
+    Confirming,
+    Contradicting,
+    Ambiguous,
+}
+
+impl FlowPolarity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Confirming => "confirming",
+            Self::Contradicting => "contradicting",
+            Self::Ambiguous => "ambiguous",
+        }
+    }
+}
+
+impl std::fmt::Display for FlowPolarity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorldStateSnapshot {
     #[serde(with = "rfc3339")]
     pub timestamp: OffsetDateTime,
     pub entities: Vec<EntityState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vortices: Vec<Vortex>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,6 +320,7 @@ mod tests {
                 propagated_support: dec!(0.18),
                 drivers: vec!["local flow stayed positive".into()],
             }],
+            vortices: vec![],
         };
 
         assert_eq!(investigation.candidate_causes.len(), 1);

@@ -44,9 +44,9 @@ use super::store_helpers::{
     StoreError,
 };
 
-mod query;
 #[path = "store/knowledge.rs"]
 mod knowledge;
+mod query;
 #[path = "store/workflow.rs"]
 mod workflow;
 #[path = "store/write.rs"]
@@ -67,16 +67,25 @@ struct SchemaMigrationState {
 impl EdenStore {
     /// Open or create the SurrealDB database at the given path.
     pub async fn open(path: &str) -> Result<Self, StoreError> {
+        eprintln!("[store] opening {}", path);
         let db = Surreal::new::<RocksDb>(path).await?;
+        eprintln!("[store] selecting namespace/database");
         db.use_ns("eden").use_db("market").await?;
-        Self::apply_schema_migrations(&db).await?;
+        Self::apply_schema_migrations(&db, path).await?;
+        eprintln!("[store] ready {}", path);
         Ok(Self { db })
     }
 
-    async fn apply_schema_migrations(db: &Surreal<Db>) -> Result<(), StoreError> {
+    async fn apply_schema_migrations(db: &Surreal<Db>, path: &str) -> Result<(), StoreError> {
         db.query(schema::SCHEMA_VERSION_TABLE).await?.check()?;
 
         let current_version = Self::stored_schema_version(db).await?;
+        eprintln!(
+            "[store] {} schema current={:?} target={}",
+            path,
+            current_version,
+            schema::LATEST_SCHEMA_VERSION
+        );
         if let Some(version) = current_version {
             if version > schema::LATEST_SCHEMA_VERSION {
                 return Err(format!(
@@ -89,8 +98,20 @@ impl EdenStore {
         }
 
         for migration in schema::pending_migrations(current_version) {
+            let started_at = std::time::Instant::now();
+            eprintln!(
+                "[store] {} applying migration {} {}",
+                path, migration.version, migration.name
+            );
             db.query(migration.statements).await?.check()?;
             Self::write_schema_version(db, migration.version, migration.name).await?;
+            eprintln!(
+                "[store] {} migration {} {} done in {:?}",
+                path,
+                migration.version,
+                migration.name,
+                started_at.elapsed()
+            );
         }
 
         Ok(())
@@ -120,8 +141,6 @@ impl EdenStore {
             .await?;
         Ok(())
     }
-
-
 }
 #[cfg(test)]
 #[path = "store/tests.rs"]

@@ -35,10 +35,7 @@ impl LensEngine {
                 .then_with(|| left.lens_name.cmp(right.lens_name))
         });
 
-        let observations = ranked
-            .into_iter()
-            .map(|(_, item)| item)
-            .collect::<Vec<_>>();
+        let observations = ranked.into_iter().map(|(_, item)| item).collect::<Vec<_>>();
 
         let mut why_fragments = observations
             .iter()

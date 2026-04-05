@@ -112,12 +112,8 @@ impl TemporalBrokerRegistry {
             seen_ids.insert(id.clone());
 
             let inst_id = store.broker_to_institution.get(&entry.broker_id).copied();
-            let visible_volume = visible_volume_at_level(
-                order_books,
-                &entry.symbol,
-                entry.side,
-                entry.position,
-            );
+            let visible_volume =
+                visible_volume_at_level(order_books, &entry.symbol, entry.side, entry.position);
 
             match self.records.get_mut(&id) {
                 Some(state) if state.active => {
@@ -161,9 +157,11 @@ impl TemporalBrokerRegistry {
                             .last_replenished_tick
                             .map(|last| tick.saturating_sub(last));
                         let depth_recovery_ratio = visible_volume.and_then(|current_volume| {
-                            state.last_disappeared_visible_volume.and_then(|previous_volume| {
-                                depth_recovery_ratio(previous_volume, current_volume)
-                            })
+                            state
+                                .last_disappeared_visible_volume
+                                .and_then(|previous_volume| {
+                                    depth_recovery_ratio(previous_volume, current_volume)
+                                })
                         });
                         state.replenish_count += 1;
                         state.last_replenished_tick = Some(tick);
@@ -319,10 +317,7 @@ impl BrokerTransition {
         institution_id: Option<InstitutionId>,
         state: &BrokerTemporalState,
     ) -> Self {
-        let replenish_interval = state
-            .replenish_intervals
-            .back()
-            .copied();
+        let replenish_interval = state.replenish_intervals.back().copied();
         let replenish_position_consistency =
             Some(replenish_position_consistency(&state.replenish_positions));
         let replenish_interval_regularity =
@@ -414,26 +409,32 @@ fn iceberg_confidence(state: &BrokerTemporalState, tick: u64) -> Decimal {
     } else {
         dec!(0.35)
     };
-    let evidence_strength =
-        crate::math::clamp_unit_interval(Decimal::from(state.replenish_count.min(4) as i64) / dec!(4));
+    let evidence_strength = crate::math::clamp_unit_interval(
+        Decimal::from(state.replenish_count.min(4) as i64) / dec!(4),
+    );
     let base = crate::math::clamp_unit_interval(
         interval_regularity * dec!(0.30)
             + position_consistency * dec!(0.35)
             + frequency * dec!(0.20)
             + side_consistency * dec!(0.15),
     );
-    let confidence = crate::math::clamp_unit_interval(
-        base * (dec!(0.25) + evidence_strength * dec!(0.75)),
-    );
-    let confidence = if let Some(depth_recovery_ratio) = state.depth_recovery_ratios.back().copied() {
-        crate::math::clamp_unit_interval(confidence * dec!(0.85) + depth_recovery_ratio * dec!(0.15))
+    let confidence =
+        crate::math::clamp_unit_interval(base * (dec!(0.25) + evidence_strength * dec!(0.75)));
+    let confidence = if let Some(depth_recovery_ratio) = state.depth_recovery_ratios.back().copied()
+    {
+        crate::math::clamp_unit_interval(
+            confidence * dec!(0.85) + depth_recovery_ratio * dec!(0.15),
+        )
     } else {
         confidence
     };
     confidence.round_dp(4)
 }
 
-fn depth_recovery_ratio(previous_visible_volume: i64, current_visible_volume: i64) -> Option<Decimal> {
+fn depth_recovery_ratio(
+    previous_visible_volume: i64,
+    current_visible_volume: i64,
+) -> Option<Decimal> {
     if previous_visible_volume <= 0 || current_visible_volume < 0 {
         return None;
     }
@@ -465,8 +466,8 @@ fn visible_volume_at_level(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::ontology::links::{DepthLevel, DepthProfile, OrderBookObservation};
+    use std::collections::HashMap;
 
     fn sym(value: &str) -> Symbol {
         Symbol(value.into())
@@ -492,7 +493,11 @@ mod tests {
         }
     }
 
-    fn order_book(symbol: &str, bid_levels: Vec<(i32, i64)>, ask_levels: Vec<(i32, i64)>) -> OrderBookObservation {
+    fn order_book(
+        symbol: &str,
+        bid_levels: Vec<(i32, i64)>,
+        ask_levels: Vec<(i32, i64)>,
+    ) -> OrderBookObservation {
         let bid_levels = bid_levels
             .into_iter()
             .map(|(position, volume)| DepthLevel {

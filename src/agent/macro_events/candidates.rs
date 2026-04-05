@@ -1,9 +1,9 @@
-use super::*;
 use super::routing::{
     impact_market_label, macro_event_candidate_from_headline, macro_event_candidate_from_notice,
     macro_headline_relevant, macro_market_confirmation, macro_notice_relevant,
     world_monitor_candidate_from_record,
 };
+use super::*;
 
 pub(crate) fn build_macro_event_candidates(
     tick: u64,

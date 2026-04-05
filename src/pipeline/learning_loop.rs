@@ -16,18 +16,17 @@ use crate::pipeline::mechanism_inference::{
     retain_explanatory_mechanisms,
 };
 
-#[path = "learning_loop/types.rs"]
-mod types;
 #[path = "learning_loop/feedback.rs"]
 mod feedback;
 #[path = "learning_loop/outcome_context.rs"]
 mod outcome_context;
+#[path = "learning_loop/types.rs"]
+mod types;
 
 pub use feedback::{apply_learning_feedback, derive_learning_feedback};
 pub use outcome_context::{
     derive_outcome_learning_context_from_case_outcomes,
-    derive_outcome_learning_context_from_hk_rows,
-    derive_outcome_learning_context_from_us_rows,
+    derive_outcome_learning_context_from_hk_rows, derive_outcome_learning_context_from_us_rows,
 };
 pub use types::{
     ConditionedLearningAdjustment, LearningAdjustment, MechanismFactorAdjustment,
@@ -78,6 +77,7 @@ mod tests {
             confidence: dec!(0.7),
             confidence_gap: dec!(0.2),
             heuristic_edge: dec!(0.1),
+            review_reason_code: None,
             why_now: "why".into(),
             primary_lens: None,
             primary_driver: None,
@@ -207,6 +207,7 @@ mod tests {
             confidence: dec!(0.7),
             confidence_gap: dec!(0.2),
             heuristic_edge: dec!(0.1),
+            review_reason_code: None,
             why_now: "why".into(),
             primary_lens: None,
             primary_driver: None,
@@ -369,8 +370,14 @@ mod tests {
 
     #[test]
     fn negative_return_normalization_is_nonzero_for_small_losses() {
-        assert_eq!(outcome_context::normalize_negative_return(dec!(-0.01)), dec!(0.08));
-        assert_eq!(outcome_context::normalize_negative_return(dec!(0.01)), Decimal::ZERO);
+        assert_eq!(
+            outcome_context::normalize_negative_return(dec!(-0.01)),
+            dec!(0.08)
+        );
+        assert_eq!(
+            outcome_context::normalize_negative_return(dec!(0.01)),
+            Decimal::ZERO
+        );
     }
 
     #[test]

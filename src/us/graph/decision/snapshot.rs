@@ -1,7 +1,7 @@
 use super::*;
 use crate::us::pipeline::dimensions::UsSymbolDimensions;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UsDecisionSnapshot {
     pub timestamp: OffsetDateTime,
     pub convergence_scores: HashMap<Symbol, UsConvergenceScore>,

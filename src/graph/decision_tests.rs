@@ -4,7 +4,7 @@ use crate::action::narrative::{
 };
 use crate::external::polymarket::{PolymarketBias, PolymarketPrior, PolymarketSnapshot};
 use crate::graph::graph::BrainGraph;
-use crate::logic::tension::Dimension;
+use crate::pipeline::tension::Dimension;
 use crate::ontology::links::*;
 use crate::ontology::objects::*;
 use crate::ontology::{ActionNode, ActionNodeStage};

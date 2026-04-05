@@ -2,19 +2,18 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
 use super::*;
-use crate::cases::review_analytics::build_case_review_analytics;
 use crate::action::workflow::ActionExecutionPolicy;
 #[cfg(feature = "persistence")]
 use crate::cases::reasoning_story::describe_mechanism_transition;
+use crate::cases::review_analytics::build_case_review_analytics;
 #[cfg(feature = "persistence")]
 use crate::cases::review_analytics::build_case_review_analytics_with_assessments;
 use crate::live_snapshot::{
-    LiveMarket, LiveMarketRegime, LiveScorecard, LiveSnapshot, LiveStressSnapshot,
-    LiveTacticalCase,
+    LiveMarket, LiveMarketRegime, LiveScorecard, LiveSnapshot, LiveStressSnapshot, LiveTacticalCase,
 };
-use crate::CaseReasoningProfile;
 #[cfg(feature = "persistence")]
 use crate::persistence::case_reasoning_assessment::CaseReasoningAssessmentRecord;
+use crate::CaseReasoningProfile;
 #[cfg(feature = "persistence")]
 use time::OffsetDateTime;
 
@@ -89,6 +88,7 @@ fn case_summary_with_mechanisms(primary: &str, competing: &[&str]) -> CaseSummar
         confidence: dec!(0.6),
         confidence_gap: dec!(0.2),
         heuristic_edge: dec!(0.1),
+        review_reason_code: None,
         why_now: "why".into(),
         primary_lens: None,
         primary_driver: None,
@@ -183,8 +183,13 @@ fn actionable_cases_sort_first() {
                 confidence_gap: dec!(0.1),
                 heuristic_edge: dec!(0.02),
                 entry_rationale: "watch".into(),
+                review_reason_code: None,
+                policy_primary: None,
+                policy_reason: None,
+                multi_horizon_gate_reason: None,
                 family_label: None,
                 counter_label: None,
+                matched_success_pattern_signature: None,
             },
             LiveTacticalCase {
                 setup_id: "setup:a".into(),
@@ -195,8 +200,13 @@ fn actionable_cases_sort_first() {
                 confidence_gap: dec!(0.2),
                 heuristic_edge: dec!(0.05),
                 entry_rationale: "go".into(),
+                review_reason_code: None,
+                policy_primary: None,
+                policy_reason: None,
+                multi_horizon_gate_reason: None,
                 family_label: None,
                 counter_label: None,
+                matched_success_pattern_signature: None,
             },
         ],
         hypothesis_tracks: vec![],
@@ -210,7 +220,9 @@ fn actionable_cases_sort_first() {
         cross_market_anomalies: vec![],
         structural_deltas: vec![],
         propagation_senses: vec![],
+        temporal_bars: vec![],
         lineage: vec![],
+        success_patterns: vec![],
     };
 
     let cases = build_case_summaries(&snapshot);
@@ -265,8 +277,13 @@ fn build_case_summaries_assigns_primary_lens_and_buckets() {
                 confidence_gap: dec!(0.2),
                 heuristic_edge: dec!(0.06),
                 entry_rationale: "ice".into(),
+                review_reason_code: None,
+                policy_primary: None,
+                policy_reason: None,
+                multi_horizon_gate_reason: None,
                 family_label: None,
                 counter_label: None,
+                matched_success_pattern_signature: None,
             },
             LiveTacticalCase {
                 setup_id: "setup:cause".into(),
@@ -277,8 +294,13 @@ fn build_case_summaries_assigns_primary_lens_and_buckets() {
                 confidence_gap: dec!(0.1),
                 heuristic_edge: dec!(0.04),
                 entry_rationale: "cause".into(),
+                review_reason_code: None,
+                policy_primary: None,
+                policy_reason: None,
+                multi_horizon_gate_reason: None,
                 family_label: None,
                 counter_label: None,
+                matched_success_pattern_signature: None,
             },
             LiveTacticalCase {
                 setup_id: "setup:lineage".into(),
@@ -289,8 +311,13 @@ fn build_case_summaries_assigns_primary_lens_and_buckets() {
                 confidence_gap: dec!(0.1),
                 heuristic_edge: dec!(0.03),
                 entry_rationale: "lineage".into(),
+                review_reason_code: None,
+                policy_primary: None,
+                policy_reason: None,
+                multi_horizon_gate_reason: None,
                 family_label: Some("Directed Flow".into()),
                 counter_label: None,
+                matched_success_pattern_signature: None,
             },
         ],
         hypothesis_tracks: vec![],
@@ -302,6 +329,7 @@ fn build_case_summaries_assigns_primary_lens_and_buckets() {
             conclusion: "causal".into(),
             primary_driver: "driver".into(),
             confidence: dec!(0.7),
+            freshness: None,
             evidence: vec![],
         }],
         causal_leaders: vec![],
@@ -310,12 +338,17 @@ fn build_case_summaries_assigns_primary_lens_and_buckets() {
             symbol: Some("ICE.HK".into()),
             magnitude: dec!(0.8),
             summary: "iceberg".into(),
+            age_secs: None,
+            freshness: None,
         }],
         cross_market_signals: vec![],
         cross_market_anomalies: vec![],
         structural_deltas: vec![],
         propagation_senses: vec![],
+        temporal_bars: vec![],
+        success_patterns: vec![],
         lineage: vec![crate::live_snapshot::LiveLineageMetric {
+            horizon: None,
             template: "Directed Flow".into(),
             total: 12,
             resolved: 10,
@@ -332,8 +365,14 @@ fn build_case_summaries_assigns_primary_lens_and_buckets() {
         .map(|case| (case.symbol.as_str(), case.primary_lens.as_deref()))
         .collect::<std::collections::HashMap<_, _>>();
 
-    assert_eq!(cases_by_symbol.get("ICE.HK").copied().flatten(), Some("iceberg"));
-    assert_eq!(cases_by_symbol.get("CAUSE.HK").copied().flatten(), Some("causal"));
+    assert_eq!(
+        cases_by_symbol.get("ICE.HK").copied().flatten(),
+        Some("iceberg")
+    );
+    assert_eq!(
+        cases_by_symbol.get("CAUSE.HK").copied().flatten(),
+        Some("causal")
+    );
     assert_eq!(
         cases_by_symbol.get("LINE.HK").copied().flatten(),
         Some("lineage_prior")
@@ -394,12 +433,10 @@ fn filter_case_list_by_governance_reason_code_matches_inferred_reason() {
         primary_lens_buckets: CasePrimaryLensBuckets::default(),
         queue_pin_buckets: CaseQueuePinBuckets::default(),
     };
-    response.cases[0].governance_reason_code = Some(
-        crate::action::workflow::ActionGovernanceReasonCode::AdvisoryAction,
-    );
-    response.cases[1].governance_reason_code = Some(
-        crate::action::workflow::ActionGovernanceReasonCode::SeverityRequiresReview,
-    );
+    response.cases[0].governance_reason_code =
+        Some(crate::action::workflow::ActionGovernanceReasonCode::AdvisoryAction);
+    response.cases[1].governance_reason_code =
+        Some(crate::action::workflow::ActionGovernanceReasonCode::SeverityRequiresReview);
 
     filter_case_list_by_governance_reason_code(
         &mut response,
@@ -481,7 +518,11 @@ fn filter_case_list_by_primary_lens_supports_exact_and_any() {
     assert_eq!(exact.cases.len(), 1);
     assert_eq!(exact.cases[0].setup_id, "setup:Liquidity Trap");
     assert_eq!(
-        exact.primary_lens_buckets.buckets.get("iceberg").map(Vec::len),
+        exact
+            .primary_lens_buckets
+            .buckets
+            .get("iceberg")
+            .map(Vec::len),
         Some(1)
     );
 
@@ -497,7 +538,10 @@ fn filter_case_list_by_primary_lens_supports_exact_and_any() {
     assert_eq!(none.cases.len(), 1);
     assert_eq!(none.cases[0].setup_id, "setup:Event Catalyst");
     assert_eq!(
-        none.primary_lens_buckets.buckets.get("unknown").map(Vec::len),
+        none.primary_lens_buckets
+            .buckets
+            .get("unknown")
+            .map(Vec::len),
         Some(1)
     );
 }
@@ -556,30 +600,31 @@ fn governance_reason_buckets_group_and_sort_review_cases() {
     let mut severity = case_summary_with_mechanisms("Liquidity Trap", &[]);
     severity.workflow_state = "review".into();
     severity.execution_policy = Some(ActionExecutionPolicy::ReviewRequired);
-    severity.governance_reason_code = Some(
-        crate::action::workflow::ActionGovernanceReasonCode::SeverityRequiresReview,
-    );
-    severity.governance_reason = Some("severity=`high` forces human review before `enter` can execute".into());
+    severity.governance_reason_code =
+        Some(crate::action::workflow::ActionGovernanceReasonCode::SeverityRequiresReview);
+    severity.governance_reason =
+        Some("severity=`high` forces human review before `enter` can execute".into());
     severity.symbol = "A.US".into();
     severity.confidence = dec!(0.80);
 
     let mut invalidation = case_summary_with_mechanisms("Capital Rotation", &[]);
     invalidation.workflow_state = "review".into();
     invalidation.execution_policy = Some(ActionExecutionPolicy::ReviewRequired);
-    invalidation.governance_reason_code = Some(
-        crate::action::workflow::ActionGovernanceReasonCode::InvalidationRuleMissing,
-    );
-    invalidation.governance_reason = Some("missing invalidation rule keeps this recommendation in review-required mode".into());
+    invalidation.governance_reason_code =
+        Some(crate::action::workflow::ActionGovernanceReasonCode::InvalidationRuleMissing);
+    invalidation.governance_reason =
+        Some("missing invalidation rule keeps this recommendation in review-required mode".into());
     invalidation.symbol = "B.US".into();
     invalidation.confidence = dec!(0.70);
 
     let mut alpha = case_summary_with_mechanisms("Event Catalyst", &[]);
     alpha.workflow_state = "review".into();
     alpha.execution_policy = Some(ActionExecutionPolicy::ReviewRequired);
-    alpha.governance_reason_code = Some(
-        crate::action::workflow::ActionGovernanceReasonCode::NonPositiveExpectedAlpha,
+    alpha.governance_reason_code =
+        Some(crate::action::workflow::ActionGovernanceReasonCode::NonPositiveExpectedAlpha);
+    alpha.governance_reason = Some(
+        "non-positive expected alpha keeps this recommendation in review-required mode".into(),
     );
-    alpha.governance_reason = Some("non-positive expected alpha keeps this recommendation in review-required mode".into());
     alpha.symbol = "C.US".into();
     alpha.confidence = dec!(0.60);
 
@@ -652,7 +697,10 @@ fn queue_pin_metrics_and_buckets_surface_pinned_cases() {
 
     assert_eq!(briefing.metrics.queue_pinned, 1);
     assert_eq!(briefing.queue_pin_buckets.pinned.len(), 1);
-    assert_eq!(briefing.queue_pin_buckets.pinned[0].setup_id, pinned.setup_id);
+    assert_eq!(
+        briefing.queue_pin_buckets.pinned[0].setup_id,
+        pinned.setup_id
+    );
     assert_eq!(review.metrics.queue_pinned, 1);
     assert_eq!(review.queue_pin_buckets.pinned.len(), 1);
     assert_eq!(review.queue_pin_buckets.pinned[0].setup_id, pinned.setup_id);
@@ -787,29 +835,31 @@ fn review_analytics_capture_drift_and_invalidation_patterns() {
     let analytics = build_case_review_analytics_with_assessments(
         &[base_case],
         &[runtime_1, runtime_2, workflow_update],
-        &[crate::persistence::case_realized_outcome::CaseRealizedOutcomeRecord {
-            setup_id: "setup:a".into(),
-            workflow_id: Some("wf:a".into()),
-            market: "us".into(),
-            symbol: Some("A.US".into()),
-            primary_lens: Some("iceberg".into()),
-            family: "Directed Flow".into(),
-            session: "opening".into(),
-            market_regime: "risk_off".into(),
-            entry_tick: 1,
-            entry_timestamp: OffsetDateTime::from_unix_timestamp(1_711_105_000).unwrap(),
-            resolved_tick: 6,
-            resolved_at: OffsetDateTime::from_unix_timestamp(1_711_105_600).unwrap(),
-            direction: 1,
-            return_pct: dec!(0.03),
-            net_return: dec!(0.02),
-            max_favorable_excursion: dec!(0.05),
-            max_adverse_excursion: dec!(-0.01),
-            followed_through: true,
-            invalidated: false,
-            structure_retained: true,
-            convergence_score: dec!(0.5),
-        }],
+        &[
+            crate::persistence::case_realized_outcome::CaseRealizedOutcomeRecord {
+                setup_id: "setup:a".into(),
+                workflow_id: Some("wf:a".into()),
+                market: "us".into(),
+                symbol: Some("A.US".into()),
+                primary_lens: Some("iceberg".into()),
+                family: "Directed Flow".into(),
+                session: "opening".into(),
+                market_regime: "risk_off".into(),
+                entry_tick: 1,
+                entry_timestamp: OffsetDateTime::from_unix_timestamp(1_711_105_000).unwrap(),
+                resolved_tick: 6,
+                resolved_at: OffsetDateTime::from_unix_timestamp(1_711_105_600).unwrap(),
+                direction: 1,
+                return_pct: dec!(0.03),
+                net_return: dec!(0.02),
+                max_favorable_excursion: dec!(0.05),
+                max_adverse_excursion: dec!(-0.01),
+                followed_through: true,
+                invalidated: false,
+                structure_retained: true,
+                convergence_score: dec!(0.5),
+            },
+        ],
         crate::pipeline::learning_loop::OutcomeLearningContext::default(),
     );
 
@@ -929,27 +979,26 @@ fn mechanism_transition_story_classifies_regime_shift() {
             predicates: vec![],
         },
     ];
-    new_case.reasoning_profile.primary_mechanism =
-        Some(crate::ontology::MechanismCandidate {
-            kind: crate::ontology::MechanismCandidateKind::CapitalRotation,
-            label: "Capital Rotation".into(),
-            score: dec!(0.68),
-            summary: "s".into(),
-            supporting_states: vec![],
-            invalidation: vec![],
-            human_checks: vec![],
-            factors: vec![crate::ontology::MechanismFactor {
-                key: "state:substitution_flow".into(),
-                label: "Substitution Flow".into(),
-                source: crate::ontology::MechanismFactorSource::State,
-                activation: dec!(0.72),
-                base_weight: dec!(0.60),
-                learned_weight_delta: Decimal::ZERO,
-                effective_weight: dec!(0.60),
-                contribution: dec!(0.43),
-            }],
-            counterfactuals: vec![],
-        });
+    new_case.reasoning_profile.primary_mechanism = Some(crate::ontology::MechanismCandidate {
+        kind: crate::ontology::MechanismCandidateKind::CapitalRotation,
+        label: "Capital Rotation".into(),
+        score: dec!(0.68),
+        summary: "s".into(),
+        supporting_states: vec![],
+        invalidation: vec![],
+        human_checks: vec![],
+        factors: vec![crate::ontology::MechanismFactor {
+            key: "state:substitution_flow".into(),
+            label: "Substitution Flow".into(),
+            source: crate::ontology::MechanismFactorSource::State,
+            activation: dec!(0.72),
+            base_weight: dec!(0.60),
+            learned_weight_delta: Decimal::ZERO,
+            effective_weight: dec!(0.60),
+            contribution: dec!(0.43),
+        }],
+        counterfactuals: vec![],
+    });
 
     let old_snapshot = CaseReasoningAssessmentSnapshot::from_record(
         CaseReasoningAssessmentRecord::from_case_summary(

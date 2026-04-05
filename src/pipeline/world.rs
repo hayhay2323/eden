@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use crate::external::polymarket::{PolymarketBias, PolymarketPrior, PolymarketSnapshot};
 use crate::graph::decision::DecisionSnapshot;
 use crate::graph::insights::GraphInsights;
+use crate::ontology::reasoning::{HypothesisTrack, TacticalSetup};
 use crate::ontology::world::{
-    BackwardReasoningSnapshot, EntityState, WorldLayer, WorldStateSnapshot,
+    BackwardReasoningSnapshot, EntityState, FlowPath, FlowPolarity, Vortex, WorldLayer,
+    WorldStateSnapshot,
 };
-use crate::ontology::{
-    ProvenanceMetadata, ProvenanceSource, ReasoningScope,
-};
+use crate::ontology::{ProvenanceMetadata, ProvenanceSource, ReasoningScope};
 use crate::pipeline::reasoning::ReasoningSnapshot;
 use crate::pipeline::signals::{DerivedSignalSnapshot, EventSnapshot, SignalScope};
 use rust_decimal::Decimal;
@@ -19,9 +19,7 @@ use crate::math::clamp_unit_interval;
 
 #[path = "world/backward.rs"]
 mod backward;
-use backward::{
-    derive_backward_reasoning, scope_key, world_layer_priority, world_provenance,
-};
+use backward::{derive_backward_reasoning, scope_key, world_layer_priority, world_provenance};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorldSnapshots {
@@ -53,6 +51,46 @@ impl WorldSnapshots {
             world_state,
             backward_reasoning,
         }
+    }
+}
+
+pub fn derive_with_backward_confirmation(
+    events: &EventSnapshot,
+    derived_signals: &DerivedSignalSnapshot,
+    insights: &GraphInsights,
+    decision: &DecisionSnapshot,
+    reasoning: &mut ReasoningSnapshot,
+    previous_setups: &[TacticalSetup],
+    previous_tracks: &[HypothesisTrack],
+    polymarket: Option<&PolymarketSnapshot>,
+    previous_backward_reasoning: Option<&BackwardReasoningSnapshot>,
+) -> WorldSnapshots {
+    let provisional = WorldSnapshots::derive(
+        events,
+        derived_signals,
+        insights,
+        decision,
+        reasoning,
+        polymarket,
+        previous_backward_reasoning,
+    );
+    if crate::pipeline::reasoning::apply_backward_confirmation_gate(
+        reasoning,
+        previous_setups,
+        previous_tracks,
+        &provisional.backward_reasoning,
+    ) {
+        WorldSnapshots::derive(
+            events,
+            derived_signals,
+            insights,
+            decision,
+            reasoning,
+            polymarket,
+            previous_backward_reasoning,
+        )
+    } else {
+        provisional
     }
 }
 
@@ -156,6 +194,8 @@ fn derive_world_state(
         ],
     });
 
+    let sector_narratives = extract_sector_narratives(events);
+
     for (sector, hypotheses) in sectors {
         let Some(top) = hypotheses
             .iter()
@@ -164,6 +204,28 @@ fn derive_world_state(
         else {
             continue;
         };
+
+        let narrative = sector_narratives.get(&sector.0);
+        let regime = if let Some(narrative) = narrative {
+            format!(
+                "sector {} {}: {}",
+                sector, narrative.dominant_driver, narrative.summary
+            )
+        } else {
+            top.statement.clone()
+        };
+        let mut drivers = top.expected_observations.clone();
+        if let Some(narrative) = narrative {
+            drivers.push(format!("cause={}", narrative.dominant_driver));
+            if let Some(ref label) = narrative.dominant_label {
+                drivers.push(format!("narrative={}", label));
+            }
+            drivers.push(format!(
+                "evidence={}/{} events attributed",
+                narrative.attributed_count, narrative.total_events
+            ));
+        }
+
         entities.push(EntityState {
             entity_id: format!("world:sector:{}", sector),
             scope: ReasoningScope::Sector(sector.clone()),
@@ -174,11 +236,11 @@ fn derive_world_state(
                 .with_trace_id(format!("world:sector:{}", sector))
                 .with_note("sector trunk"),
             label: format!("Sector {}", sector),
-            regime: top.statement.clone(),
+            regime,
             confidence: top.confidence,
             local_support: top.local_support_weight,
             propagated_support: top.propagated_support_weight,
-            drivers: top.expected_observations.clone(),
+            drivers,
         });
     }
 
@@ -268,11 +330,237 @@ fn derive_world_state(
             .then_with(|| a.entity_id.cmp(&b.entity_id))
     });
 
-    let _ = (events, decision); // reserved for richer world-state updates
+    let vortices = detect_vortices(&entities, events, reasoning);
+    let _ = decision;
     WorldStateSnapshot {
         timestamp: reasoning.timestamp,
         entities,
+        vortices,
     }
+}
+
+/// Detect vortices: convergence points where multiple independent causal paths meet.
+///
+/// A vortex forms when a branch/trunk-level entity receives flow from multiple
+/// leaf-level entities through distinct channels. The algorithm:
+/// 1. Identify candidate centers (Branch/Trunk/Forest entities with drivers)
+/// 2. For each center, find leaf entities whose scope is contained in the center's scope
+/// 3. Each feeding leaf contributes a FlowPath with its channel and polarity
+/// 4. Score the vortex by path count, channel diversity, and coherence
+fn detect_vortices(
+    entities: &[EntityState],
+    events: &EventSnapshot,
+    reasoning: &ReasoningSnapshot,
+) -> Vec<Vortex> {
+    let _ = events;
+    let leaf_entities: Vec<&EntityState> = entities
+        .iter()
+        .filter(|e| e.layer == WorldLayer::Leaf)
+        .collect();
+    let center_candidates: Vec<&EntityState> = entities
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.layer,
+                WorldLayer::Branch | WorldLayer::Trunk | WorldLayer::Forest
+            )
+        })
+        .filter(|e| !e.drivers.is_empty() || e.confidence > dec!(0.5))
+        .collect();
+
+    let hypothesis_lookup: HashMap<String, &crate::ontology::Hypothesis> = reasoning
+        .hypotheses
+        .iter()
+        .map(|h| (scope_key(&h.scope), h))
+        .collect();
+
+    let mut vortices = Vec::new();
+
+    for center in &center_candidates {
+        let center_scope_key = scope_key(&center.scope);
+        let mut flow_paths = Vec::new();
+        let mut channels: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for leaf in &leaf_entities {
+            if !leaf_feeds_center(leaf, center) {
+                continue;
+            }
+            let channel = infer_channel(leaf, center);
+            let polarity = infer_polarity(leaf, center, &hypothesis_lookup);
+            channels.insert(channel.clone());
+            flow_paths.push(FlowPath {
+                source_entity_id: leaf.entity_id.clone(),
+                source_scope: leaf.scope.clone(),
+                channel,
+                weight: leaf.confidence,
+                polarity,
+            });
+        }
+
+        if flow_paths.len() < 2 {
+            continue;
+        }
+
+        let confirming = flow_paths
+            .iter()
+            .filter(|p| p.polarity == FlowPolarity::Confirming)
+            .count();
+        let contradicting = flow_paths
+            .iter()
+            .filter(|p| p.polarity == FlowPolarity::Contradicting)
+            .count();
+        let total = flow_paths.len();
+        let coherence = if total > 0 {
+            let dominant = confirming.max(contradicting);
+            Decimal::from(dominant as u64) / Decimal::from(total as u64)
+        } else {
+            Decimal::ZERO
+        };
+
+        let weight_sum: Decimal = flow_paths.iter().map(|p| p.weight).sum();
+        let path_count_factor = Decimal::from(flow_paths.len().min(10) as u64) / dec!(10);
+        let diversity_factor = Decimal::from(channels.len().min(5) as u64) / dec!(5);
+        let strength =
+            clamp_unit_interval(weight_sum / dec!(3) * path_count_factor * diversity_factor);
+
+        vortices.push(Vortex {
+            vortex_id: format!("vortex:{}", center_scope_key),
+            center_entity_id: center.entity_id.clone(),
+            center_scope: center.scope.clone(),
+            layer: center.layer,
+            flow_paths,
+            strength,
+            channel_diversity: channels.len(),
+            coherence,
+            narrative: None,
+        });
+    }
+
+    vortices.sort_by(|a, b| b.strength.cmp(&a.strength));
+    vortices.truncate(10);
+    vortices
+}
+
+fn qualifies_for_attention_boost(vortex: &Vortex) -> bool {
+    vortex.strength >= dec!(0.3) && vortex.coherence >= dec!(0.6)
+}
+
+fn leaf_feeds_center(leaf: &EntityState, center: &EntityState) -> bool {
+    match (&leaf.scope, &center.scope) {
+        (ReasoningScope::Symbol(_), ReasoningScope::Sector(sector)) => {
+            leaf.drivers.iter().any(|d| d.contains(&sector.0)) || leaf.entity_id.contains(&sector.0)
+        }
+        (ReasoningScope::Symbol(_), ReasoningScope::Market(_)) => true,
+        (ReasoningScope::Sector(_), ReasoningScope::Market(_)) => true,
+        (ReasoningScope::Symbol(_), ReasoningScope::Theme(theme)) => {
+            leaf.drivers.iter().any(|d| d.contains(&theme.0))
+        }
+        _ => false,
+    }
+}
+
+fn infer_channel(leaf: &EntityState, _center: &EntityState) -> String {
+    if leaf
+        .drivers
+        .iter()
+        .any(|d| d.contains("broker") || d.contains("flow"))
+    {
+        return "broker_flow".into();
+    }
+    if leaf
+        .drivers
+        .iter()
+        .any(|d| d.contains("volume") || d.contains("spike"))
+    {
+        return "volume".into();
+    }
+    if leaf
+        .drivers
+        .iter()
+        .any(|d| d.contains("gap") || d.contains("price"))
+    {
+        return "price_action".into();
+    }
+    if leaf
+        .drivers
+        .iter()
+        .any(|d| d.contains("catalyst") || d.contains("event"))
+    {
+        return "catalyst".into();
+    }
+    if leaf
+        .drivers
+        .iter()
+        .any(|d| d.contains("propagat") || d.contains("peer"))
+    {
+        return "propagation".into();
+    }
+    "structure".into()
+}
+
+fn infer_polarity(
+    leaf: &EntityState,
+    center: &EntityState,
+    hypothesis_lookup: &HashMap<String, &crate::ontology::Hypothesis>,
+) -> FlowPolarity {
+    let leaf_hyp = hypothesis_lookup.get(&scope_key(&leaf.scope));
+    let center_hyp = hypothesis_lookup.get(&scope_key(&center.scope));
+    match (leaf_hyp, center_hyp) {
+        (Some(lh), Some(ch)) => {
+            let leaf_bullish = lh.local_support_weight > lh.local_contradict_weight;
+            let center_bullish = ch.local_support_weight > ch.local_contradict_weight;
+            if leaf_bullish == center_bullish {
+                FlowPolarity::Confirming
+            } else {
+                FlowPolarity::Contradicting
+            }
+        }
+        _ => FlowPolarity::Ambiguous,
+    }
+}
+
+/// Extract scopes that sit at the center of strong vortices.
+/// These can be used by the attention budget allocator to upgrade
+/// associated symbols from Standard to Deep.
+pub fn vortex_boosted_scopes(world_state: &WorldStateSnapshot) -> Vec<(ReasoningScope, Decimal)> {
+    world_state
+        .vortices
+        .iter()
+        .filter(|v| qualifies_for_attention_boost(v))
+        .map(|v| (v.center_scope.clone(), v.strength))
+        .collect()
+}
+
+/// Extract symbol scopes that feed into strong vortices.
+/// These symbols sit on the edge of a convergence structure and should
+/// receive at least standard attention on the following tick.
+pub fn vortex_edge_symbol_scopes(
+    world_state: &WorldStateSnapshot,
+) -> Vec<(ReasoningScope, Decimal)> {
+    let mut strongest = HashMap::<ReasoningScope, Decimal>::new();
+
+    for vortex in world_state
+        .vortices
+        .iter()
+        .filter(|v| qualifies_for_attention_boost(v))
+    {
+        for path in &vortex.flow_paths {
+            if let ReasoningScope::Symbol(_) = &path.source_scope {
+                strongest
+                    .entry(path.source_scope.clone())
+                    .and_modify(|current| {
+                        if vortex.strength > *current {
+                            *current = vortex.strength;
+                        }
+                    })
+                    .or_insert(vortex.strength);
+            }
+        }
+    }
+
+    let mut scopes = strongest.into_iter().collect::<Vec<_>>();
+    scopes.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.label().cmp(&b.0.label())));
+    scopes
 }
 
 fn strongest_market_prior(priors: &[PolymarketPrior]) -> Option<&PolymarketPrior> {
@@ -404,6 +692,110 @@ fn polymarket_layer(scope: &ReasoningScope) -> WorldLayer {
     }
 }
 
+struct SectorNarrative {
+    dominant_driver: String,
+    dominant_label: Option<String>,
+    summary: String,
+    attributed_count: usize,
+    total_events: usize,
+}
+
+fn extract_sector_narratives(events: &EventSnapshot) -> HashMap<String, SectorNarrative> {
+    let mut sector_data: HashMap<String, Vec<(&str, Option<&str>)>> = HashMap::new();
+
+    for event in &events.events {
+        let sector_id = match &event.value.scope {
+            SignalScope::Sector(sector) => Some(sector.0.as_str()),
+            _ => None,
+        };
+        let Some(sector_id) = sector_id else {
+            continue;
+        };
+
+        let mut driver: Option<&str> = None;
+        let mut label: Option<&str> = None;
+        for input in &event.provenance.inputs {
+            if let Some(rest) = input.strip_prefix("attr:driver=") {
+                driver = Some(rest);
+            }
+            if let Some(rest) = input.strip_prefix("attr:label=") {
+                label = Some(rest);
+            }
+        }
+        if let Some(driver) = driver {
+            sector_data
+                .entry(sector_id.to_string())
+                .or_default()
+                .push((driver, label));
+        }
+    }
+
+    let mut result = HashMap::new();
+    for (sector_id, attributions) in sector_data {
+        let total_events = attributions.len();
+        if total_events == 0 {
+            continue;
+        }
+
+        let mut driver_counts: HashMap<&str, usize> = HashMap::new();
+        let mut label_counts: HashMap<&str, usize> = HashMap::new();
+        for (driver, label) in &attributions {
+            *driver_counts.entry(driver).or_default() += 1;
+            if let Some(label) = label {
+                *label_counts.entry(label).or_default() += 1;
+            }
+        }
+
+        let dominant_driver = driver_counts
+            .iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(driver, _)| driver.to_string())
+            .unwrap_or_else(|| "unknown".into());
+        let dominant_label = label_counts
+            .iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(label, _)| label.to_string());
+
+        let summary = match dominant_driver.as_str() {
+            "macro_wide" => {
+                if let Some(ref label) = dominant_label {
+                    format!(
+                        "driven by macro-level forces ({}), expect broad sector impact",
+                        label
+                    )
+                } else {
+                    "driven by macro-level forces, expect broad sector impact".into()
+                }
+            }
+            "sector_wide" => {
+                if let Some(ref label) = dominant_label {
+                    format!(
+                        "sector-specific pressure from {}, peers should co-move",
+                        label
+                    )
+                } else {
+                    "sector-specific pressure detected, peers should co-move".into()
+                }
+            }
+            "company_specific" => {
+                "company-specific events dominate, sector propagation unlikely".into()
+            }
+            _ => format!("{} activity detected", dominant_driver),
+        };
+
+        result.insert(
+            sector_id,
+            SectorNarrative {
+                dominant_driver,
+                dominant_label,
+                summary,
+                attributed_count: total_events,
+                total_events,
+            },
+        );
+    }
+    result
+}
 
 #[cfg(test)]
 #[path = "world_tests.rs"]

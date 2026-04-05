@@ -7,17 +7,16 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "persistence")]
 use super::agent_api::AgentFeedQuery;
 #[cfg(feature = "persistence")]
+use super::constants::{DEFAULT_LIMIT, MAX_LIMIT};
+#[cfg(feature = "persistence")]
 use super::core::{bounded, case_market_slug, normalized_query_value, parse_case_market};
 use super::foundation::ApiError;
 #[cfg(feature = "persistence")]
 use super::foundation::ApiState;
-#[cfg(feature = "persistence")]
-use super::constants::{DEFAULT_LIMIT, MAX_LIMIT};
 
 #[cfg(feature = "persistence")]
 use crate::ontology::{
-    sector_node_id, symbol_node_id, KnowledgeEventKind, KnowledgeLinkAttributes,
-    KnowledgeRelation,
+    sector_node_id, symbol_node_id, KnowledgeEventKind, KnowledgeLinkAttributes, KnowledgeRelation,
 };
 #[cfg(feature = "persistence")]
 use crate::persistence::agent_graph::{
@@ -146,8 +145,7 @@ pub(super) async fn get_knowledge_link_history(
 }
 
 #[cfg(not(feature = "persistence"))]
-pub(super) async fn get_knowledge_link_history(
-) -> Result<Json<serde_json::Value>, ApiError> {
+pub(super) async fn get_knowledge_link_history() -> Result<Json<serde_json::Value>, ApiError> {
     Err(ApiError::not_implemented(
         "knowledge link history requires building with `--features persistence`",
     ))
@@ -166,7 +164,9 @@ pub(super) async fn get_macro_event_state(
         .store
         .current_macro_event_state(market_key, limit)
         .await
-        .map_err(|error| ApiError::internal(format!("failed to query macro event state: {error}")))?;
+        .map_err(|error| {
+            ApiError::internal(format!("failed to query macro event state: {error}"))
+        })?;
     if let Some(symbol) = normalized_query_value(query.symbol.as_deref()) {
         records.retain(|record| {
             record
@@ -207,7 +207,9 @@ pub(super) async fn get_knowledge_link_state(
         .store
         .current_knowledge_link_state(market_key, limit)
         .await
-        .map_err(|error| ApiError::internal(format!("failed to query knowledge link state: {error}")))?;
+        .map_err(|error| {
+            ApiError::internal(format!("failed to query knowledge link state: {error}"))
+        })?;
     if let Some(symbol) = normalized_query_value(query.symbol.as_deref()) {
         let node_id = symbol_node_id(symbol);
         records.retain(|record| {
@@ -231,8 +233,7 @@ pub(super) async fn get_knowledge_link_state(
 }
 
 #[cfg(not(feature = "persistence"))]
-pub(super) async fn get_knowledge_link_state(
-) -> Result<Json<serde_json::Value>, ApiError> {
+pub(super) async fn get_knowledge_link_state() -> Result<Json<serde_json::Value>, ApiError> {
     Err(ApiError::not_implemented(
         "knowledge link state requires building with `--features persistence`",
     ))
@@ -256,12 +257,16 @@ pub(super) async fn get_graph_node(
         .store
         .current_knowledge_link_state_for_node(market_key, &node_id, limit)
         .await
-        .map_err(|error| ApiError::internal(format!("failed to query current node links: {error}")))?;
+        .map_err(|error| {
+            ApiError::internal(format!("failed to query current node links: {error}"))
+        })?;
     let mut current_events = state
         .store
         .current_knowledge_event_state_for_node(market_key, &node_id, limit)
         .await
-        .map_err(|error| ApiError::internal(format!("failed to query current node events: {error}")))?;
+        .map_err(|error| {
+            ApiError::internal(format!("failed to query current node events: {error}"))
+        })?;
     let node_history = state
         .store
         .recent_knowledge_node_history_for_id(market_key, &node_id, query.since_tick, limit)
@@ -327,12 +332,16 @@ pub(super) async fn get_graph_links(
         .store
         .recent_knowledge_link_history(market_key, query.since_tick, limit)
         .await
-        .map_err(|error| ApiError::internal(format!("failed to query graph link history: {error}")))?;
+        .map_err(|error| {
+            ApiError::internal(format!("failed to query graph link history: {error}"))
+        })?;
     let mut event_history = state
         .store
         .recent_knowledge_event_history(market_key, query.since_tick, limit)
         .await
-        .map_err(|error| ApiError::internal(format!("failed to query graph event history: {error}")))?;
+        .map_err(|error| {
+            ApiError::internal(format!("failed to query graph event history: {error}"))
+        })?;
 
     current_links.retain(|link| matches_graph_link_state(link, &query));
     link_history.retain(|link| matches_graph_link_history(link, &query));

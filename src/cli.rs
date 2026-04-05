@@ -1,6 +1,7 @@
 use crate::external::polymarket::{
     fetch_polymarket_snapshot, load_polymarket_configs, PolymarketMarketConfig, PolymarketSnapshot,
 };
+use crate::operator_commands::OperatorCommandDescriptor;
 #[cfg(feature = "persistence")]
 use crate::persistence::lineage_metric_row::{row_matches_filters, snapshot_records_from_rows};
 #[cfg(feature = "persistence")]
@@ -9,14 +10,19 @@ use crate::persistence::lineage_snapshot::LineageSnapshotRecord;
 use crate::persistence::store::EdenStore;
 #[cfg(feature = "persistence")]
 use crate::persistence::tactical_setup::TacticalSetupRecord;
+use crate::runtime_tasks::{
+    RuntimeTaskCreateRequest, RuntimeTaskFilter, RuntimeTaskKind, RuntimeTaskRecord,
+    RuntimeTaskStatus, RuntimeTaskStatusUpdateRequest,
+};
 #[cfg(feature = "persistence")]
 use crate::temporal::buffer::TickHistory;
 #[cfg(feature = "persistence")]
-use crate::temporal::causality::{compute_causal_timelines, CausalFlipEvent, CausalTimeline, CausalTimelinePoint};
+use crate::temporal::causality::{
+    compute_causal_timelines, CausalFlipEvent, CausalTimeline, CausalTimelinePoint,
+};
 use crate::temporal::lineage::{LineageAlignmentFilter, LineageFilters, LineageSortKey};
 use rust_decimal::Decimal;
 
-#[cfg(feature = "persistence")]
 type AppError = Box<dyn std::error::Error + Send + Sync>;
 
 #[path = "cli/parser.rs"]

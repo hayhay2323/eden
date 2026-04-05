@@ -10,8 +10,6 @@ use super::objects::{BrokerId, InstitutionId, Symbol};
 use super::snapshot::RawSnapshot;
 use super::store::ObjectStore;
 
-#[path = "links/types.rs"]
-mod types;
 #[path = "links/broker.rs"]
 mod broker;
 #[path = "links/market_data.rs"]
@@ -20,6 +18,8 @@ mod market_data;
 mod quote_trade;
 #[path = "links/replay.rs"]
 mod replay;
+#[path = "links/types.rs"]
+mod types;
 
 pub use quote_trade::convert_pre_post_quote;
 pub use types::*;
@@ -40,10 +40,8 @@ impl LinkSnapshot {
         let broker_queues = broker::compute_broker_queues(raw);
         let calc_indexes = market_data::compute_calc_indexes(raw);
         let candlesticks = market_data::compute_candlesticks(raw);
-        let institution_activities =
-            broker::compute_institution_activities(&broker_queues, store);
-        let cross_stock_presences =
-            broker::compute_cross_stock_presences(&institution_activities);
+        let institution_activities = broker::compute_institution_activities(&broker_queues, store);
+        let cross_stock_presences = broker::compute_cross_stock_presences(&institution_activities);
         let capital_flows = market_data::compute_capital_flows(raw);
         let capital_flow_series = market_data::compute_capital_flow_series(raw);
         let capital_breakdowns = market_data::compute_capital_breakdowns(raw);
@@ -66,7 +64,14 @@ impl LinkSnapshot {
             order_books,
             quotes,
             trade_activities,
+            intraday: vec![],
         }
+    }
+
+    /// Attach intraday observations (from REST fetch, not part of RawSnapshot).
+    pub fn with_intraday(mut self, intraday: Vec<IntradayObservation>) -> Self {
+        self.intraday = intraday;
+        self
     }
 }
 

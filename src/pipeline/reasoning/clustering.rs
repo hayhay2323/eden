@@ -3,14 +3,13 @@ use std::collections::HashMap;
 use rust_decimal::Decimal;
 
 use crate::ontology::reasoning::{
-    CaseCluster, Hypothesis, HypothesisTrack, HypothesisTrackStatus, PropagationPath,
-    TacticalSetup,
+    CaseCluster, Hypothesis, HypothesisTrack, HypothesisTrackStatus, PropagationPath, TacticalSetup,
 };
 use crate::ontology::scope_node_id;
 
 use super::policy::action_priority;
 
-pub(super) fn derive_case_clusters(
+pub(crate) fn derive_case_clusters(
     hypotheses: &[Hypothesis],
     propagation_paths: &[PropagationPath],
     setups: &[TacticalSetup],
@@ -241,6 +240,7 @@ fn cluster_trend_priority(status: HypothesisTrackStatus) -> i32 {
 
 fn family_label(family_key: &str) -> &'static str {
     match family_key {
+        "convergence_hypothesis" => "Convergence",
         "flow" => "Flow",
         "liquidity" => "Liquidity",
         "propagation" => "Propagation",
@@ -265,6 +265,9 @@ pub(crate) fn cluster_title(
     } else if member_count <= 1 {
         format!("{} solo case around {}", family, linkage_key)
     } else {
-        format!("{} cluster x{} around {}", family, member_count, linkage_key)
+        format!(
+            "{} cluster x{} around {}",
+            family, member_count, linkage_key
+        )
     }
 }

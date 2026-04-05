@@ -15,8 +15,8 @@ use crate::us::temporal::record::UsTickRecord;
 
 use super::super::store_helpers::{
     fetch_ordered_records, fetch_ordered_records_custom, fetch_ranked_records,
-    fetch_recent_tick_window, fetch_records_in_time_range, fetch_tick_archives_in_range,
-    StoreError,
+    fetch_recent_tick_window, fetch_records_by_field_order, fetch_records_in_time_range,
+    fetch_tick_archives_in_range, StoreError,
 };
 use super::EdenStore;
 
@@ -240,7 +240,13 @@ impl EdenStore {
         archive: &crate::ontology::microstructure::TickArchive,
     ) -> Result<(), StoreError> {
         let id = format!("tick_archive_{}", archive.tick_number);
-        crate::persistence::store_helpers::upsert_record_checked(&self.db, "tick_archive", &id, archive).await
+        crate::persistence::store_helpers::upsert_record_checked(
+            &self.db,
+            "tick_archive",
+            &id,
+            archive,
+        )
+        .await
     }
 
     pub async fn query_order_books(
@@ -365,6 +371,42 @@ impl EdenStore {
             .into_iter()
             .filter_map(|r| r.signals.get(sym).cloned())
             .collect())
+    }
+}
+
+    /// Load all candidate mechanisms for a given market.
+    pub async fn load_candidate_mechanisms(
+        &self,
+        market: &str,
+    ) -> Result<Vec<crate::persistence::candidate_mechanism::CandidateMechanismRecord>, StoreError>
+    {
+        fetch_records_by_field_order(
+            &self.db,
+            "candidate_mechanism",
+            "market",
+            market,
+            "last_seen_tick",
+            false,
+            500,
+        )
+        .await
+    }
+
+    /// Load all causal schemas for a given market.
+    pub async fn load_causal_schemas(
+        &self,
+        market: &str,
+    ) -> Result<Vec<crate::persistence::causal_schema::CausalSchemaRecord>, StoreError> {
+        fetch_records_by_field_order(
+            &self.db,
+            "causal_schema",
+            "market",
+            market,
+            "last_applied_tick",
+            false,
+            200,
+        )
+        .await
     }
 }
 

@@ -363,6 +363,7 @@ mod tests {
             governance_reason_code: ActionGovernanceReasonCode::SeverityRequiresReview,
             governance_reason: "severity=`high` forces human review before `enter` can execute"
                 .into(),
+            matched_success_pattern_signature: None,
         });
 
         let card = narration_action_card(&decision);

@@ -29,6 +29,7 @@ mod tests {
             volume_profile: Decimal::ZERO,
             pre_post_market_anomaly: dec!(-0.5),
             valuation: dec!(0.5),
+            multi_horizon_momentum: Decimal::ZERO,
         };
 
         assert_eq!(dimension_composite(&dims), dec!(0.3));

@@ -105,21 +105,19 @@ pub(crate) fn evaluate_setup_outcome(
         return None;
     }
 
-    let resolved_record = future_records.last().copied().or_else(|| window_by_tick.get(&context.entry_tick).copied())?;
-    let resolved_price = resolved_record.signals.get(symbol).and_then(effective_price)?;
+    let resolved_record = future_records
+        .last()
+        .copied()
+        .or_else(|| window_by_tick.get(&context.entry_tick).copied())?;
+    let resolved_price = resolved_record
+        .signals
+        .get(symbol)
+        .and_then(effective_price)?;
     let return_pct = oriented_return(entry_price, resolved_price, context.direction);
     let execution_cost = estimated_execution_cost(symbol, context, window_by_tick);
     let net_return = return_pct - execution_cost;
-    let max_favorable_excursion = path_returns
-        .iter()
-        .copied()
-        .max()
-        .unwrap_or(Decimal::ZERO);
-    let max_adverse_excursion = path_returns
-        .iter()
-        .copied()
-        .min()
-        .unwrap_or(Decimal::ZERO);
+    let max_favorable_excursion = path_returns.iter().copied().max().unwrap_or(Decimal::ZERO);
+    let max_adverse_excursion = path_returns.iter().copied().min().unwrap_or(Decimal::ZERO);
     let followed_through = max_favorable_excursion > dec!(0.003);
     let invalidated = max_adverse_excursion < dec!(-0.003);
     let structure_retained = followed_through && !invalidated;
@@ -180,7 +178,8 @@ pub(crate) fn fade_return(
     followed_through: bool,
 ) -> Decimal {
     if structure_failed || invalidated || !followed_through {
-        let reversal_capture = (-max_adverse_excursion - estimated_execution_cost).max(Decimal::ZERO);
+        let reversal_capture =
+            (-max_adverse_excursion - estimated_execution_cost).max(Decimal::ZERO);
         if reversal_capture > material_move {
             reversal_capture
         } else {
@@ -197,7 +196,11 @@ fn oriented_return(entry_price: Decimal, exit_price: Decimal, direction: i8) -> 
     }
 
     let raw = (exit_price - entry_price) / entry_price;
-    if direction < 0 { -raw } else { raw }
+    if direction < 0 {
+        -raw
+    } else {
+        raw
+    }
 }
 
 fn effective_price(signal: &SymbolSignals) -> Option<Decimal> {

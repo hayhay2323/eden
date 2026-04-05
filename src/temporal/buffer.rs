@@ -135,6 +135,7 @@ mod tests {
             world_state: WorldStateSnapshot {
                 timestamp: OffsetDateTime::UNIX_EPOCH,
                 entities: vec![],
+                vortices: vec![],
             },
             backward_reasoning: BackwardReasoningSnapshot {
                 timestamp: OffsetDateTime::UNIX_EPOCH,

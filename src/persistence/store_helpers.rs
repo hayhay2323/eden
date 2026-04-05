@@ -236,9 +236,8 @@ pub(super) async fn fetch_optional_market_record_by_field<T: DeserializeOwned>(
     field: &str,
     value: &str,
 ) -> Result<Option<T>, StoreError> {
-    let query = format!(
-        "SELECT * FROM {table} WHERE market = $market AND {field} = $value LIMIT 1"
-    );
+    let query =
+        format!("SELECT * FROM {table} WHERE market = $market AND {field} = $value LIMIT 1");
     let result = db
         .query(query)
         .bind(("market", market.to_string()))

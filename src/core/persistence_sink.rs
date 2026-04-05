@@ -2,7 +2,7 @@ use crate::agent::{
     AgentAlertScoreboard, AgentBriefing, AgentEodReview, AgentRecommendations, AgentSession,
     AgentSnapshot, AgentWatchlist,
 };
-use crate::agent_llm::AgentNarration;
+use crate::agent::llm::AgentNarration;
 use crate::cases::CaseMarket;
 use crate::core::projection::ProjectionBundle;
 use crate::live_snapshot::spawn_write_json_snapshot;

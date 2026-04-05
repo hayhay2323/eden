@@ -129,7 +129,9 @@ pub fn derive_backward_snapshot(
 
             let confidence = mean_abs_weight(&evidence);
             let primary_driver = evidence
-                .first()
+                .iter()
+                .find(|item| item.source != "relative_valuation")
+                .or_else(|| evidence.first())
                 .map(|e| e.source.clone())
                 .unwrap_or_else(|| "unknown".into());
 
@@ -228,14 +230,15 @@ fn build_evidence(
     if dims.valuation.abs() > Decimal::ZERO {
         let pct = (dims.valuation * Decimal::from(100)).round_dp(1);
         let val_str = if dims.valuation > Decimal::ZERO {
-            "估值偏低"
+            "相對同業估值較低"
         } else {
-            "估值偏高"
+            "相對同業估值較高"
         };
         items.push(UsBackwardEvidence {
-            source: "valuation".into(),
-            description: format!("{}（偏差{}%）", val_str, pct.abs()),
-            weight: dims.valuation.abs(),
+            // This is a relative peer factor, not a standalone intrinsic-value judgment.
+            source: "relative_valuation".into(),
+            description: format!("{}（相對偏差{}%）", val_str, pct.abs()),
+            weight: (dims.valuation.abs() * Decimal::new(35, 2)).round_dp(4),
             direction: dims.valuation,
         });
     }
@@ -430,6 +433,7 @@ mod tests {
             volume_profile: volume,
             pre_post_market_anomaly: prepost,
             valuation: val,
+            multi_horizon_momentum: Decimal::ZERO,
         }
     }
 
@@ -686,6 +690,7 @@ mod tests {
             priority_score: dec!(0.05),
             attention_hint: "review".into(),
             rationale: "test".into(),
+            review_reason_code: None,
             notes: vec![],
         }];
         let snapshot =

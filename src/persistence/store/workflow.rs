@@ -4,6 +4,7 @@ use crate::persistence::case_realized_outcome::CaseRealizedOutcomeRecord;
 use crate::persistence::case_reasoning_assessment::CaseReasoningAssessmentRecord;
 use crate::persistence::hypothesis_track::HypothesisTrackRecord;
 use crate::persistence::tactical_setup::TacticalSetupRecord;
+use serde_json::Value;
 
 use super::super::store_helpers::{
     fetch_latest_timestamp_field, fetch_market_state_records, fetch_optional_record_by_field,
@@ -11,6 +12,8 @@ use super::super::store_helpers::{
     upsert_record_checked, StoreError,
 };
 use super::EdenStore;
+
+const WORKFLOW_EVENT_SCAN_LIMIT: usize = 10_000;
 
 impl EdenStore {
     pub async fn write_action_workflow(
@@ -24,7 +27,13 @@ impl EdenStore {
         &self,
         record: &ActionWorkflowEventRecord,
     ) -> Result<(), StoreError> {
-        upsert_record_checked(&self.db, "action_workflow_event", record.record_id(), record).await
+        upsert_record_checked(
+            &self.db,
+            "action_workflow_event",
+            record.record_id(),
+            record,
+        )
+        .await
     }
 
     pub async fn write_tactical_setup(
@@ -178,7 +187,23 @@ impl EdenStore {
             workflow_id,
             "recorded_at",
             true,
-            usize::MAX,
+            WORKFLOW_EVENT_SCAN_LIMIT,
+        )
+        .await
+    }
+
+    pub async fn action_workflow_event_values(
+        &self,
+        workflow_id: &str,
+    ) -> Result<Vec<Value>, StoreError> {
+        fetch_records_by_field_order(
+            &self.db,
+            "action_workflow_event",
+            "workflow_id",
+            workflow_id,
+            "recorded_at",
+            true,
+            WORKFLOW_EVENT_SCAN_LIMIT,
         )
         .await
     }
@@ -188,5 +213,4 @@ impl EdenStore {
     ) -> Result<Option<time::OffsetDateTime>, StoreError> {
         fetch_latest_timestamp_field(&self.db, "action_workflow", "recorded_at").await
     }
-
 }

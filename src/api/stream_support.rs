@@ -112,7 +112,9 @@ pub(in crate::api) async fn latest_file_revision(
     }
 
     let Some((len, modified, path)) = best else {
-        return Err(ApiError::internal("failed to stat any stream artifact candidate"));
+        return Err(ApiError::internal(
+            "failed to stat any stream artifact candidate",
+        ));
     };
 
     let modified = modified

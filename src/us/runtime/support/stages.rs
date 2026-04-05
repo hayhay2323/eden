@@ -13,7 +13,10 @@ pub(crate) async fn maybe_refresh_us_learning_feedback(
         return;
     }
 
-    let Ok(assessments) = store.recent_case_reasoning_assessments_by_market("us", 240).await else {
+    let Ok(assessments) = store
+        .recent_case_reasoning_assessments_by_market("us", 240)
+        .await
+    else {
         return;
     };
     if assessments.is_empty() {

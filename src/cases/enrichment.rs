@@ -5,12 +5,6 @@ use crate::action::workflow::{governance_reason, governance_reason_code};
 #[cfg(feature = "persistence")]
 use crate::cases::{CaseLineageContext, CaseMarket};
 #[cfg(feature = "persistence")]
-use crate::pipeline::learning_loop::apply_learning_feedback;
-use crate::pipeline::mechanism_inference::build_reasoning_profile as infer_reasoning_profile;
-use crate::pipeline::predicate_engine::{
-    augment_predicates_with_workflow, derive_human_review_context,
-};
-#[cfg(feature = "persistence")]
 use crate::persistence::case_realized_outcome::CaseRealizedOutcomeRecord;
 #[cfg(feature = "persistence")]
 use crate::persistence::case_reasoning_assessment::CaseReasoningAssessmentRecord;
@@ -22,26 +16,32 @@ use crate::persistence::store::EdenStore;
 use crate::persistence::tactical_setup::TacticalSetupRecord;
 #[cfg(feature = "persistence")]
 use crate::persistence::us_lineage_metric_row::UsLineageMetricRowRecord;
+#[cfg(feature = "persistence")]
+use crate::pipeline::learning_loop::apply_learning_feedback;
+use crate::pipeline::mechanism_inference::build_reasoning_profile as infer_reasoning_profile;
+use crate::pipeline::predicate_engine::{
+    augment_predicates_with_workflow, derive_human_review_context,
+};
 
+#[cfg(feature = "persistence")]
+use super::io::CaseError;
 #[cfg(feature = "persistence")]
 use super::reasoning_story::{build_case_mechanism_story, record_invalidation_rules};
 #[cfg(feature = "persistence")]
 use super::review_analytics::{
     build_case_review_analytics_with_assessments, load_outcome_learning_context,
 };
-use super::types::{CaseReviewResponse, CaseSummary};
-#[cfg(feature = "persistence")]
-use crate::live_snapshot::LiveMarket;
 #[cfg(feature = "persistence")]
 use super::types::{
     CaseDetail, CaseReasoningAssessmentSnapshot, CaseWorkflowEvent, CaseWorkflowState,
 };
+use super::types::{CaseReviewResponse, CaseSummary};
 #[cfg(feature = "persistence")]
-use super::io::CaseError;
-#[cfg(feature = "persistence")]
-use std::collections::HashMap;
+use crate::live_snapshot::LiveMarket;
 #[cfg(feature = "persistence")]
 use crate::pipeline::learning_loop::derive_learning_feedback;
+#[cfg(feature = "persistence")]
+use std::collections::HashMap;
 
 #[cfg(feature = "persistence")]
 pub async fn enrich_case_summaries(
@@ -156,8 +156,10 @@ pub async fn enrich_case_detail(
                 Some(workflow.current_stage),
                 workflow.execution_policy,
             ));
-            detail.summary.governance_reason =
-                Some(governance_reason(Some(workflow.current_stage), workflow.execution_policy));
+            detail.summary.governance_reason = Some(governance_reason(
+                Some(workflow.current_stage),
+                workflow.execution_policy,
+            ));
             detail.workflow = Some(CaseWorkflowState {
                 workflow_id: workflow.workflow_id.clone(),
                 stage: workflow.current_stage.as_str().to_string(),

@@ -18,6 +18,7 @@ pub struct SymbolDimensions {
     pub valuation_support: Decimal,         // cheaper / higher-yielding than peers = positive
     pub activity_momentum: Decimal,         // active tape + positive short-term move = positive
     pub candlestick_conviction: Decimal,    // recent OHLCV confirms upside = positive
+    pub multi_horizon_momentum: Decimal,    // 5d/10d/ytd trend alignment = positive
 }
 
 /// Market-wide dimension snapshot.
@@ -38,8 +39,8 @@ impl DimensionSnapshot {
         let valuation_support = compute_valuation_support(links, store);
         let activity_momentum = compute_activity_momentum(links);
         let candlestick_conviction = compute_candlestick_conviction(links);
+        let multi_horizon = compute_multi_horizon_momentum(links);
 
-        // Collect all symbols that appear in any dimension.
         let mut all_symbols: HashSet<Symbol> = HashSet::new();
         for s in book_pressure.keys() {
             all_symbols.insert(s.clone());
@@ -65,6 +66,9 @@ impl DimensionSnapshot {
         for s in candlestick_conviction.keys() {
             all_symbols.insert(s.clone());
         }
+        for s in multi_horizon.keys() {
+            all_symbols.insert(s.clone());
+        }
 
         let zero = Decimal::ZERO;
         let dimensions = all_symbols
@@ -82,6 +86,7 @@ impl DimensionSnapshot {
                         .get(&sym)
                         .copied()
                         .unwrap_or(zero),
+                    multi_horizon_momentum: multi_horizon.get(&sym).copied().unwrap_or(zero),
                 };
                 (sym, dims)
             })
@@ -366,9 +371,44 @@ fn compute_activity_momentum(links: &LinkSnapshot) -> HashMap<Symbol, Decimal> {
                 })
                 .unwrap_or(Decimal::ZERO);
 
+            // VWAP confirmation: price above/below avg_price strengthens directional signal
+            let vwap_boost = links
+                .intraday
+                .iter()
+                .find(|obs| obs.symbol == idx.symbol)
+                .map(|obs| clamp_signed_unit_interval(obs.vwap_deviation * Decimal::from(5)))
+                .unwrap_or(Decimal::ZERO);
+
             let activity_level = average([volume_boost, turnover_boost, amplitude_boost]);
-            let value = direction * ((Decimal::ONE + activity_level) / Decimal::TWO);
+            // VWAP confirms direction: if both point same way, boost; if they conflict, dampen
+            let vwap_factor = if (direction > Decimal::ZERO) == (vwap_boost > Decimal::ZERO) {
+                Decimal::ONE + vwap_boost.abs() * Decimal::new(3, 1) // up to +30% boost
+            } else {
+                Decimal::ONE - vwap_boost.abs() * Decimal::new(2, 1) // up to -20% dampening
+            };
+            let value = direction * ((Decimal::ONE + activity_level) / Decimal::TWO) * vwap_factor;
             (idx.symbol.clone(), clamp_signed_unit_interval(value))
+        })
+        .collect()
+}
+
+fn compute_multi_horizon_momentum(links: &LinkSnapshot) -> HashMap<Symbol, Decimal> {
+    links
+        .calc_indexes
+        .iter()
+        .filter_map(|idx| {
+            let five_d = idx.five_day_change_rate?;
+            let ten_d = idx.ten_day_change_rate.unwrap_or(five_d);
+            let ytd = idx.ytd_change_rate.unwrap_or(Decimal::ZERO);
+
+            let short = clamp_signed_unit_interval(five_d / Decimal::new(10, 2));
+            let mid = clamp_signed_unit_interval(ten_d / Decimal::new(15, 2));
+            let long = clamp_signed_unit_interval(ytd / Decimal::new(30, 2));
+
+            let aligned = short * Decimal::new(5, 1)
+                + mid * Decimal::new(3, 1)
+                + long * Decimal::new(2, 1);
+            Some((idx.symbol.clone(), clamp_signed_unit_interval(aligned)))
         })
         .collect()
 }
@@ -415,6 +455,7 @@ mod tests {
             order_books: vec![],
             quotes: vec![],
             trade_activities: vec![],
+            intraday: vec![],
         }
     }
 
@@ -754,6 +795,13 @@ mod tests {
             dividend_ratio_ttm: Some(dec!(0.01)),
             amplitude: None,
             five_minutes_change_rate: None,
+            ytd_change_rate: None,
+            five_day_change_rate: None,
+            ten_day_change_rate: None,
+            half_year_change_rate: None,
+            total_market_value: None,
+            capital_flow: None,
+            change_rate: None,
         });
 
         let store = make_store(vec![
@@ -778,6 +826,13 @@ mod tests {
             dividend_ratio_ttm: None,
             amplitude: Some(dec!(0.06)),
             five_minutes_change_rate: Some(dec!(0.02)),
+            ytd_change_rate: None,
+            five_day_change_rate: None,
+            ten_day_change_rate: None,
+            half_year_change_rate: None,
+            total_market_value: None,
+            capital_flow: None,
+            change_rate: None,
         });
 
         let activity = compute_activity_momentum(&links);

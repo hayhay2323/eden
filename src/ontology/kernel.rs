@@ -24,8 +24,8 @@ pub mod facts {
 
 pub mod events {
     pub use super::super::knowledge::{
-        AgentKnowledgeEvent, AgentKnowledgeLink, AgentKnowledgeNodeRef, AgentMacroEvent,
-        AgentMacroEventCandidate, AgentEventImpact, EvidenceRef, EvidenceRefKind,
+        AgentEventImpact, AgentKnowledgeEvent, AgentKnowledgeLink, AgentKnowledgeNodeRef,
+        AgentMacroEvent, AgentMacroEventCandidate, EvidenceRef, EvidenceRefKind,
         KnowledgeEventKind, KnowledgeLinkAttributes, KnowledgeRelation,
     };
     pub use super::super::world::{

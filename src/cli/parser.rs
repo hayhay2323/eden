@@ -29,10 +29,26 @@ pub enum CliCommand {
         filters: LineageFilters,
         view: LineageViewOptions,
     },
+    TasksList {
+        json: bool,
+        filters: RuntimeTaskFilter,
+    },
+    TasksCreate {
+        json: bool,
+        input: RuntimeTaskCreateRequest,
+    },
+    TasksUpdateStatus {
+        json: bool,
+        task_id: String,
+        update: RuntimeTaskStatusUpdateRequest,
+    },
+    OperatorCommands {
+        json: bool,
+    },
 }
 
 const CLI_USAGE: &str =
-    "usage: eden us\n       eden polymarket [--json]\n       eden causal timeline <leaf_scope_key> [limit]\n       eden causal flips [limit]\n       eden lineage [limit] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--json]\n       eden lineage history [snapshots] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--latest-only] [--json]\n       eden lineage rows [rows] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--latest-only] [--json]";
+    "usage: eden us\n       eden polymarket [--json]\n       eden causal timeline <leaf_scope_key> [limit]\n       eden causal flips [limit]\n       eden lineage [limit] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--json]\n       eden lineage history [snapshots] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--latest-only] [--json]\n       eden lineage rows [rows] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--latest-only] [--json]\n       eden tasks [--status <value>] [--kind <value>] [--market <value>] [--owner <value>] [--json]\n       eden tasks create <kind> --label <value> [--market <value>] [--owner <value>] [--detail <value>] [--json]\n       eden tasks status <task_id> <status> [--detail <value>] [--error <value>] [--json]\n       eden operator commands [--json]";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LineageViewOptions {
@@ -73,8 +89,219 @@ pub fn parse_cli_command(args: &[String]) -> Result<CliCommand, String> {
             _ => Err(CLI_USAGE.into()),
         },
         Some("lineage") => parse_lineage_cli_command(&args[2..], DEFAULT_LIMIT),
+        Some("tasks") => parse_tasks_cli_command(&args[2..]),
+        Some("operator") => parse_operator_cli_command(&args[2..]),
         _ => Err(CLI_USAGE.into()),
     }
+}
+
+fn parse_tasks_cli_command(args: &[String]) -> Result<CliCommand, String> {
+    match args.first().map(|value| value.as_str()) {
+        Some("create") => parse_tasks_create_command(&args[1..]),
+        Some("status") => parse_tasks_status_command(&args[1..]),
+        Some("list") => parse_tasks_list_command(&args[1..]),
+        _ => parse_tasks_list_command(args),
+    }
+}
+
+fn parse_tasks_list_command(args: &[String]) -> Result<CliCommand, String> {
+    let mut json = false;
+    let mut filters = RuntimeTaskFilter::default();
+    let mut index = 0usize;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--status" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --status".to_string())?;
+                filters.status = Some(value.parse::<RuntimeTaskStatus>()?);
+                index += 2;
+            }
+            "--kind" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --kind".to_string())?;
+                filters.kind = Some(value.parse::<RuntimeTaskKind>()?);
+                index += 2;
+            }
+            "--market" => {
+                filters.market = Some(
+                    args.get(index + 1)
+                        .ok_or_else(|| "missing value for --market".to_string())?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--owner" => {
+                filters.owner = Some(
+                    args.get(index + 1)
+                        .ok_or_else(|| "missing value for --owner".to_string())?
+                        .clone(),
+                );
+                index += 2;
+            }
+            other => return Err(format!("unknown tasks flag: {other}")),
+        }
+    }
+
+    Ok(CliCommand::TasksList { json, filters })
+}
+
+fn parse_tasks_create_command(args: &[String]) -> Result<CliCommand, String> {
+    let kind = args
+        .first()
+        .ok_or_else(|| {
+            "usage: eden tasks create <kind> --label <value> [--market <value>] [--owner <value>] [--detail <value>] [--json]"
+                .to_string()
+        })?
+        .parse::<RuntimeTaskKind>()?;
+    let mut json = false;
+    let mut label: Option<String> = None;
+    let mut market: Option<String> = None;
+    let mut owner: Option<String> = None;
+    let mut detail: Option<String> = None;
+    let mut index = 1usize;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--label" => {
+                label = Some(
+                    args.get(index + 1)
+                        .ok_or_else(|| "missing value for --label".to_string())?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--market" => {
+                market = Some(
+                    args.get(index + 1)
+                        .ok_or_else(|| "missing value for --market".to_string())?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--owner" => {
+                owner = Some(
+                    args.get(index + 1)
+                        .ok_or_else(|| "missing value for --owner".to_string())?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--detail" => {
+                detail = Some(
+                    args.get(index + 1)
+                        .ok_or_else(|| "missing value for --detail".to_string())?
+                        .clone(),
+                );
+                index += 2;
+            }
+            other => return Err(format!("unknown tasks create flag: {other}")),
+        }
+    }
+
+    let label = label.ok_or_else(|| "missing required --label for tasks create".to_string())?;
+    Ok(CliCommand::TasksCreate {
+        json,
+        input: RuntimeTaskCreateRequest {
+            label,
+            kind,
+            market,
+            owner,
+            detail,
+            metadata: None,
+        },
+    })
+}
+
+fn parse_tasks_status_command(args: &[String]) -> Result<CliCommand, String> {
+    let task_id = args.first().cloned().ok_or_else(|| {
+        "usage: eden tasks status <task_id> <status> [--detail <value>] [--error <value>] [--json]"
+            .to_string()
+    })?;
+    let status = args
+        .get(1)
+        .ok_or_else(|| {
+            "usage: eden tasks status <task_id> <status> [--detail <value>] [--error <value>] [--json]"
+                .to_string()
+        })?
+        .parse::<RuntimeTaskStatus>()?;
+    let mut json = false;
+    let mut detail: Option<String> = None;
+    let mut error: Option<String> = None;
+    let mut index = 2usize;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--detail" => {
+                detail = Some(
+                    args.get(index + 1)
+                        .ok_or_else(|| "missing value for --detail".to_string())?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--error" => {
+                error = Some(
+                    args.get(index + 1)
+                        .ok_or_else(|| "missing value for --error".to_string())?
+                        .clone(),
+                );
+                index += 2;
+            }
+            other => return Err(format!("unknown tasks status flag: {other}")),
+        }
+    }
+
+    Ok(CliCommand::TasksUpdateStatus {
+        json,
+        task_id,
+        update: RuntimeTaskStatusUpdateRequest {
+            status,
+            detail,
+            error,
+            metadata: None,
+        },
+    })
+}
+
+fn parse_operator_cli_command(args: &[String]) -> Result<CliCommand, String> {
+    if matches!(
+        args.first().map(|value| value.as_str()),
+        Some("commands") | None
+    ) {
+        let rest = if matches!(args.first().map(|value| value.as_str()), Some("commands")) {
+            &args[1..]
+        } else {
+            args
+        };
+        let mut json = false;
+        let mut index = 0usize;
+        while index < rest.len() {
+            match rest[index].as_str() {
+                "--json" => {
+                    json = true;
+                    index += 1;
+                }
+                other => return Err(format!("unknown operator flag: {other}")),
+            }
+        }
+        return Ok(CliCommand::OperatorCommands { json });
+    }
+    Err(CLI_USAGE.into())
 }
 
 fn parse_lineage_cli_command(args: &[String], default_limit: usize) -> Result<CliCommand, String> {
@@ -214,5 +441,48 @@ fn parse_optional_limit(arg: Option<&String>, default: usize) -> Result<usize, S
                     Ok(limit)
                 }
             }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_tasks_create_command() {
+        let args = vec![
+            "eden".to_string(),
+            "tasks".to_string(),
+            "create".to_string(),
+            "operator".to_string(),
+            "--label".to_string(),
+            "Review alerts".to_string(),
+            "--market".to_string(),
+            "hk".to_string(),
+        ];
+        let command = parse_cli_command(&args).expect("parse");
+        match command {
+            CliCommand::TasksCreate { input, .. } => {
+                assert_eq!(input.kind, RuntimeTaskKind::Operator);
+                assert_eq!(input.label, "Review alerts");
+                assert_eq!(input.market.as_deref(), Some("hk"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_operator_commands_command() {
+        let args = vec![
+            "eden".to_string(),
+            "operator".to_string(),
+            "commands".to_string(),
+            "--json".to_string(),
+        ];
+        let command = parse_cli_command(&args).expect("parse");
+        match command {
+            CliCommand::OperatorCommands { json } => assert!(json),
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 }

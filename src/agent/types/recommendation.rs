@@ -82,6 +82,8 @@ pub struct AgentWatchlistEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thesis_family: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_success_pattern_signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_transition: Option<String>,
     pub best_action: String,
     #[serde(flatten)]
@@ -276,6 +278,8 @@ pub struct AgentRecommendation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thesis_family: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_success_pattern_signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_transition: Option<String>,
     pub best_action: String,
     #[serde(flatten)]
@@ -343,7 +347,8 @@ impl AgentWatchlistEntry {
             self.severity.as_str(),
             self.invalidation_rule.as_deref(),
             self.expected_net_alpha,
-            self.execution_policy.unwrap_or(ActionExecutionPolicy::ReviewRequired),
+            self.execution_policy
+                .unwrap_or(ActionExecutionPolicy::ReviewRequired),
         )
     }
 
@@ -353,7 +358,8 @@ impl AgentWatchlistEntry {
             self.severity.as_str(),
             self.invalidation_rule.as_deref(),
             self.expected_net_alpha,
-            self.execution_policy.unwrap_or(ActionExecutionPolicy::ReviewRequired),
+            self.execution_policy
+                .unwrap_or(ActionExecutionPolicy::ReviewRequired),
         )
     }
 }
@@ -534,9 +540,7 @@ pub(crate) fn governance_reason_code_for_signal_action(
             }
         }
         ActionExecutionPolicy::ReviewRequired => {
-            if matches!(severity, "high" | "critical") {
-                ActionGovernanceReasonCode::SeverityRequiresReview
-            } else if invalidation_rule
+            if invalidation_rule
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .is_none()
@@ -544,10 +548,43 @@ pub(crate) fn governance_reason_code_for_signal_action(
                 ActionGovernanceReasonCode::InvalidationRuleMissing
             } else if expected_net_alpha.unwrap_or(Decimal::ZERO) <= Decimal::ZERO {
                 ActionGovernanceReasonCode::NonPositiveExpectedAlpha
+            } else if matches!(severity, "high" | "critical") {
+                ActionGovernanceReasonCode::SeverityRequiresReview
             } else {
                 ActionGovernanceReasonCode::OperatorActionRequired
             }
         }
         ActionExecutionPolicy::AutoEligible => ActionGovernanceReasonCode::AutoExecutionEligible,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_required_prefers_missing_invalidation_rule_over_severity() {
+        let code = governance_reason_code_for_signal_action(
+            "enter",
+            "high",
+            None,
+            Some(Decimal::new(5, 2)),
+            ActionExecutionPolicy::ReviewRequired,
+        );
+
+        assert_eq!(code, ActionGovernanceReasonCode::InvalidationRuleMissing);
+    }
+
+    #[test]
+    fn review_required_uses_severity_after_rule_and_alpha_are_valid() {
+        let code = governance_reason_code_for_signal_action(
+            "enter",
+            "high",
+            Some("if spread collapses"),
+            Some(Decimal::new(5, 2)),
+            ActionExecutionPolicy::ReviewRequired,
+        );
+
+        assert_eq!(code, ActionGovernanceReasonCode::SeverityRequiresReview);
     }
 }

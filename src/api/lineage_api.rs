@@ -3,9 +3,7 @@ use axum::extract::{Path, Query, State};
 use axum::Json;
 
 #[cfg(feature = "persistence")]
-use super::constants::{
-    DEFAULT_LIMIT, DEFAULT_TOP, DEFAULT_US_RESOLUTION_LAG, MAX_LIMIT, MAX_TOP,
-};
+use super::constants::{DEFAULT_LIMIT, DEFAULT_TOP, DEFAULT_US_RESOLUTION_LAG, MAX_LIMIT, MAX_TOP};
 #[cfg(feature = "persistence")]
 use super::core::bounded;
 use super::foundation::ApiError;
@@ -40,22 +38,22 @@ use crate::us::temporal::causality::{
 #[cfg(feature = "persistence")]
 use crate::us::temporal::lineage::UsLineageStats;
 
+#[path = "lineage_api/hk.rs"]
+mod hk;
 #[path = "lineage_api/types.rs"]
 mod types;
 #[path = "lineage_api/us.rs"]
 mod us;
-#[path = "lineage_api/hk.rs"]
-mod hk;
 
+#[cfg(feature = "persistence")]
+pub(in crate::api) use hk::parse_sort_key;
 pub(super) use hk::{
     get_causal_flips, get_causal_timeline, get_lineage, get_lineage_history, get_lineage_rows,
 };
+use types::*;
+#[cfg(feature = "persistence")]
+pub(in crate::api) use us::parse_us_lineage_sort_key;
 pub(super) use us::{
     get_us_causal_flips, get_us_causal_timeline, get_us_lineage, get_us_lineage_history,
     get_us_lineage_rows,
 };
-#[cfg(feature = "persistence")]
-pub(in crate::api) use hk::parse_sort_key;
-#[cfg(feature = "persistence")]
-pub(in crate::api) use us::parse_us_lineage_sort_key;
-use types::*;

@@ -57,7 +57,9 @@ pub(super) fn compute_institution_rotations(brain: &BrainGraph) -> Vec<Instituti
     results
 }
 
-pub(super) fn collect_institution_stock_counts(brain: &BrainGraph) -> HashMap<InstitutionId, usize> {
+pub(super) fn collect_institution_stock_counts(
+    brain: &BrainGraph,
+) -> HashMap<InstitutionId, usize> {
     brain
         .institution_nodes
         .iter()
@@ -110,7 +112,10 @@ pub(super) fn compute_institution_exoduses(
         .collect()
 }
 
-pub(super) fn compute_shared_holders(brain: &BrainGraph, store: &ObjectStore) -> Vec<SharedHolderAnomaly> {
+pub(super) fn compute_shared_holders(
+    brain: &BrainGraph,
+    store: &ObjectStore,
+) -> Vec<SharedHolderAnomaly> {
     // Collect institution sets per stock
     let mut stock_institutions: HashMap<&Symbol, HashSet<InstitutionId>> = HashMap::new();
     for (symbol, &stock_idx) in &brain.stock_nodes {

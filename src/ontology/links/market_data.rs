@@ -68,6 +68,13 @@ pub(super) fn compute_calc_indexes(raw: &RawSnapshot) -> Vec<CalcIndexObservatio
             dividend_ratio_ttm: idx.dividend_ratio_ttm,
             amplitude: idx.amplitude,
             five_minutes_change_rate: idx.five_minutes_change_rate,
+            ytd_change_rate: idx.ytd_change_rate,
+            five_day_change_rate: idx.five_day_change_rate,
+            ten_day_change_rate: idx.ten_day_change_rate,
+            half_year_change_rate: idx.half_year_change_rate,
+            total_market_value: idx.total_market_value,
+            capital_flow: idx.capital_flow,
+            change_rate: idx.change_rate,
         })
         .collect()
 }
@@ -160,7 +167,10 @@ pub(super) fn compute_candlesticks(raw: &RawSnapshot) -> Vec<CandlestickObservat
         .collect()
 }
 
-pub(super) fn compute_depth_profile(levels: &[DepthLevel], best_price: Option<Decimal>) -> DepthProfile {
+pub(super) fn compute_depth_profile(
+    levels: &[DepthLevel],
+    best_price: Option<Decimal>,
+) -> DepthProfile {
     let active_levels = levels.iter().filter(|l| l.volume > 0).count();
     let total_vol: i64 = levels.iter().map(|l| l.volume).sum();
 
@@ -200,7 +210,9 @@ pub(super) fn compute_depth_profile(levels: &[DepthLevel], best_price: Option<De
     }
 }
 
-pub(super) fn compute_market_temperature(raw: &RawSnapshot) -> Option<MarketTemperatureObservation> {
+pub(super) fn compute_market_temperature(
+    raw: &RawSnapshot,
+) -> Option<MarketTemperatureObservation> {
     raw.market_temperature
         .as_ref()
         .map(|temp| MarketTemperatureObservation {

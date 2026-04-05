@@ -19,6 +19,8 @@ pub struct AgentSnapshot {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_transitions: Vec<AgentTransition>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub investigation_selections: Vec<InvestigationSelection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sector_flows: Vec<AgentSectorFlow>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub symbols: Vec<AgentSymbolState>,
@@ -133,6 +135,8 @@ pub enum AgentToolOutput {
     MacroEventContracts(Vec<crate::ontology::MacroEventContract>),
     Tools(Vec<AgentToolSpec>),
     Session(AgentSession),
+    Investigations(AgentInvestigations),
+    Judgments(AgentJudgments),
     SymbolContract(crate::ontology::SymbolStateContract),
     Watchlist(AgentWatchlist),
     Recommendations(AgentRecommendations),
@@ -179,6 +183,11 @@ impl AgentToolOutput {
                 .last()
                 .and_then(|turn| turn.headline.clone())
                 .or_else(|| session.focus_symbols.first().cloned()),
+            Self::Investigations(investigations) => investigations
+                .items
+                .first()
+                .map(|item| item.summary.clone()),
+            Self::Judgments(judgments) => judgments.items.first().map(|item| item.summary.clone()),
             Self::SymbolContract(item) => item
                 .state
                 .structure

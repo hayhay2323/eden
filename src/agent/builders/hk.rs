@@ -1,8 +1,8 @@
-use super::*;
 use super::shared::{
     build_hk_depth_state, build_hk_invalidation, build_hk_structure_state, hk_events_by_symbol,
     hk_recent_transitions, hk_signal_state, institutions_by_symbol,
 };
+use super::*;
 
 pub fn build_hk_agent_snapshot(
     live: &LiveSnapshot,
@@ -17,6 +17,11 @@ pub fn build_hk_agent_snapshot(
         .expect("HK agent snapshot requires at least one tick");
     let previous_tick = history.latest_n(2).into_iter().rev().nth(1);
     let previous_symbols = previous_agent_symbol_map(previous_agent);
+    let live_cases = live
+        .tactical_cases
+        .iter()
+        .map(|item| (item.setup_id.as_str(), item))
+        .collect::<HashMap<_, _>>();
 
     let hypotheses = latest
         .hypotheses
@@ -92,6 +97,7 @@ pub fn build_hk_agent_snapshot(
             let backward = backward.get(symbol.as_str()).copied();
             let hypothesis =
                 setup.and_then(|item| hypotheses.get(item.hypothesis_id.as_str()).copied());
+            let live_case = setup.and_then(|item| live_cases.get(item.setup_id.as_str()).copied());
             let context_prior = hypothesis.and_then(|item| {
                 best_hk_context_prior(
                     item.family_label.as_str(),
@@ -125,11 +131,12 @@ pub fn build_hk_agent_snapshot(
                     backward,
                     hypothesis,
                     context_prior.as_ref(),
+                    live_case,
                 ),
                 signal: current_signal.map(hk_signal_state),
                 depth,
                 brokers,
-                invalidation: build_hk_invalidation(track, hypothesis, backward, setup),
+                invalidation: build_hk_invalidation(track, hypothesis, backward, setup, live_case),
                 pressure: pressures.get(symbol.as_str()).cloned().cloned(),
                 active_position: positions.get(symbol.as_str()).cloned().cloned(),
                 latest_events: events_by_symbol
@@ -153,6 +160,7 @@ pub fn build_hk_agent_snapshot(
         &live.events,
     );
     let wake = build_wake_state(
+        live.market,
         live.tick,
         &notices,
         &recent_transitions,
@@ -198,6 +206,7 @@ pub fn build_hk_agent_snapshot(
         notices,
         active_structures,
         recent_transitions,
+        investigation_selections: vec![],
         sector_flows,
         symbols,
         events: live.events.clone(),

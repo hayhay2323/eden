@@ -1,5 +1,5 @@
-use super::*;
 use super::market_data::compute_depth_profile;
+use super::*;
 
 pub(super) fn compute_order_books(raw: &RawSnapshot) -> Vec<OrderBookObservation> {
     raw.depths
@@ -132,7 +132,9 @@ pub(super) fn compute_trade_activities(raw: &RawSnapshot) -> Vec<TradeActivity> 
         .collect()
 }
 
-pub(super) fn market_status_from_trade_status(status: longport::quote::TradeStatus) -> MarketStatus {
+pub(super) fn market_status_from_trade_status(
+    status: longport::quote::TradeStatus,
+) -> MarketStatus {
     use longport::quote::TradeStatus;
     #[allow(unreachable_patterns)]
     match status {

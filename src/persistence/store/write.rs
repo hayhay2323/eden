@@ -50,16 +50,20 @@ impl EdenStore {
         &self,
         records: &[LineageMetricRowRecord],
     ) -> Result<(), StoreError> {
-        upsert_batch_checked(&self.db, "lineage_metric_row", records, |record| &record.row_id)
-            .await
+        upsert_batch_checked(&self.db, "lineage_metric_row", records, |record| {
+            &record.row_id
+        })
+        .await
     }
 
     pub async fn write_us_lineage_metric_rows(
         &self,
         records: &[UsLineageMetricRowRecord],
     ) -> Result<(), StoreError> {
-        upsert_batch_checked(&self.db, "us_lineage_metric_row", records, |record| &record.row_id)
-            .await
+        upsert_batch_checked(&self.db, "us_lineage_metric_row", records, |record| {
+            &record.row_id
+        })
+        .await
     }
 
     pub async fn write_institution_states(
@@ -102,7 +106,35 @@ impl EdenStore {
             })
             .collect::<Vec<_>>();
 
-        upsert_batch_checked(&self.db, "institution_state", &records, |(record_id, _)| record_id)
-            .await
+        upsert_batch_checked(&self.db, "institution_state", &records, |(record_id, _)| {
+            record_id
+        })
+        .await
+    }
+
+    pub async fn write_candidate_mechanisms(
+        &self,
+        records: &[crate::persistence::candidate_mechanism::CandidateMechanismRecord],
+    ) -> Result<(), StoreError> {
+        upsert_batch_checked(
+            &self.db,
+            "candidate_mechanism",
+            records,
+            |record| &record.mechanism_id,
+        )
+        .await
+    }
+
+    pub async fn write_causal_schemas(
+        &self,
+        records: &[crate::persistence::causal_schema::CausalSchemaRecord],
+    ) -> Result<(), StoreError> {
+        upsert_batch_checked(
+            &self.db,
+            "causal_schema",
+            records,
+            |record| &record.schema_id,
+        )
+        .await
     }
 }

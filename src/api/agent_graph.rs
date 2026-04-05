@@ -40,8 +40,8 @@ pub(super) async fn get_agent_knowledge_link_history(
 }
 
 #[cfg(not(feature = "persistence"))]
-pub(super) async fn get_agent_knowledge_link_history(
-) -> Result<Json<serde_json::Value>, ApiError> {
+pub(super) async fn get_agent_knowledge_link_history() -> Result<Json<serde_json::Value>, ApiError>
+{
     super::ontology_graph_api::get_knowledge_link_history().await
 }
 
@@ -69,8 +69,7 @@ pub(super) async fn get_agent_knowledge_link_state(
 }
 
 #[cfg(not(feature = "persistence"))]
-pub(super) async fn get_agent_knowledge_link_state(
-) -> Result<Json<serde_json::Value>, ApiError> {
+pub(super) async fn get_agent_knowledge_link_state() -> Result<Json<serde_json::Value>, ApiError> {
     super::ontology_graph_api::get_knowledge_link_state().await
 }
 

@@ -25,8 +25,13 @@ fn default_case(symbol: &str) -> LiveTacticalCase {
         confidence_gap: dec!(0.10),
         heuristic_edge: dec!(0.10),
         entry_rationale: "synthetic test scenario".to_string(),
+        review_reason_code: None,
+        policy_primary: None,
+        policy_reason: None,
+        multi_horizon_gate_reason: None,
         family_label: None,
         counter_label: None,
+        matched_success_pattern_signature: None,
     }
 }
 
@@ -177,6 +182,7 @@ impl ScenarioBuilder {
                 .first()
                 .map(|(_, w)| *w)
                 .unwrap_or(dec!(0.70)),
+            freshness: None,
             evidence,
         });
         self
@@ -229,6 +235,8 @@ impl ScenarioBuilder {
             symbol: None,
             magnitude,
             summary: summary.to_string(),
+            age_secs: None,
+            freshness: None,
         });
         self
     }

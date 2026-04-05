@@ -5,9 +5,7 @@ use std::collections::HashMap;
 use crate::persistence::case_reasoning_assessment::CaseReasoningAssessmentRecord;
 
 #[cfg(feature = "persistence")]
-use super::shared::{
-    assessment_snapshot_from_summary, regime_bucket, snapshot_matches_current,
-};
+use super::shared::{assessment_snapshot_from_summary, regime_bucket, snapshot_matches_current};
 #[cfg(feature = "persistence")]
 use super::story::describe_mechanism_transition;
 #[cfg(feature = "persistence")]

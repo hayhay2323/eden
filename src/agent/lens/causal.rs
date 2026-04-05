@@ -37,8 +37,7 @@ impl SignalLens for CausalAttributionLens {
 
         let mut why_fragment = format!(
             "主因: {} (連續{}t領先)",
-            leading.explanation,
-            backward.leading_cause_streak
+            leading.explanation, backward.leading_cause_streak
         );
         if let Some(summary) = backward.leader_transition_summary.clone() {
             why_fragment.push_str("；");

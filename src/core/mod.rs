@@ -1,5 +1,9 @@
 pub mod analyst_service;
 pub mod artifact_repository;
+pub mod context;
+#[cfg(feature = "coordinator")]
+pub mod coordinator;
+pub mod feature_gates;
 pub mod market;
 pub mod persistence_sink;
 pub mod projection;

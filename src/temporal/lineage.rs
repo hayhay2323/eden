@@ -1,16 +1,37 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::buffer::TickHistory;
+#[path = "lineage/evolution.rs"]
+mod evolution;
 #[path = "lineage/outcomes.rs"]
 mod outcomes;
-pub use outcomes::{compute_case_realized_outcomes, compute_case_realized_outcomes_adaptive, compute_family_context_outcomes};
+#[path = "lineage/schema.rs"]
+mod schema;
+#[path = "lineage/vortex.rs"]
+mod vortex;
 use outcomes::*;
+pub use outcomes::{
+    compute_case_realized_outcomes, compute_case_realized_outcomes_adaptive,
+    compute_family_context_outcomes,
+};
 #[cfg(test)]
 use outcomes::{fade_return, setup_direction};
+pub use evolution::{
+    detect_quality_degradation, run_evolution_cycle, shadow_score_schema, EvolutionCycleResult,
+    EvolutionEvent, ShadowScore, SurfaceQualitySnapshot,
+};
+pub use schema::extract_causal_schema;
+pub use vortex::{
+    active_candidate_mechanisms, compute_vortex_success_patterns,
+    compute_vortex_successful_fingerprints, evaluate_candidate_mechanisms,
+    live_candidate_mechanisms, score_candidate_mechanism, vortex_matches_success_pattern,
+    VortexOutcomeFingerprint, VortexSuccessPattern,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LineageStats {
@@ -105,6 +126,94 @@ pub struct FamilyContextLineageOutcome {
     pub fade_expectancy: Decimal,
     #[serde(default)]
     pub wait_expectancy: Decimal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HorizonLineageMetric {
+    pub horizon: String,
+    pub template: String,
+    pub total: usize,
+    pub resolved: usize,
+    pub hits: usize,
+    pub hit_rate: Decimal,
+    pub mean_return: Decimal,
+}
+
+/// Distinguishes "never tried" (cold start — allow through) from
+/// "tried but failed" (block).
+#[derive(Debug, Clone, Default)]
+pub struct MultiHorizonGate {
+    pub supported: HashSet<String>,
+    pub attempted: HashSet<String>,
+}
+
+impl MultiHorizonGate {
+    pub fn from_metrics(metrics: &[HorizonLineageMetric]) -> Self {
+        let (supported, attempted) = multi_horizon_family_status(metrics);
+        Self {
+            supported,
+            attempted,
+        }
+    }
+
+    /// A family is allowed if it has proven itself OR has never been tried.
+    /// Only families that have been attempted and failed are blocked.
+    pub fn allows(&self, family: &str) -> bool {
+        self.supported.contains(family) || !self.attempted.contains(family)
+    }
+}
+
+pub fn strong_multi_horizon_families(metrics: &[HorizonLineageMetric]) -> HashSet<String> {
+    let (supported, _attempted) = multi_horizon_family_status(metrics);
+    supported
+}
+
+fn multi_horizon_family_status(
+    metrics: &[HorizonLineageMetric],
+) -> (HashSet<String>, HashSet<String>) {
+    let non_tick: Vec<_> = metrics
+        .iter()
+        .filter(|item| item.horizon != "50t")
+        .collect();
+    let attempted: HashSet<String> = non_tick
+        .iter()
+        .filter(|item| item.resolved > 0)
+        .map(|item| item.template.clone())
+        .collect();
+    let supported: HashSet<String> = non_tick
+        .iter()
+        .filter(|item| item.mean_return > Decimal::ZERO)
+        .filter(|item| passes_multi_horizon_gate(item))
+        .map(|item| item.template.clone())
+        .collect();
+    (supported, attempted)
+}
+
+fn passes_multi_horizon_gate(item: &HorizonLineageMetric) -> bool {
+    let normalized = item.template.to_ascii_lowercase();
+    let (min_resolved, min_hit_rate) =
+        if normalized.contains("sector_rotation") || normalized.contains("sector rotation") {
+            (8usize, Decimal::new(55, 2))
+        } else if normalized.contains("structural_diffusion")
+            || normalized.contains("structural diffusion")
+        {
+            (5usize, Decimal::new(58, 2))
+        } else if normalized.contains("pre_market_positioning")
+            || normalized.contains("pre-market positioning")
+        {
+            (5usize, Decimal::new(58, 2))
+        } else if normalized.contains("cross_market_arbitrage")
+            || normalized.contains("cross-market arbitrage")
+            || normalized.contains("arbitrage")
+        {
+            (8usize, Decimal::new(52, 2))
+        } else if item.horizon == "session" {
+            (5usize, Decimal::new(52, 2))
+        } else {
+            (5usize, Decimal::new(55, 2))
+        };
+
+    item.resolved >= min_resolved && item.hit_rate >= min_hit_rate
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -471,6 +580,103 @@ pub fn compute_lineage_stats(history: &TickHistory, limit: usize) -> LineageStat
     }
 }
 
+pub fn estimate_tick_lag_for_minutes(history: &TickHistory, minutes: i64) -> Option<u64> {
+    let records = history.latest_n(history.len());
+    if records.len() < 2 || minutes <= 0 {
+        return None;
+    }
+    let first = records.first()?.timestamp;
+    let last = records.last()?.timestamp;
+    let elapsed_secs = (last - first).whole_seconds().max(1);
+    let avg_secs_per_tick = Decimal::from(elapsed_secs) / Decimal::from((records.len() - 1) as i64);
+    if avg_secs_per_tick <= Decimal::ZERO {
+        return None;
+    }
+    let target_secs = Decimal::from(minutes * 60);
+    let ticks = (target_secs / avg_secs_per_tick).round_dp(0);
+    ticks.to_u64().filter(|value| *value > 0)
+}
+
+pub fn compute_multi_horizon_lineage_metrics(
+    history: &TickHistory,
+    limit: usize,
+    session_minutes: i64,
+) -> Vec<HorizonLineageMetric> {
+    let mut items = Vec::new();
+    items.extend(aggregate_outcomes_by_family(
+        "50t",
+        compute_case_realized_outcomes(history, limit, 50),
+    ));
+
+    if let Some(lag_5m) = estimate_tick_lag_for_minutes(history, 5) {
+        items.extend(aggregate_outcomes_by_family(
+            "5m",
+            compute_case_realized_outcomes(history, limit, lag_5m),
+        ));
+    }
+    if let Some(lag_30m) = estimate_tick_lag_for_minutes(history, 30) {
+        items.extend(aggregate_outcomes_by_family(
+            "30m",
+            compute_case_realized_outcomes(history, limit, lag_30m),
+        ));
+    }
+    if let Some(lag_session) = estimate_tick_lag_for_minutes(history, session_minutes) {
+        items.extend(aggregate_outcomes_by_family(
+            "session",
+            compute_case_realized_outcomes(history, limit, lag_session),
+        ));
+    }
+
+    items
+}
+
+fn aggregate_outcomes_by_family(
+    horizon: &str,
+    outcomes: Vec<CaseRealizedOutcome>,
+) -> Vec<HorizonLineageMetric> {
+    let mut acc = HashMap::<String, (usize, usize, Decimal)>::new();
+    for outcome in outcomes {
+        let entry = acc.entry(outcome.family).or_insert((0, 0, Decimal::ZERO));
+        entry.0 += 1;
+        if outcome.net_return > Decimal::ZERO {
+            entry.1 += 1;
+        }
+        entry.2 += outcome.net_return;
+    }
+
+    let mut items = acc
+        .into_iter()
+        .map(
+            |(template, (resolved, hits, total_return))| HorizonLineageMetric {
+                horizon: horizon.to_string(),
+                template,
+                total: resolved,
+                resolved,
+                hits,
+                hit_rate: if resolved == 0 {
+                    Decimal::ZERO
+                } else {
+                    Decimal::from(hits as i64) / Decimal::from(resolved as i64)
+                },
+                mean_return: if resolved == 0 {
+                    Decimal::ZERO
+                } else {
+                    total_return / Decimal::from(resolved as i64)
+                },
+            },
+        )
+        .collect::<Vec<_>>();
+
+    items.sort_by(|a, b| {
+        b.hit_rate
+            .cmp(&a.hit_rate)
+            .then_with(|| b.mean_return.cmp(&a.mean_return))
+            .then_with(|| b.resolved.cmp(&a.resolved))
+            .then_with(|| a.template.cmp(&b.template))
+    });
+    items.truncate(3);
+    items
+}
 
 #[cfg(test)]
 #[path = "lineage_tests.rs"]

@@ -2,8 +2,8 @@ use super::*;
 use crate::ontology::{
     BackwardCause, CausalContestState, ProvenanceMetadata, ProvenanceSource, Symbol, WorldLayer,
 };
-use time::OffsetDateTime;
 use rust_decimal_macros::dec;
+use time::OffsetDateTime;
 
 fn base_snapshot(symbols: Vec<AgentSymbolState>) -> AgentSnapshot {
     AgentSnapshot {
@@ -41,6 +41,7 @@ fn base_snapshot(symbols: Vec<AgentSymbolState>) -> AgentSnapshot {
         notices: vec![],
         active_structures: vec![],
         recent_transitions: vec![],
+        investigation_selections: vec![],
         sector_flows: vec![],
         symbols,
         events: vec![],
@@ -67,10 +68,7 @@ fn symbol(symbol: &str) -> AgentSymbolState {
     }
 }
 
-fn context<'a>(
-    snapshot: &'a AgentSnapshot,
-    symbol: &'a AgentSymbolState,
-) -> LensContext<'a> {
+fn context<'a>(snapshot: &'a AgentSnapshot, symbol: &'a AgentSymbolState) -> LensContext<'a> {
     LensContext {
         snapshot,
         symbol,
@@ -101,6 +99,8 @@ fn iceberg_lens_emits_from_iceberg_events() {
         symbol: Some("700.HK".into()),
         magnitude: dec!(0.72),
         summary: "iceberg".into(),
+        age_secs: None,
+        freshness: None,
     }];
     state.brokers = Some(AgentBrokerState {
         current: vec![],
@@ -113,7 +113,9 @@ fn iceberg_lens_emits_from_iceberg_events() {
     let observations = super::iceberg::IcebergLens.observe(&context(&snapshot, &state));
     assert_eq!(observations.len(), 1);
     assert!(observations[0].why_fragment.contains("冰山回補"));
-    assert!(observations[0].invalidation_fragments.contains(&"冰山回補停止".into()));
+    assert!(observations[0]
+        .invalidation_fragments
+        .contains(&"冰山回補停止".into()));
 }
 
 #[test]
@@ -151,7 +153,9 @@ fn structural_lens_emits_status_and_invalidation() {
     });
     let snapshot = base_snapshot(vec![state.clone()]);
     let observations = super::structural::StructuralLens.observe(&context(&snapshot, &state));
-    assert!(observations.iter().any(|item| item.why_fragment.contains("結構 strengthening")));
+    assert!(observations
+        .iter()
+        .any(|item| item.why_fragment.contains("結構 strengthening")));
     assert!(observations
         .iter()
         .flat_map(|item| item.invalidation_fragments.iter())
@@ -207,7 +211,9 @@ fn causal_lens_emits_leading_cause_and_falsifier() {
         ..context(&snapshot, &state)
     };
     let observations = super::causal::CausalAttributionLens.observe(&ctx);
-    assert!(observations[0].why_fragment.contains("主因: institutional flow dominates"));
+    assert!(observations[0]
+        .why_fragment
+        .contains("主因: institutional flow dominates"));
     assert!(observations[0]
         .invalidation_fragments
         .iter()
@@ -259,6 +265,8 @@ fn lens_engine_orders_and_dedupes_fragments() {
         symbol: Some("700.HK".into()),
         magnitude: dec!(0.72),
         summary: "iceberg".into(),
+        age_secs: None,
+        freshness: None,
     }];
     state.structure = Some(AgentStructureState {
         symbol: "700.HK".into(),

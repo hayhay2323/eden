@@ -3,9 +3,7 @@ use super::market_data::compute_depth_profile;
 use super::types::*;
 use super::*;
 use crate::math::clamp_signed_unit_interval;
-use crate::ontology::microstructure::{
-    ArchivedTradeDirection, TickArchive, TradeSession,
-};
+use crate::ontology::microstructure::{ArchivedTradeDirection, TickArchive, TradeSession};
 
 impl LinkSnapshot {
     /// Reconstruct a LinkSnapshot from a persisted TickArchive.
@@ -36,6 +34,7 @@ impl LinkSnapshot {
             order_books,
             quotes,
             trade_activities,
+            intraday: vec![],
         }
     }
 }
@@ -121,8 +120,8 @@ fn replay_quotes(archive: &TickArchive) -> Vec<QuoteObservation> {
         .quotes
         .iter()
         .map(|q| {
-            let convert_ext = |ext: &crate::ontology::microstructure::ExtendedQuote| {
-                ExtendedSessionQuote {
+            let convert_ext =
+                |ext: &crate::ontology::microstructure::ExtendedQuote| ExtendedSessionQuote {
                     last_done: ext.last_done,
                     timestamp: ext.timestamp,
                     volume: ext.volume,
@@ -130,8 +129,7 @@ fn replay_quotes(archive: &TickArchive) -> Vec<QuoteObservation> {
                     high: ext.high,
                     low: ext.low,
                     prev_close: ext.prev_close,
-                }
-            };
+                };
 
             QuoteObservation {
                 symbol: q.symbol.clone(),
@@ -155,10 +153,7 @@ fn replay_trade_activities(archive: &TickArchive) -> Vec<TradeActivity> {
     let mut by_symbol: HashMap<Symbol, Vec<&crate::ontology::microstructure::ArchivedTrade>> =
         HashMap::new();
     for t in &archive.trades {
-        by_symbol
-            .entry(t.symbol.clone())
-            .or_default()
-            .push(t);
+        by_symbol.entry(t.symbol.clone()).or_default().push(t);
     }
 
     by_symbol
@@ -303,10 +298,8 @@ fn replay_capital_breakdowns(archive: &TickArchive) -> Vec<CapitalBreakdown> {
 }
 
 fn replay_candlesticks(archive: &TickArchive) -> Vec<CandlestickObservation> {
-    let mut by_symbol: HashMap<
-        Symbol,
-        Vec<&crate::ontology::microstructure::ArchivedCandlestick>,
-    > = HashMap::new();
+    let mut by_symbol: HashMap<Symbol, Vec<&crate::ontology::microstructure::ArchivedCandlestick>> =
+        HashMap::new();
     for c in &archive.candlesticks {
         by_symbol.entry(c.symbol.clone()).or_default().push(c);
     }
@@ -318,16 +311,8 @@ fn replay_candlesticks(archive: &TickArchive) -> Vec<CandlestickObservation> {
             let window: Vec<_> = candles.iter().rev().take(5).collect();
             let first = window.last().copied().unwrap_or(latest);
 
-            let window_high = window
-                .iter()
-                .map(|c| c.high)
-                .max()
-                .unwrap_or(latest.high);
-            let window_low = window
-                .iter()
-                .map(|c| c.low)
-                .min()
-                .unwrap_or(latest.low);
+            let window_high = window.iter().map(|c| c.high).max().unwrap_or(latest.high);
+            let window_low = window.iter().map(|c| c.low).min().unwrap_or(latest.low);
 
             let window_return = if first.open > Decimal::ZERO {
                 clamp_signed_unit_interval(

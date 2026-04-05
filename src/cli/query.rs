@@ -1,15 +1,91 @@
-use super::render::print_polymarket_snapshot;
 #[cfg(feature = "persistence")]
 use super::render::{
     print_causal_flips, print_causal_timeline, print_lineage_history, print_lineage_report,
     print_lineage_rows, select_lineage_rows,
 };
+use super::render::{print_operator_commands, print_polymarket_snapshot, print_runtime_tasks};
 use super::*;
+use crate::operator_commands::available_operator_commands;
+use crate::runtime_tasks::{default_runtime_tasks_path, RuntimeTaskStore};
 
 #[cfg(feature = "persistence")]
 async fn open_query_store() -> Result<EdenStore, AppError> {
     let eden_db_path = std::env::var("EDEN_DB_PATH").unwrap_or_else(|_| "data/eden.db".into());
     EdenStore::open(&eden_db_path).await
+}
+
+fn open_runtime_task_store() -> Result<RuntimeTaskStore, std::io::Error> {
+    RuntimeTaskStore::load(default_runtime_tasks_path()).map_err(std::io::Error::other)
+}
+
+fn run_tasks_list_query(filters: &RuntimeTaskFilter, json: bool) -> Result<(), std::io::Error> {
+    let store = open_runtime_task_store()?;
+    let tasks = store.list(filters);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "count": tasks.len(),
+                "tasks": tasks,
+            }))
+            .map_err(std::io::Error::other)?
+        );
+    } else {
+        print_runtime_tasks(&tasks);
+    }
+    Ok(())
+}
+
+fn run_tasks_create_query(
+    input: RuntimeTaskCreateRequest,
+    json: bool,
+) -> Result<(), std::io::Error> {
+    let store = open_runtime_task_store()?;
+    let task = store.create(input).map_err(std::io::Error::other)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&task).map_err(std::io::Error::other)?
+        );
+    } else {
+        println!("Created runtime task {}", task.id);
+        print_runtime_tasks(&[task]);
+    }
+    Ok(())
+}
+
+fn run_tasks_status_query(
+    task_id: &str,
+    update: RuntimeTaskStatusUpdateRequest,
+    json: bool,
+) -> Result<(), std::io::Error> {
+    let store = open_runtime_task_store()?;
+    let task = store
+        .update_status(task_id, update)
+        .map_err(std::io::Error::other)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&task).map_err(std::io::Error::other)?
+        );
+    } else {
+        println!("Updated runtime task {}", task.id);
+        print_runtime_tasks(&[task]);
+    }
+    Ok(())
+}
+
+fn run_operator_commands_query(json: bool) -> Result<(), std::io::Error> {
+    let commands = available_operator_commands();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&commands).map_err(std::io::Error::other)?
+        );
+    } else {
+        print_operator_commands(&commands);
+    }
+    Ok(())
 }
 
 #[cfg(feature = "persistence")]
@@ -138,24 +214,46 @@ pub async fn run_cli_query(command: CliCommand) -> Result<(), AppError> {
             }
             Ok(())
         }
+        CliCommand::TasksList { json, filters } => {
+            run_tasks_list_query(&filters, json)
+                .map_err(|error| -> AppError { Box::new(error) })?;
+            Ok(())
+        }
+        CliCommand::TasksCreate { json, input } => {
+            run_tasks_create_query(input, json).map_err(|error| -> AppError { Box::new(error) })?;
+            Ok(())
+        }
+        CliCommand::TasksUpdateStatus {
+            json,
+            task_id,
+            update,
+        } => {
+            run_tasks_status_query(&task_id, update, json)
+                .map_err(|error| -> AppError { Box::new(error) })?;
+            Ok(())
+        }
+        CliCommand::OperatorCommands { json } => {
+            run_operator_commands_query(json).map_err(|error| -> AppError { Box::new(error) })?;
+            Ok(())
+        }
     }
 }
 
 #[cfg(not(feature = "persistence"))]
-pub async fn run_cli_query(command: CliCommand) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_cli_query(command: CliCommand) -> Result<(), AppError> {
     match command {
         CliCommand::Live => Ok(()),
         CliCommand::UsLive => Ok(()),
         CliCommand::Polymarket { json } => {
             let configs = load_polymarket_configs()
-                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+                .map_err(|error| -> AppError { Box::new(std::io::Error::other(error)) })?;
             if configs.is_empty() {
                 println!("No Polymarket markets configured. Set POLYMARKET_MARKETS first.");
                 return Ok(());
             }
             let snapshot = fetch_polymarket_snapshot(&configs)
                 .await
-                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+                .map_err(|error| -> AppError { Box::new(std::io::Error::other(error)) })?;
             if json {
                 println!(
                     "{}",
@@ -203,6 +301,28 @@ pub async fn run_cli_query(command: CliCommand) -> Result<(), Box<dyn std::error
         } => {
             let _ = (rows, filters, view);
             Err("lineage query commands require building with --features persistence".into())
+        }
+        CliCommand::TasksList { json, filters } => {
+            run_tasks_list_query(&filters, json)
+                .map_err(|error| -> AppError { Box::new(error) })?;
+            Ok(())
+        }
+        CliCommand::TasksCreate { json, input } => {
+            run_tasks_create_query(input, json).map_err(|error| -> AppError { Box::new(error) })?;
+            Ok(())
+        }
+        CliCommand::TasksUpdateStatus {
+            json,
+            task_id,
+            update,
+        } => {
+            run_tasks_status_query(&task_id, update, json)
+                .map_err(|error| -> AppError { Box::new(error) })?;
+            Ok(())
+        }
+        CliCommand::OperatorCommands { json } => {
+            run_operator_commands_query(json).map_err(|error| -> AppError { Box::new(error) })?;
+            Ok(())
         }
     }
 }

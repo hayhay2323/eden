@@ -64,13 +64,15 @@ pub(crate) fn update_context_outcome(
         "{}|{}|{}|{}",
         label, context.family, context.session, context.market_regime
     );
-    let entry = acc.entry(key).or_insert_with(|| ContextualOutcomeAccumulator {
-        label: label.to_string(),
-        family: context.family.clone(),
-        session: context.session.clone(),
-        market_regime: context.market_regime.clone(),
-        stats: OutcomeAccumulator::default(),
-    });
+    let entry = acc
+        .entry(key)
+        .or_insert_with(|| ContextualOutcomeAccumulator {
+            label: label.to_string(),
+            family: context.family.clone(),
+            session: context.session.clone(),
+            market_regime: context.market_regime.clone(),
+            stats: OutcomeAccumulator::default(),
+        });
     update_stats(&mut entry.stats, outcome);
 }
 
@@ -79,7 +81,10 @@ pub(crate) fn update_family_context_outcome(
     context: &SetupOutcomeContext,
     outcome: Option<&EvaluatedOutcome>,
 ) {
-    let key = format!("{}|{}|{}", context.family, context.session, context.market_regime);
+    let key = format!(
+        "{}|{}|{}",
+        context.family, context.session, context.market_regime
+    );
     let entry = acc.entry(key).or_insert_with(|| FamilyContextAccumulator {
         family: context.family.clone(),
         session: context.session.clone(),

@@ -22,14 +22,17 @@ use time::OffsetDateTime;
 
 #[cfg(feature = "persistence")]
 use crate::persistence::store::EdenStore;
+use crate::runtime_tasks::RuntimeTaskStore;
 
 const DEFAULT_API_SCOPE: &str = "frontend:readonly";
 pub(crate) const API_KEY_PREFIX: &str = "eden_pk_";
 
 #[derive(Clone)]
 pub struct ApiState {
+    pub(super) bind_addr: std::net::SocketAddr,
     pub(super) auth: ApiKeyCipher,
     pub(super) revocations: ApiKeyRevocationStore,
+    pub(super) runtime_tasks: RuntimeTaskStore,
     #[cfg(feature = "persistence")]
     pub(super) store: EdenStore,
 }
@@ -307,10 +310,7 @@ impl ApiKeyRevocationStore {
         Ok(())
     }
 
-    fn persist_locked(
-        &self,
-        items: &std::collections::HashSet<String>,
-    ) -> Result<(), ApiError> {
+    fn persist_locked(&self, items: &std::collections::HashSet<String>) -> Result<(), ApiError> {
         let path = std::path::Path::new(self.path.as_ref());
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|error| {
@@ -321,12 +321,10 @@ impl ApiKeyRevocationStore {
                 ))
             })?;
         }
-        let payload = serde_json::to_string_pretty(
-            &items.iter().cloned().collect::<Vec<_>>(),
-        )
-        .map_err(|error| {
-            ApiError::internal(format!("failed to encode revocation store: {error}"))
-        })?;
+        let payload = serde_json::to_string_pretty(&items.iter().cloned().collect::<Vec<_>>())
+            .map_err(|error| {
+                ApiError::internal(format!("failed to encode revocation store: {error}"))
+            })?;
         fs::write(path, payload).map_err(|error| {
             ApiError::internal(format!(
                 "failed to write API key revocation store `{}`: {}",

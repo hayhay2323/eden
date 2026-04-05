@@ -80,6 +80,8 @@ pub(crate) struct UsRestSnapshot {
     pub(crate) quotes: HashMap<Symbol, SecurityQuote>,
     pub(crate) calc_indexes: HashMap<Symbol, SecurityCalcIndex>,
     pub(crate) capital_flows: HashMap<Symbol, Vec<longport::quote::CapitalFlowLine>>,
+    pub(crate) intraday_lines: HashMap<Symbol, Vec<longport::quote::IntradayLine>>,
+    pub(crate) option_surfaces: Vec<OptionSurfaceObservation>,
 }
 
 impl UsRestSnapshot {
@@ -88,6 +90,8 @@ impl UsRestSnapshot {
             quotes: HashMap::new(),
             calc_indexes: HashMap::new(),
             capital_flows: HashMap::new(),
+            intraday_lines: HashMap::new(),
+            option_surfaces: Vec::new(),
         }
     }
 }
@@ -138,6 +142,8 @@ impl TickState<Vec<PushEvent>, UsRestSnapshot> for UsTickState<'_> {
             quotes,
             calc_indexes,
             capital_flows,
+            intraday_lines,
+            option_surfaces,
         } = update;
         for (symbol, quote) in quotes {
             let merged = merge_rest_quote(self.live.quotes.get(&symbol), quote);
@@ -146,6 +152,8 @@ impl TickState<Vec<PushEvent>, UsRestSnapshot> for UsTickState<'_> {
         self.rest.quotes = HashMap::new();
         self.rest.calc_indexes = calc_indexes;
         self.rest.capital_flows = capital_flows;
+        self.rest.intraday_lines = intraday_lines;
+        self.rest.option_surfaces = option_surfaces;
         self.live.dirty = true;
     }
 

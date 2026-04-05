@@ -100,6 +100,12 @@ impl ObservationSnapshot {
                     dividend_ratio_ttm: calc.dividend_ratio_ttm,
                     amplitude: calc.amplitude,
                     five_minutes_change_rate: calc.five_minutes_change_rate,
+                    ytd_change_rate: calc.ytd_change_rate,
+                    five_day_change_rate: calc.five_day_change_rate,
+                    ten_day_change_rate: calc.ten_day_change_rate,
+                    half_year_change_rate: calc.half_year_change_rate,
+                    total_market_value: calc.total_market_value,
+                    change_rate: calc.change_rate,
                 },
                 provenance(
                     ProvenanceSource::Api,

@@ -83,10 +83,12 @@ pub(super) fn requires_manual_confirmation(
     low_confidence || structural_disagreement || missing_price || wide_spread
 }
 
-pub(super) fn estimate_transaction_cost(price_low: Option<Decimal>, price_high: Option<Decimal>) -> Decimal {
+pub(super) fn estimate_transaction_cost(
+    price_low: Option<Decimal>,
+    price_high: Option<Decimal>,
+) -> Decimal {
     quoted_spread_ratio(price_low, price_high).unwrap_or(Decimal::new(5, 3)) // fallback 0.5% when the book is too sparse to estimate
 }
-
 
 // ── Order Suggestion ──
 

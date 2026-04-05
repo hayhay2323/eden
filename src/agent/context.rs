@@ -83,8 +83,7 @@ fn historical_action_expectancies(
     let confidence_scale = prior_confidence_scale(resolved);
     let follow_multiplier =
         Decimal::new(5, 1) + clamp_unit_interval(follow_support) * confidence_scale;
-    let fade_multiplier =
-        Decimal::new(5, 1) + clamp_unit_interval(fade_support) * confidence_scale;
+    let fade_multiplier = Decimal::new(5, 1) + clamp_unit_interval(fade_support) * confidence_scale;
     expectancies.follow_expectancy = Some((expected_net_alpha * follow_multiplier).round_dp(4));
     expectancies.fade_expectancy = Some((-expected_net_alpha * fade_multiplier).round_dp(4));
     expectancies
@@ -204,7 +203,10 @@ pub(crate) fn current_us_context_priors(
         })
         .collect::<Vec<_>>();
     for item in &lineage_stats.by_template {
-        if items.iter().any(|existing| existing.family == item.template) {
+        if items
+            .iter()
+            .any(|existing| existing.family == item.template)
+        {
             continue;
         }
         items.push(AgentContextPrior {

@@ -120,3 +120,50 @@ pub(crate) fn extract_symbols(text: &str) -> Vec<String> {
     })
     .collect()
 }
+
+pub(crate) fn invalidation_rule_value(state: &AgentSymbolState, prefix: &str) -> Option<String> {
+    state.invalidation.as_ref()?.rules.iter().find_map(|rule| {
+        rule.strip_prefix(prefix)
+            .map(|value| value.trim().to_string())
+    })
+}
+
+pub(crate) fn multi_horizon_gate_reason(state: &AgentSymbolState) -> Option<String> {
+    invalidation_rule_value(state, "multi_horizon_gate=blocked: ")
+}
+
+pub(crate) fn policy_primary(state: &AgentSymbolState) -> Option<String> {
+    invalidation_rule_value(state, "policy_primary=")
+}
+
+pub(crate) fn policy_reason(state: &AgentSymbolState) -> Option<String> {
+    invalidation_rule_value(state, "policy_reason=")
+}
+
+pub(crate) fn review_reason_code(state: &AgentSymbolState) -> Option<String> {
+    invalidation_rule_value(state, "review_reason_code=")
+}
+
+fn pattern_signature_from_text(text: &str) -> Option<String> {
+    text.split('|').map(str::trim).find_map(|part| {
+        part.strip_prefix("pattern=")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+pub(crate) fn matched_success_pattern_signature(state: &AgentSymbolState) -> Option<String> {
+    state.structure.as_ref().and_then(|structure| {
+        structure
+            .transition_reason
+            .as_deref()
+            .and_then(pattern_signature_from_text)
+            .or_else(|| {
+                structure
+                    .leader_transition_summary
+                    .as_deref()
+                    .and_then(pattern_signature_from_text)
+            })
+    })
+}

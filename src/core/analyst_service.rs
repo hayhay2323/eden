@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 use crate::agent::{AgentBriefing, AgentSession, AgentSnapshot};
-use crate::agent_llm::spawn_analysis_if_enabled;
+use crate::agent::llm::spawn_analysis_if_enabled;
 use crate::cases::CaseMarket;
 
 pub trait AnalystService {

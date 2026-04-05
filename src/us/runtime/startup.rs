@@ -44,11 +44,14 @@ pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dy
     let store = initialize_us_store(&ctx, &watchlist_symbols).await;
     println!("US Stocks: {}", store.stocks.len());
 
-    println!("\nSubscribing to WebSocket (QUOTE + TRADE)...");
-    ctx.subscribe(US_WATCHLIST, SubFlags::QUOTE | SubFlags::TRADE)
-        .await?;
+    println!("\nSubscribing to WebSocket (QUOTE + TRADE + DEPTH)...");
+    ctx.subscribe(
+        US_WATCHLIST,
+        SubFlags::QUOTE | SubFlags::TRADE | SubFlags::DEPTH,
+    )
+    .await?;
     println!(
-        "Subscribed to {} US symbols x 2 channels.",
+        "Subscribed to {} US symbols x 3 channels.",
         US_WATCHLIST.len()
     );
 

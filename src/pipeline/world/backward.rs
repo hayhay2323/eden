@@ -1,18 +1,17 @@
 use std::collections::HashMap;
 
-use rust_decimal::Decimal;
 use crate::ontology::world::{
-    BackwardCause, BackwardInvestigation, BackwardReasoningSnapshot, WorldLayer,
-    WorldStateSnapshot,
+    BackwardCause, BackwardInvestigation, BackwardReasoningSnapshot, WorldLayer, WorldStateSnapshot,
 };
-use crate::ontology::{
-    EvidencePolarity, ReasoningScope,
-};
+use crate::ontology::{EvidencePolarity, ReasoningScope};
 use crate::pipeline::reasoning::ReasoningSnapshot;
+use rust_decimal::Decimal;
 #[path = "backward_helpers.rs"]
 mod backward_helpers;
 use backward_helpers::*;
-pub(crate) use backward_helpers::{scope_key, select_backward_investigation_targets, world_layer_priority, world_provenance};
+pub(crate) use backward_helpers::{
+    scope_key, select_backward_investigation_targets, world_layer_priority, world_provenance,
+};
 
 pub(super) fn derive_backward_reasoning(
     reasoning: &ReasoningSnapshot,

@@ -10,11 +10,11 @@ use crate::persistence::lineage_snapshot::LineageSnapshotRecord;
 use crate::persistence::us_lineage_metric_row::{UsLineageFilters, UsLineageMetricRowRecord};
 #[cfg(feature = "persistence")]
 use crate::persistence::us_lineage_snapshot::UsLineageSnapshotRecord;
+#[cfg(feature = "persistence")]
+use crate::temporal::causality::{CausalFlipEvent, CausalTimeline};
 use crate::temporal::lineage::{
     LineageAlignmentFilter, LineageFilters, LineageSortKey, LineageStats,
 };
-#[cfg(feature = "persistence")]
-use crate::temporal::causality::{CausalFlipEvent, CausalTimeline};
 #[cfg(feature = "persistence")]
 use crate::us::temporal::causality::{UsCausalFlip, UsCausalTimeline};
 #[cfg(feature = "persistence")]

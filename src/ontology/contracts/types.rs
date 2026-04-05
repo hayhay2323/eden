@@ -1,4 +1,5 @@
 use super::*;
+use crate::live_snapshot::{LiveLineageMetric, LiveSuccessPattern, LiveTemporalBar};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -34,7 +35,11 @@ pub struct OperationalHistoryRef {
     pub endpoint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub count: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "rfc3339::option")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "rfc3339::option"
+    )]
     pub latest_at: Option<OffsetDateTime>,
 }
 
@@ -57,18 +62,29 @@ pub enum OperationalObjectKind {
     Workflow,
 }
 
+const OPERATIONAL_OBJECT_KIND_SLUGS: &[(OperationalObjectKind, &str)] = &[
+    (OperationalObjectKind::MarketSession, "market_session"),
+    (OperationalObjectKind::SymbolState, "symbol_state"),
+    (OperationalObjectKind::Case, "case"),
+    (OperationalObjectKind::Recommendation, "recommendation"),
+    (OperationalObjectKind::MacroEvent, "macro_event"),
+    (OperationalObjectKind::Thread, "thread"),
+    (OperationalObjectKind::Workflow, "workflow"),
+];
+
 impl OperationalObjectKind {
+    pub fn slug(self) -> &'static str {
+        OPERATIONAL_OBJECT_KIND_SLUGS
+            .iter()
+            .find_map(|(kind, slug)| (*kind == self).then_some(*slug))
+            .expect("operational object kind slug mapping should stay exhaustive")
+    }
+
     pub fn parse(raw: &str) -> Option<Self> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "market_session" => Some(Self::MarketSession),
-            "symbol_state" => Some(Self::SymbolState),
-            "case" => Some(Self::Case),
-            "recommendation" => Some(Self::Recommendation),
-            "macro_event" => Some(Self::MacroEvent),
-            "thread" => Some(Self::Thread),
-            "workflow" => Some(Self::Workflow),
-            _ => None,
-        }
+        let raw = raw.trim();
+        OPERATIONAL_OBJECT_KIND_SLUGS
+            .iter()
+            .find_map(|(kind, slug)| slug.eq_ignore_ascii_case(raw).then_some(*kind))
     }
 }
 
@@ -187,6 +203,8 @@ pub struct RecommendationSummary {
     pub best_action: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary_lens: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_success_pattern_signature: Option<String>,
     pub execution_policy: ActionExecutionPolicy,
     pub governance_reason_code: ActionGovernanceReasonCode,
 }
@@ -330,6 +348,14 @@ pub struct CaseContract {
     pub expected_net_alpha: Option<Decimal>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alpha_horizon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_primary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_horizon_gate_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_success_pattern_signature: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recommendation_ids: Vec<String>,
     #[serde(default)]
@@ -437,6 +463,121 @@ pub struct WorkflowContract {
     pub history_refs: WorkflowHistoryRefs,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkItemOrigin {
+    Case,
+    Judgment,
+    Thread,
+    MacroEvent,
+    #[default]
+    Operator,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkItemGrain {
+    #[default]
+    Market,
+    Sector,
+    Symbol,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct OperatorWorkflowSurface {
+    pub id: String,
+    pub market: LiveMarket,
+    pub source_tick: u64,
+    #[serde(with = "rfc3339")]
+    pub observed_at: OffsetDateTime,
+    pub lane: String,
+    pub status: String,
+    pub priority: Decimal,
+    pub object_kind: String,
+    pub object_id: String,
+    pub title: String,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best_action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_policy: Option<ActionExecutionPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub governance_reason_code: Option<ActionGovernanceReasonCode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub governance_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_pin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unlock_condition: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommendation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_ref: Option<OperationalObjectRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_ref: Option<OperationalObjectRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_ref: Option<OperationalObjectRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperatorWorkItem {
+    pub id: String,
+    #[serde(default)]
+    pub origin: WorkItemOrigin,
+    #[serde(default)]
+    pub grain: WorkItemGrain,
+    pub lane: String,
+    pub status: String,
+    pub priority: Decimal,
+    pub scope_kind: String,
+    pub scope_id: String,
+    pub title: String,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best_action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_policy: Option<ActionExecutionPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub governance_reason_code: Option<ActionGovernanceReasonCode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocker: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_pin: Option<String>,
+    // Compatibility fields during the queue migration. Prefer `navigation` + `source_refs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_ref: Option<OperationalObjectRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_ref: Option<OperationalObjectRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_ref: Option<OperationalObjectRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<OperationalObjectRef>,
+    #[serde(default)]
+    pub navigation: OperationalNavigation,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OperationalSidecars {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -449,6 +590,11 @@ pub struct OperationalSidecars {
     pub macro_event_candidates: Vec<AgentMacroEventCandidate>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub knowledge_links: Vec<AgentKnowledgeLink>,
+    #[allow(dead_code)]
+    #[serde(default, skip_serializing)]
+    pub(crate) operator_workflows: Vec<OperatorWorkflowSurface>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operator_work_items: Vec<OperatorWorkItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -487,6 +633,12 @@ pub struct OperationalSnapshot {
     pub sidecars: OperationalSidecars,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<LiveEvent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub temporal_bars: Vec<LiveTemporalBar>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lineage: Vec<LiveLineageMetric>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub success_patterns: Vec<LiveSuccessPattern>,
 }
 
 impl OperationalSnapshot {
@@ -495,7 +647,10 @@ impl OperationalSnapshot {
             id: self.market_session.id.0.clone(),
             kind: OperationalObjectKind::MarketSession,
             endpoint: format!("/api/ontology/{}/market-session", market_slug(self.market)),
-            label: self.market_session.wake_headline.clone(),
+            label: Some(format!(
+                "{} Market",
+                market_slug(self.market).to_ascii_uppercase()
+            )),
         }
     }
 
@@ -573,7 +728,9 @@ impl OperationalSnapshot {
             OperationalObjectKind::SymbolState => self
                 .symbols
                 .iter()
-                .find(|item| item.id.0.eq_ignore_ascii_case(id) || item.symbol.eq_ignore_ascii_case(id))
+                .find(|item| {
+                    item.id.0.eq_ignore_ascii_case(id) || item.symbol.eq_ignore_ascii_case(id)
+                })
                 .map(|item| &item.navigation),
             OperationalObjectKind::Case => self.case(id).map(|item| &item.navigation),
             OperationalObjectKind::Recommendation => {
@@ -585,7 +742,10 @@ impl OperationalSnapshot {
         }
     }
 
-    pub fn resolve_object_ref(&self, object_ref: &OperationalObjectRef) -> Option<OperationalObjectRef> {
+    pub fn resolve_object_ref(
+        &self,
+        object_ref: &OperationalObjectRef,
+    ) -> Option<OperationalObjectRef> {
         self.navigation(object_ref.kind, &object_ref.id)
             .and_then(|navigation| navigation.self_ref.clone())
             .or_else(|| match object_ref.kind {
@@ -600,17 +760,14 @@ impl OperationalSnapshot {
         id: &str,
     ) -> Option<OperationalNeighborhood> {
         let navigation = self.navigation(kind, id)?.clone();
-        let root = navigation
-            .self_ref
-            .clone()
-            .or_else(|| {
-                self.resolve_object_ref(&OperationalObjectRef {
-                    id: id.into(),
-                    kind,
-                    endpoint: String::new(),
-                    label: None,
-                })
-            })?;
+        let root = navigation.self_ref.clone().or_else(|| {
+            self.resolve_object_ref(&OperationalObjectRef {
+                id: id.into(),
+                kind,
+                endpoint: String::new(),
+                label: None,
+            })
+        })?;
 
         Some(OperationalNeighborhood {
             root,
@@ -662,11 +819,18 @@ pub(crate) fn macro_event_self_ref(
     }
 }
 
-pub(crate) fn workflow_self_ref(market: LiveMarket, item: &WorkflowContract) -> OperationalObjectRef {
+pub(crate) fn workflow_self_ref(
+    market: LiveMarket,
+    item: &WorkflowContract,
+) -> OperationalObjectRef {
     OperationalObjectRef {
         id: item.id.0.clone(),
         kind: OperationalObjectKind::Workflow,
-        endpoint: format!("/api/ontology/{}/workflows/{}", market_slug(market), item.id.0),
+        endpoint: format!(
+            "/api/ontology/{}/workflows/{}",
+            market_slug(market),
+            item.id.0
+        ),
         label: Some(item.stage.clone()),
     }
 }

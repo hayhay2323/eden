@@ -12,7 +12,10 @@ pub(crate) fn resolve_recommendation_outcome(
     recommendation: &AgentRecommendation,
 ) -> Option<AgentRecommendationResolution> {
     if recommendation.resolution.is_some()
-        || snapshot.tick < recommendation.tick.saturating_add(recommendation.horizon_ticks)
+        || snapshot.tick
+            < recommendation
+                .tick
+                .saturating_add(recommendation.horizon_ticks)
     {
         return None;
     }
@@ -66,7 +69,10 @@ pub(crate) fn resolve_market_recommendation_outcome(
     recommendation: &AgentMarketRecommendation,
 ) -> Option<AgentRecommendationResolution> {
     if recommendation.resolution.is_some()
-        || snapshot.tick < recommendation.tick.saturating_add(recommendation.horizon_ticks)
+        || snapshot.tick
+            < recommendation
+                .tick
+                .saturating_add(recommendation.horizon_ticks)
     {
         return None;
     }
@@ -116,7 +122,10 @@ pub(crate) fn resolve_sector_recommendation_outcome(
     recommendation: &AgentSectorRecommendation,
 ) -> Option<AgentRecommendationResolution> {
     if recommendation.resolution.is_some()
-        || snapshot.tick < recommendation.tick.saturating_add(recommendation.horizon_ticks)
+        || snapshot.tick
+            < recommendation
+                .tick
+                .saturating_add(recommendation.horizon_ticks)
     {
         return None;
     }

@@ -124,18 +124,8 @@ pub fn derive_outcome_learning_context_from_us_rows(
         return OutcomeLearningContext::default();
     }
 
-    let hit_rate = mean(
-        &rows
-            .iter()
-            .map(|row| row.hit_rate)
-            .collect::<Vec<_>>(),
-    );
-    let mean_return = mean(
-        &rows
-            .iter()
-            .map(|row| row.mean_return)
-            .collect::<Vec<_>>(),
-    );
+    let hit_rate = mean(&rows.iter().map(|row| row.hit_rate).collect::<Vec<_>>());
+    let mean_return = mean(&rows.iter().map(|row| row.mean_return).collect::<Vec<_>>());
 
     OutcomeLearningContext {
         source: "us_lineage".into(),

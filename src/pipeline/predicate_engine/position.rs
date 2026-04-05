@@ -5,9 +5,8 @@ use crate::math::clamp_unit_interval;
 use crate::ontology::{AtomicPredicate, AtomicPredicateKind};
 
 use super::{
-    active_positions_for_symbol, case_direction, case_sector, direction_label,
-    directions_align, directions_conflict, normalize_count, predicate, stage_label,
-    weighted_sum, PredicateInputs,
+    active_positions_for_symbol, case_direction, case_sector, direction_label, directions_align,
+    directions_conflict, normalize_count, predicate, stage_label, weighted_sum, PredicateInputs,
 };
 
 pub(super) fn position_conflict(inputs: &PredicateInputs<'_>) -> AtomicPredicate {

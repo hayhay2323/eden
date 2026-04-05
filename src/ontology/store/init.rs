@@ -1,8 +1,26 @@
 use std::sync::RwLock;
 
-use super::*;
 use super::catalog::{define_sectors, symbol_sector};
 use super::knowledge::AccumulatedKnowledge;
+use super::*;
+
+pub(crate) fn build_object_store(
+    institutions: HashMap<InstitutionId, Institution>,
+    brokers: HashMap<BrokerId, Broker>,
+    stocks: HashMap<Symbol, Stock>,
+    sectors: HashMap<SectorId, Sector>,
+    broker_to_institution: HashMap<BrokerId, InstitutionId>,
+    knowledge: AccumulatedKnowledge,
+) -> Arc<ObjectStore> {
+    Arc::new(ObjectStore {
+        institutions,
+        brokers,
+        stocks,
+        sectors,
+        broker_to_institution,
+        knowledge: RwLock::new(knowledge),
+    })
+}
 
 pub async fn initialize(ctx: &QuoteContext, watchlist: &[&str]) -> Arc<ObjectStore> {
     let participants = ctx
@@ -86,12 +104,58 @@ pub async fn initialize(ctx: &QuoteContext, watchlist: &[&str]) -> Arc<ObjectSto
         );
     }
 
-    Arc::new(ObjectStore {
+    build_object_store(
         institutions,
         brokers,
         stocks,
         sectors,
         broker_to_institution,
-        knowledge: RwLock::new(AccumulatedKnowledge::empty()),
-    })
+        AccumulatedKnowledge::empty(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_object_store_seeds_empty_knowledge() {
+        let store = build_object_store(
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            AccumulatedKnowledge::empty(),
+        );
+
+        let knowledge = store.knowledge.read().unwrap();
+        assert!(knowledge.institutional_memory.is_empty());
+        assert!(knowledge.mechanism_priors.is_empty());
+        assert!(knowledge.calibrated_weights.factor_adjustments.is_empty());
+    }
+
+    #[test]
+    fn build_object_store_preserves_restored_knowledge() {
+        let restored = AccumulatedKnowledge::restored_from_calibration(None);
+        let store = build_object_store(
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            restored.clone(),
+        );
+
+        let knowledge = store.knowledge.read().unwrap();
+        assert_eq!(
+            knowledge.institutional_memory,
+            restored.institutional_memory
+        );
+        assert_eq!(knowledge.mechanism_priors, restored.mechanism_priors);
+        assert_eq!(
+            knowledge.calibrated_weights.factor_adjustments,
+            restored.calibrated_weights.factor_adjustments
+        );
+    }
 }

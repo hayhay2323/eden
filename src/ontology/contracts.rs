@@ -1,29 +1,33 @@
 use serde::{Deserialize, Serialize};
-use time::serde::rfc3339;
 use time::format_description::well_known::Rfc3339;
+use time::serde::rfc3339;
 use time::OffsetDateTime;
 
-use crate::agent::{
-    AgentActionExpectancies, AgentBriefing, AgentDecision, AgentDecisionAttribution,
-    AgentAlertOutcome, AgentAlertRecord, AgentAlertScoreboard, AgentAlertSliceStat,
-    AgentAlertStats, AgentEodReview, AgentExecutedTool, AgentMarketRecommendation, AgentNotice,
-    AgentRecommendation, AgentResolvedAlertDigest, AgentSectorFlow, AgentSectorRecommendation,
-    AgentSession, AgentSnapshot, AgentSuggestedToolCall, AgentSymbolState, AgentThread,
-    AgentTransition, AgentTurn, AgentWatchlist, AgentWatchlistEntry, AgentRecommendations,
+use crate::action::workflow::{
+    ActionExecutionPolicy, ActionGovernanceContract, ActionGovernanceReasonCode,
 };
-use crate::agent_llm::{
+use crate::agent::{
+    AgentActionExpectancies, AgentAlertOutcome, AgentAlertRecord, AgentAlertScoreboard,
+    AgentAlertSliceStat, AgentAlertStats, AgentBriefing, AgentDecision, AgentDecisionAttribution,
+    AgentEodReview, AgentExecutedTool, AgentJudgmentKind, AgentMarketRecommendation, AgentNotice,
+    AgentOperationalJudgment, AgentRecommendation, AgentRecommendations, AgentResolvedAlertDigest,
+    AgentSectorFlow, AgentSectorRecommendation, AgentSession, AgentSnapshot,
+    AgentSuggestedToolCall, AgentSymbolState, AgentThread, AgentTransition, AgentTurn,
+    AgentWatchlist, AgentWatchlistEntry,
+};
+use crate::agent::llm::{
     AgentAnalysis, AgentDominantLens, AgentNarration, AgentNarrationActionCard,
 };
 use crate::cases::{build_case_summaries, CaseMarket, CaseSummary};
-use crate::live_snapshot::{LiveEvent, LiveMarket, LiveMarketRegime, LiveSnapshot, LiveStressSnapshot};
-use crate::action::workflow::{ActionExecutionPolicy, ActionGovernanceContract, ActionGovernanceReasonCode};
+use crate::live_snapshot::{
+    LiveEvent, LiveMarket, LiveMarketRegime, LiveSnapshot, LiveStressSnapshot,
+};
+use crate::ontology::world::{BackwardInvestigation, WorldStateSnapshot};
 use crate::ontology::{
     AgentKnowledgeLink, AgentMacroEvent, AgentMacroEventCandidate, KnowledgeNodeKind, Symbol,
 };
-use crate::ontology::world::{BackwardInvestigation, WorldStateSnapshot};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
-
 
 #[path = "contracts/types.rs"]
 mod types;

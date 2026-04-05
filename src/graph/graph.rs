@@ -422,7 +422,7 @@ mod tests {
     use crate::action::narrative::{
         DimensionReading, Direction, NarrativeSnapshot, Regime, SymbolNarrative,
     };
-    use crate::logic::tension::Dimension;
+    use crate::pipeline::tension::Dimension;
     use crate::ontology::links::*;
     use crate::ontology::objects::*;
     use rust_decimal_macros::dec;
@@ -509,6 +509,7 @@ mod tests {
             order_books: vec![],
             quotes: vec![],
             trade_activities: vec![],
+            intraday: vec![],
         }
     }
 

@@ -7,8 +7,8 @@ use rust_decimal::Decimal;
 use crate::ontology::objects::{InstitutionId, SectorId, Symbol};
 use crate::ontology::store::ObjectStore;
 
-use crate::graph::graph::{BrainGraph, EdgeKind, NodeKind};
 use super::{ConflictHistory, GraphInsights, InstitutionalConflict, StockCluster};
+use crate::graph::graph::{BrainGraph, EdgeKind, NodeKind};
 
 pub(super) fn compute_clusters(
     brain: &BrainGraph,

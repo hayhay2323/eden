@@ -1,8 +1,8 @@
 use super::*;
 #[cfg(feature = "persistence")]
-use rust_decimal::Decimal;
-#[cfg(feature = "persistence")]
 use crate::temporal::lineage::{LineageAlignmentFilter, LineageFilters, LineageSortKey};
+#[cfg(feature = "persistence")]
+use rust_decimal::Decimal;
 
 #[cfg(feature = "persistence")]
 pub(in crate::api) async fn get_lineage(
@@ -297,10 +297,7 @@ fn select_lineage_rows(
         .iter()
         .filter(|row| {
             row_matches_filters(row, filters)
-                && matches_lineage_alignment(
-                    row.mean_external_delta,
-                    alignment,
-                )
+                && matches_lineage_alignment(row.mean_external_delta, alignment)
         })
         .cloned()
         .collect::<Vec<_>>();

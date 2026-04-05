@@ -168,34 +168,62 @@ pub fn macro_event_knowledge_node_ref(event_id: &str, headline: &str) -> AgentKn
 }
 
 pub fn market_knowledge_node_ref(label: &str) -> AgentKnowledgeNodeRef {
-    knowledge_node_ref(KnowledgeNodeKind::Market, market_node_id(label), label.into())
+    knowledge_node_ref(
+        KnowledgeNodeKind::Market,
+        market_node_id(label),
+        label.into(),
+    )
 }
 
 pub fn sector_knowledge_node_ref(sector: &str) -> AgentKnowledgeNodeRef {
-    knowledge_node_ref(KnowledgeNodeKind::Sector, sector_node_id(sector), sector.into())
+    knowledge_node_ref(
+        KnowledgeNodeKind::Sector,
+        sector_node_id(sector),
+        sector.into(),
+    )
 }
 
 pub fn symbol_knowledge_node_ref(symbol: &str) -> AgentKnowledgeNodeRef {
-    knowledge_node_ref(KnowledgeNodeKind::Symbol, symbol_node_id(symbol), symbol.into())
+    knowledge_node_ref(
+        KnowledgeNodeKind::Symbol,
+        symbol_node_id(symbol),
+        symbol.into(),
+    )
 }
 
 pub fn decision_knowledge_node_ref(
     recommendation_id: &str,
     label: String,
 ) -> AgentKnowledgeNodeRef {
-    knowledge_node_ref(KnowledgeNodeKind::Decision, decision_node_id(recommendation_id), label)
+    knowledge_node_ref(
+        KnowledgeNodeKind::Decision,
+        decision_node_id(recommendation_id),
+        label,
+    )
 }
 
 pub fn world_entity_knowledge_node_ref(entity_id: &str, label: String) -> AgentKnowledgeNodeRef {
-    knowledge_node_ref(KnowledgeNodeKind::WorldEntity, world_entity_node_id(entity_id), label)
+    knowledge_node_ref(
+        KnowledgeNodeKind::WorldEntity,
+        world_entity_node_id(entity_id),
+        label,
+    )
 }
 
 pub fn backward_cause_knowledge_node_ref(cause_id: &str, label: String) -> AgentKnowledgeNodeRef {
-    knowledge_node_ref(KnowledgeNodeKind::BackwardCause, backward_cause_node_id(cause_id), label)
+    knowledge_node_ref(
+        KnowledgeNodeKind::BackwardCause,
+        backward_cause_node_id(cause_id),
+        label,
+    )
 }
 
 pub fn position_knowledge_node_ref(workflow_id: &str, label: String) -> AgentKnowledgeNodeRef {
-    knowledge_node_ref(KnowledgeNodeKind::Position, position_node_id(workflow_id), label)
+    knowledge_node_ref(
+        KnowledgeNodeKind::Position,
+        position_node_id(workflow_id),
+        label,
+    )
 }
 
 #[cfg(test)]

@@ -311,6 +311,7 @@ mod tests {
             volume_profile: volume,
             pre_post_market_anomaly: prepost,
             valuation,
+            multi_horizon_momentum: Decimal::ZERO,
         }
     }
 

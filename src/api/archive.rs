@@ -4,9 +4,9 @@ use axum::Json;
 #[cfg(feature = "persistence")]
 use serde::Deserialize;
 
+use super::foundation::ApiError;
 #[cfg(feature = "persistence")]
 use super::foundation::ApiState;
-use super::foundation::ApiError;
 
 #[cfg(feature = "persistence")]
 #[derive(Debug, Deserialize)]

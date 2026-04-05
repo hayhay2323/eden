@@ -4,9 +4,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 use crate::ontology::objects::{InstitutionId, Symbol};
-use crate::pipeline::learning_loop::{
-    ConditionedLearningAdjustment, ReasoningLearningFeedback,
-};
+use crate::pipeline::learning_loop::{ConditionedLearningAdjustment, ReasoningLearningFeedback};
 
 #[derive(Debug, Clone, Default)]
 pub struct AccumulatedKnowledge {
@@ -15,7 +13,7 @@ pub struct AccumulatedKnowledge {
     pub calibrated_weights: CalibratedWeights,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstitutionSymbolProfile {
     pub observation_count: u32,
     pub directional_hit_count: u32,
@@ -24,7 +22,7 @@ pub struct InstitutionSymbolProfile {
     pub directional_bias: Decimal,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MechanismPrior {
     pub hit_rate: Decimal,
     pub sample_count: u32,
@@ -44,6 +42,14 @@ impl AccumulatedKnowledge {
         Self::default()
     }
 
+    pub fn restored_from_calibration(feedback: Option<&ReasoningLearningFeedback>) -> Self {
+        let mut knowledge = Self::empty();
+        if let Some(feedback) = feedback {
+            knowledge.apply_calibration(feedback);
+        }
+        knowledge
+    }
+
     pub fn apply_calibration(&mut self, feedback: &ReasoningLearningFeedback) {
         self.calibrated_weights.factor_adjustments = feedback.mechanism_factor_lookup();
         self.calibrated_weights.predicate_adjustments = feedback
@@ -51,8 +57,7 @@ impl AccumulatedKnowledge {
             .iter()
             .map(|adj| (adj.label.clone(), adj.delta))
             .collect();
-        self.calibrated_weights.conditioned_adjustments =
-            feedback.conditioned_adjustments.clone();
+        self.calibrated_weights.conditioned_adjustments = feedback.conditioned_adjustments.clone();
     }
 
     pub fn accumulate_institutional_memory(
@@ -83,8 +88,7 @@ impl AccumulatedKnowledge {
                         // Running average of directional bias
                         let n = Decimal::from(profile.observation_count);
                         profile.directional_bias =
-                            profile.directional_bias * (n - Decimal::ONE) / n
-                                + e.direction / n;
+                            profile.directional_bias * (n - Decimal::ONE) / n + e.direction / n;
                     }
                 }
             }
@@ -92,10 +96,7 @@ impl AccumulatedKnowledge {
     }
 
     #[cfg(feature = "persistence")]
-    pub async fn restore_from(
-        db: &crate::persistence::store::EdenStore,
-        market: &str,
-    ) -> Self {
+    pub async fn restore_from(db: &crate::persistence::store::EdenStore, market: &str) -> Self {
         use crate::pipeline::learning_loop::{
             derive_learning_feedback, derive_outcome_learning_context_from_hk_rows,
             derive_outcome_learning_context_from_us_rows, OutcomeLearningContext,
@@ -125,7 +126,7 @@ impl AccumulatedKnowledge {
                 _ => OutcomeLearningContext::default(),
             };
             let feedback = derive_learning_feedback(&assessments, &outcome_ctx);
-            knowledge.apply_calibration(&feedback);
+            knowledge = Self::restored_from_calibration(Some(&feedback));
         }
 
         eprintln!(
@@ -183,8 +184,8 @@ mod tests {
             last_seen_tick: 100,
             directional_bias: dec!(0.6),
         };
-        let hit_rate = Decimal::from(profile.directional_hit_count)
-            / Decimal::from(profile.observation_count);
+        let hit_rate =
+            Decimal::from(profile.directional_hit_count) / Decimal::from(profile.observation_count);
         assert_eq!(hit_rate, dec!(0.7));
     }
 
@@ -258,19 +259,18 @@ mod tests {
     #[test]
     fn history_bonus_zero_when_not_found() {
         let k = AccumulatedKnowledge::empty();
-        let bonus = k.institution_history_bonus(
-            &InstitutionId(999),
-            &Symbol("FAKE.HK".into()),
-        );
+        let bonus = k.institution_history_bonus(&InstitutionId(999), &Symbol("FAKE.HK".into()));
         assert_eq!(bonus, Decimal::ZERO);
     }
 
     #[test]
     fn accumulate_institutional_memory_from_edges() {
-        use crate::graph::graph::{BrainGraph, InstitutionToStock, EdgeKind, NodeKind, StockNode, InstitutionNode};
         use crate::action::narrative::Regime;
-        use crate::pipeline::dimensions::SymbolDimensions;
+        use crate::graph::graph::{
+            BrainGraph, EdgeKind, InstitutionNode, InstitutionToStock, NodeKind, StockNode,
+        };
         use crate::ontology::domain::{ProvenanceMetadata, ProvenanceSource};
+        use crate::pipeline::dimensions::SymbolDimensions;
         use petgraph::graph::DiGraph;
         use time::OffsetDateTime;
 
@@ -336,6 +336,7 @@ mod tests {
         let profile = k.institutional_memory.get(&key).unwrap();
         assert_eq!(profile.observation_count, 2);
         assert_eq!(profile.last_seen_tick, 2);
+        assert_eq!(k.institutional_memory.len(), 1);
     }
 
     #[test]
@@ -388,5 +389,128 @@ mod tests {
             dec!(0.03)
         );
         assert_eq!(k.calibrated_weights.conditioned_adjustments.len(), 1);
+    }
+
+    #[test]
+    fn apply_calibration_replaces_previous_weights_instead_of_accumulating() {
+        let mut k = AccumulatedKnowledge::empty();
+        let first_feedback = ReasoningLearningFeedback {
+            paired_examples: 1,
+            reinforced_examples: 1,
+            corrected_examples: 0,
+            mechanism_adjustments: vec![],
+            mechanism_factor_adjustments: vec![MechanismFactorAdjustment {
+                mechanism: "First".into(),
+                factor_key: "factor:a".into(),
+                factor_label: "A".into(),
+                delta: dec!(0.1),
+                samples: 1,
+            }],
+            predicate_adjustments: vec![LearningAdjustment {
+                label: "Alpha".into(),
+                delta: dec!(0.2),
+                samples: 1,
+            }],
+            conditioned_adjustments: vec![],
+            outcome_context: OutcomeLearningContext::default(),
+        };
+        let second_feedback = ReasoningLearningFeedback {
+            paired_examples: 2,
+            reinforced_examples: 1,
+            corrected_examples: 1,
+            mechanism_adjustments: vec![],
+            mechanism_factor_adjustments: vec![MechanismFactorAdjustment {
+                mechanism: "Second".into(),
+                factor_key: "factor:b".into(),
+                factor_label: "B".into(),
+                delta: dec!(-0.3),
+                samples: 1,
+            }],
+            predicate_adjustments: vec![LearningAdjustment {
+                label: "Beta".into(),
+                delta: dec!(-0.4),
+                samples: 1,
+            }],
+            conditioned_adjustments: vec![],
+            outcome_context: OutcomeLearningContext::default(),
+        };
+
+        k.apply_calibration(&first_feedback);
+        assert_eq!(k.calibrated_weights.factor_adjustments.len(), 1);
+        assert!(k
+            .calibrated_weights
+            .factor_adjustments
+            .contains_key(&("First".into(), "factor:a".into())));
+
+        k.apply_calibration(&second_feedback);
+        assert_eq!(k.calibrated_weights.factor_adjustments.len(), 1);
+        assert!(k
+            .calibrated_weights
+            .factor_adjustments
+            .contains_key(&("Second".into(), "factor:b".into())));
+        assert!(!k
+            .calibrated_weights
+            .factor_adjustments
+            .contains_key(&("First".into(), "factor:a".into())));
+        assert_eq!(k.calibrated_weights.predicate_adjustments.len(), 1);
+        assert!(k
+            .calibrated_weights
+            .predicate_adjustments
+            .contains_key("Beta"));
+        assert!(!k
+            .calibrated_weights
+            .predicate_adjustments
+            .contains_key("Alpha"));
+    }
+
+    #[test]
+    fn restored_from_calibration_is_empty_without_feedback() {
+        let knowledge = AccumulatedKnowledge::restored_from_calibration(None);
+        assert!(knowledge.institutional_memory.is_empty());
+        assert!(knowledge.mechanism_priors.is_empty());
+        assert!(knowledge.calibrated_weights.factor_adjustments.is_empty());
+        assert!(knowledge
+            .calibrated_weights
+            .predicate_adjustments
+            .is_empty());
+    }
+
+    #[test]
+    fn restored_from_calibration_applies_feedback() {
+        let feedback = ReasoningLearningFeedback {
+            paired_examples: 3,
+            reinforced_examples: 2,
+            corrected_examples: 1,
+            mechanism_adjustments: vec![],
+            mechanism_factor_adjustments: vec![MechanismFactorAdjustment {
+                mechanism: "Narrative Failure".into(),
+                factor_key: "state:reflexive_correction".into(),
+                factor_label: "Reflexive Correction".into(),
+                delta: dec!(-0.02),
+                samples: 2,
+            }],
+            predicate_adjustments: vec![LearningAdjustment {
+                label: "Counterevidence Present".into(),
+                delta: dec!(0.03),
+                samples: 3,
+            }],
+            conditioned_adjustments: vec![],
+            outcome_context: OutcomeLearningContext::default(),
+        };
+
+        let knowledge = AccumulatedKnowledge::restored_from_calibration(Some(&feedback));
+        assert_eq!(knowledge.calibrated_weights.factor_adjustments.len(), 1);
+        assert_eq!(
+            knowledge.calibrated_weights.factor_adjustments[&(
+                "Narrative Failure".into(),
+                "state:reflexive_correction".into()
+            )],
+            dec!(-0.02)
+        );
+        assert_eq!(knowledge.calibrated_weights.predicate_adjustments.len(), 1);
+        assert_eq!(
+            knowledge.calibrated_weights.predicate_adjustments["Counterevidence Present"],
+            dec!(0.03)
+        );
     }
 }

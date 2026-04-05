@@ -13,23 +13,23 @@ use crate::us::graph::propagation::CrossMarketSignal;
 use crate::us::pipeline::dimensions::UsDimensionSnapshot;
 use crate::us::temporal::analysis::UsSignalDynamics;
 
-#[path = "insights/types.rs"]
-mod types;
+#[path = "insights/anomaly.rs"]
+mod anomaly;
+#[path = "insights/cluster.rs"]
+mod cluster;
 #[path = "insights/helpers.rs"]
 mod helpers;
 #[path = "insights/pressure.rs"]
 mod pressure;
 #[path = "insights/rotation.rs"]
 mod rotation;
-#[path = "insights/cluster.rs"]
-mod cluster;
 #[path = "insights/stress.rs"]
 mod stress;
-#[path = "insights/anomaly.rs"]
-mod anomaly;
+#[path = "insights/types.rs"]
+mod types;
 
-use helpers::*;
 pub use anomaly::compute_propagation_senses;
+use helpers::*;
 pub use types::*;
 
 #[cfg(test)]
@@ -64,6 +64,7 @@ mod tests {
             volume_profile: volume,
             pre_post_market_anomaly: prepost,
             valuation: val,
+            multi_horizon_momentum: Decimal::ZERO,
         }
     }
 
