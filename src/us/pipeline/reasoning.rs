@@ -211,7 +211,18 @@ impl UsReasoningSnapshot {
         reviewer_doctrine: Option<&ReviewerDoctrinePressure>,
     ) -> Self {
         let propagation_paths = Vec::new();
-        let hypotheses = derive_hypotheses(events, derived_signals, &propagation_paths);
+        let family_gate = lineage_stats
+            .map(|stats| {
+                crate::pipeline::reasoning::family_gate::FamilyAlphaGate::from_us_lineage_stats(
+                    &stats.by_template,
+                )
+            });
+        let hypotheses = derive_hypotheses(
+            events,
+            derived_signals,
+            &propagation_paths,
+            family_gate.as_ref(),
+        );
         let investigation_selections = derive_investigation_selections(
             &hypotheses,
             tick_number,
@@ -271,7 +282,18 @@ impl UsReasoningSnapshot {
     ) -> Self {
         let propagation_paths =
             derive_diffusion_propagation_paths(graph, structural_metrics, cross_market_signals);
-        let hypotheses = derive_hypotheses(events, derived_signals, &propagation_paths);
+        let family_gate = lineage_stats
+            .map(|stats| {
+                crate::pipeline::reasoning::family_gate::FamilyAlphaGate::from_us_lineage_stats(
+                    &stats.by_template,
+                )
+            });
+        let hypotheses = derive_hypotheses(
+            events,
+            derived_signals,
+            &propagation_paths,
+            family_gate.as_ref(),
+        );
         let investigation_selections = derive_investigation_selections(
             &hypotheses,
             tick_number,

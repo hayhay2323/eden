@@ -38,6 +38,56 @@ impl FamilyAlphaGate {
     pub fn allows(&self, family: &str) -> bool {
         !self.blocked.contains(&family.to_ascii_lowercase())
     }
+
+    /// Build from US lineage stats (different shape than HK priors).
+    pub fn from_us_lineage_stats(
+        stats: &[crate::us::temporal::lineage::UsLineageContextStats],
+    ) -> Self {
+        let families: std::collections::HashSet<String> =
+            stats.iter().map(|s| s.template.clone()).collect();
+        let blocked = families
+            .into_iter()
+            .filter(|family| {
+                stats
+                    .iter()
+                    .filter(|s| s.template.eq_ignore_ascii_case(family))
+                    .max_by(|a, b| a.resolved.cmp(&b.resolved))
+                    .map(|best| should_block_us_family(best))
+                    .unwrap_or(false)
+            })
+            .map(|f| f.to_ascii_lowercase())
+            .collect();
+        Self { blocked }
+    }
+}
+
+fn should_block_us_family(stats: &crate::us::temporal::lineage::UsLineageContextStats) -> bool {
+    if stats.resolved < 15 {
+        return false;
+    }
+    // Zero hit rate + non-positive return → block
+    if stats.hit_rate == Decimal::ZERO
+        && stats.mean_return <= Decimal::ZERO
+        && stats.resolved >= 15
+    {
+        return true;
+    }
+    if stats.resolved < 20 {
+        return false;
+    }
+    // Simplified scoring: no invalidation_rate available in US stats
+    let net_penalty = stats.mean_return * Decimal::new(200, 0);
+    let hit_bonus = stats.hit_rate * Decimal::new(30, 0);
+    let score = net_penalty + hit_bonus;
+
+    let threshold = if stats.resolved >= 100 {
+        Decimal::new(-2, 0)
+    } else if stats.resolved >= 50 {
+        Decimal::new(-3, 0)
+    } else {
+        Decimal::new(-5, 0)
+    };
+    score < threshold
 }
 
 // ── Shared helper: best family prior lookup ──

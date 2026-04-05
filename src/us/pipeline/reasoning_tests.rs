@@ -381,7 +381,7 @@ fn us_symbol_hypotheses_are_capped_to_top_three() {
         ],
     };
 
-    let hypotheses = derive_hypotheses(&events, &signals, &[]);
+    let hypotheses = derive_hypotheses(&events, &signals, &[], None);
     let symbol_hypotheses = hypotheses
         .iter()
         .filter(|hypothesis| hypothesis.scope == ReasoningScope::Symbol(sym("BABA.US")))
@@ -448,7 +448,7 @@ fn convergence_hypothesis_emerges_from_us_diffusion_topology() {
         },
     ];
 
-    let hypotheses = derive_hypotheses(&events, &signals, &paths);
+    let hypotheses = derive_hypotheses(&events, &signals, &paths, None);
     let convergence = hypotheses
         .iter()
         .find(|item| {
@@ -499,7 +499,7 @@ fn convergence_hypothesis_requires_three_us_channels() {
         }],
     }];
 
-    let hypotheses = derive_hypotheses(&events, &signals, &paths);
+    let hypotheses = derive_hypotheses(&events, &signals, &paths, None);
 
     assert!(hypotheses
         .iter()
