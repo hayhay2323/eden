@@ -1,5 +1,6 @@
 pub mod convergence;
 pub mod decision;
+pub mod edge_learning;
 pub mod fingerprint;
 pub mod graph;
 pub mod insights;
