@@ -65,19 +65,6 @@ impl UsCausalTimeline {
         self.flips.last()
     }
 
-    /// Return up to `limit` distinct leader names in recency order (most recent first).
-    pub fn recent_leaders(&self, limit: usize) -> Vec<String> {
-        let mut result = Vec::new();
-        for point in self.points.iter().rev() {
-            if result.last().map(|s: &String| s.as_str()) != Some(point.leader.as_str()) {
-                result.push(point.leader.clone());
-            }
-            if result.len() >= limit {
-                break;
-            }
-        }
-        result
-    }
 }
 
 // ── Named dimension extraction ──

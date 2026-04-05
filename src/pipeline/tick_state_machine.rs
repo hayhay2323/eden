@@ -162,42 +162,6 @@ impl TickStateMachine {
         idle_ratio > 0.75
     }
 
-    /// Estimate whether the next tick will exceed a caller-supplied time
-    /// budget (ms), based on the rolling average of recent durations.
-    pub fn would_exceed_budget(&self, budget_ms: u64) -> bool {
-        self.average_duration_ms()
-            .map(|avg| avg > budget_ms)
-            .unwrap_or(false)
-    }
-
-    // --- retry management -------------------------------------------------
-
-    /// Register a symbol for retry on the next tick.  If the symbol is already
-    /// pending, its attempt counter is incremented instead of creating a
-    /// duplicate entry.
-    pub fn schedule_retry(&mut self, symbol: String, reason: String, max_attempts: u32) {
-        if let Some(existing) = self.pending_retries.iter_mut().find(|r| r.symbol == symbol) {
-            existing.attempts += 1;
-        } else {
-            self.pending_retries.push(PendingRetry {
-                symbol,
-                reason,
-                attempts: 1,
-                max_attempts,
-            });
-        }
-    }
-
-    /// Drain retries that have not exhausted their attempt budget.
-    /// Exhausted entries are silently dropped (the caller should have logged
-    /// the failure when it happened).
-    pub fn drain_retries(&mut self) -> Vec<PendingRetry> {
-        let all: Vec<PendingRetry> = self.pending_retries.drain(..).collect();
-        let (retryable, _exhausted): (Vec<_>, Vec<_>) =
-            all.into_iter().partition(|r| r.attempts <= r.max_attempts);
-        retryable
-    }
-
     // --- accessors --------------------------------------------------------
 
     /// Average tick duration from the rolling window, or `None` if no ticks
@@ -226,16 +190,6 @@ impl TickStateMachine {
         &self.recent_transitions
     }
 
-    /// Number of retries currently queued.
-    pub fn pending_retry_count(&self) -> usize {
-        self.pending_retries.len()
-    }
-
-    /// Reset the idle counter — useful when market opens or a regime change
-    /// is detected externally.
-    pub fn reset_idle(&mut self) {
-        self.consecutive_idle_ticks = 0;
-    }
 }
 
 impl Default for TickStateMachine {

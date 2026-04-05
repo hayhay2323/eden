@@ -301,7 +301,7 @@ pub fn compute_us_lineage_stats(history: &UsTickHistory, resolution_lag: u64) ->
     }
 }
 
-pub fn estimate_us_tick_lag_for_minutes(history: &UsTickHistory, minutes: i64) -> Option<u64> {
+fn estimate_us_tick_lag_for_minutes(history: &UsTickHistory, minutes: i64) -> Option<u64> {
     let records = history.latest_n(history.len());
     if records.len() < 2 || minutes <= 0 {
         return None;

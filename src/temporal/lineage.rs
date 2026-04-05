@@ -163,11 +163,6 @@ impl MultiHorizonGate {
     }
 }
 
-pub fn strong_multi_horizon_families(metrics: &[HorizonLineageMetric]) -> HashSet<String> {
-    let (supported, _attempted) = multi_horizon_family_status(metrics);
-    supported
-}
-
 fn multi_horizon_family_status(
     metrics: &[HorizonLineageMetric],
 ) -> (HashSet<String>, HashSet<String>) {
@@ -580,7 +575,7 @@ pub fn compute_lineage_stats(history: &TickHistory, limit: usize) -> LineageStat
     }
 }
 
-pub fn estimate_tick_lag_for_minutes(history: &TickHistory, minutes: i64) -> Option<u64> {
+fn estimate_tick_lag_for_minutes(history: &TickHistory, minutes: i64) -> Option<u64> {
     let records = history.latest_n(history.len());
     if records.len() < 2 || minutes <= 0 {
         return None;

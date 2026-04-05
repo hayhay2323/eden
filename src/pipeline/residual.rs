@@ -409,28 +409,6 @@ fn dominant_dim(components: &[Decimal]) -> ResidualDimension {
 // Integration: enhanced propagation absence using residuals
 // ---------------------------------------------------------------------------
 
-/// Enhanced version of demote_on_propagation_absence that uses continuous
-/// residual magnitudes instead of binary absence detection.
-///
-/// Instead of "sector has >30% silent peers → demote all propagation setups",
-/// this applies graduated demotion based on the actual residual magnitude
-/// of the sector.
-pub fn residual_adjusted_propagation_strength(
-    residual_field: &ResidualField,
-    sector: &SectorId,
-) -> Option<Decimal> {
-    residual_field
-        .clustered_sectors
-        .iter()
-        .find(|cluster| &cluster.sector == sector)
-        .map(|cluster| {
-            // If sector residual is strongly negative = propagation failing
-            // If positive = propagation stronger than expected
-            // Coherence modulates confidence in this assessment
-            cluster.mean_residual * cluster.coherence
-        })
-}
-
 // ---------------------------------------------------------------------------
 // Phase 2: Hidden Force Inference
 // ---------------------------------------------------------------------------

@@ -497,11 +497,7 @@ pub fn retain_explanatory_mechanisms(candidates: &mut Vec<MechanismCandidate>) {
     candidates.retain(|candidate| candidate.score >= floor);
 }
 
-/// Automated invalidation: check each mechanism against current predicate scores.
-/// Returns a list of `(mechanism_kind, reason)` for mechanisms whose supporting
-/// conditions have collapsed. Callers can use this to mark cases as invalidated
-/// without waiting for human review.
-pub fn check_mechanism_invalidations(
+fn check_mechanism_invalidations(
     predicates: &[AtomicPredicate],
     states: &[CompositeState],
 ) -> Vec<(MechanismCandidateKind, String)> {
@@ -522,7 +518,6 @@ pub fn check_mechanism_invalidations(
 
     let mut invalidated = Vec::new();
 
-    // MechanicalExecutionSignature: invalidated when source disperses or coupling breaks
     if pred(AtomicPredicateKind::SourceConcentrated) < dec!(0.20)
         && pred(AtomicPredicateKind::PressurePersists) < dec!(0.20)
     {
@@ -532,7 +527,6 @@ pub fn check_mechanism_invalidations(
         ));
     }
 
-    // FragilityBuildUp: invalidated when stress recedes and degradation eases
     if pred(AtomicPredicateKind::StressAccelerating) < dec!(0.15)
         && pred(AtomicPredicateKind::StructuralDegradation) < dec!(0.20)
     {
@@ -542,7 +536,6 @@ pub fn check_mechanism_invalidations(
         ));
     }
 
-    // ContagionOnset: invalidated when cross-scope propagation collapses
     if pred(AtomicPredicateKind::CrossScopePropagation) < dec!(0.20)
         && state(CompositeStateKind::CrossScopeContagion) < dec!(0.25)
     {
@@ -552,7 +545,6 @@ pub fn check_mechanism_invalidations(
         ));
     }
 
-    // NarrativeFailure: invalidated when price-reasoning divergence resolves
     if pred(AtomicPredicateKind::PriceReasoningDivergence) < dec!(0.20) {
         invalidated.push((
             MechanismCandidateKind::NarrativeFailure,
@@ -560,7 +552,6 @@ pub fn check_mechanism_invalidations(
         ));
     }
 
-    // LiquidityTrap: invalidated when liquidity imbalance normalizes
     if pred(AtomicPredicateKind::LiquidityImbalance) < dec!(0.20)
         && state(CompositeStateKind::LiquidityConstraint) < dec!(0.25)
     {
@@ -570,7 +561,6 @@ pub fn check_mechanism_invalidations(
         ));
     }
 
-    // EventDrivenDislocation: invalidated when event catalyst fades
     if pred(AtomicPredicateKind::EventCatalystActive) < dec!(0.20) {
         invalidated.push((
             MechanismCandidateKind::EventDrivenDislocation,
@@ -578,7 +568,6 @@ pub fn check_mechanism_invalidations(
         ));
     }
 
-    // MeanReversionSnapback: invalidated when reversion pressure eases
     if pred(AtomicPredicateKind::MeanReversionPressure) < dec!(0.20)
         && state(CompositeStateKind::ReversionPressure) < dec!(0.25)
     {
@@ -588,7 +577,6 @@ pub fn check_mechanism_invalidations(
         ));
     }
 
-    // ArbitrageConvergence: invalidated when cross-market link deactivates
     if pred(AtomicPredicateKind::CrossMarketLinkActive) < dec!(0.20)
         && pred(AtomicPredicateKind::CrossMarketDislocation) < dec!(0.20)
     {
@@ -598,7 +586,6 @@ pub fn check_mechanism_invalidations(
         ));
     }
 
-    // CapitalRotation: invalidated when sector rotation pressure collapses
     if pred(AtomicPredicateKind::SectorRotationPressure) < dec!(0.20)
         && state(CompositeStateKind::SubstitutionFlow) < dec!(0.25)
     {

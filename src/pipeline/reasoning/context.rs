@@ -46,12 +46,6 @@ impl AbsenceMemory {
         entry.last_seen = now;
     }
 
-    /// Clear absence tracking for a sector that DID propagate this tick.
-    pub fn record_propagation(&mut self, sector: &SectorId) {
-        self.entries
-            .retain(|(sector_key, _), _| *sector_key != sector.0);
-    }
-
     /// Should we suppress hypothesis generation for this (sector, family)?
     pub fn should_suppress(&self, sector: &SectorId, family: &str) -> bool {
         let key = (sector.0.clone(), family.to_ascii_lowercase());

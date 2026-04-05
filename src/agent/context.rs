@@ -97,9 +97,7 @@ fn prior_confidence_scale(resolved: usize) -> Decimal {
     }
 }
 
-pub(crate) fn clamp_unit_interval(value: Decimal) -> Decimal {
-    value.max(Decimal::ZERO).min(Decimal::ONE)
-}
+pub(crate) use crate::math::clamp_unit_interval;
 
 pub(crate) fn hk_context_regime(world_state: &WorldStateSnapshot) -> &str {
     world_state

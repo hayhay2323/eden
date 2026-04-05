@@ -8,7 +8,7 @@ use rust_decimal::Decimal;
 use time::OffsetDateTime;
 
 use crate::us::pipeline::dimensions::{UsDimensionSnapshot, UsSymbolDimensions};
-use crate::us::watchlist::{CrossMarketPair, CROSS_MARKET_PAIRS};
+use crate::us::watchlist::CROSS_MARKET_PAIRS;
 
 // ── Node types ──
 
@@ -295,47 +295,6 @@ impl UsGraph {
             sector_nodes,
             cross_market_nodes,
         }
-    }
-
-    /// Populate cross-market edge signals from computed propagation data.
-    /// Called after `CrossMarketSignal`s have been derived.
-    pub fn populate_cross_market_signals(
-        &mut self,
-        signals: &[(Symbol, Decimal, Decimal, Decimal)], // (us_symbol, strength, direction, confidence)
-    ) {
-        use petgraph::visit::EdgeRef;
-        for (us_symbol, strength, direction, confidence) in signals {
-            if let Some(&cm_idx) = self.cross_market_nodes.get(us_symbol) {
-                // Collect edge indices first to avoid borrow conflict.
-                let edge_ids: Vec<_> = self
-                    .graph
-                    .edges_directed(cm_idx, petgraph::Direction::Outgoing)
-                    .chain(
-                        self.graph
-                            .edges_directed(cm_idx, petgraph::Direction::Incoming),
-                    )
-                    .map(|e| e.id())
-                    .collect();
-                for edge_id in edge_ids {
-                    if let UsEdgeKind::CrossMarket(ref mut cm) = self.graph[edge_id] {
-                        cm.propagation_strength = *strength;
-                        cm.direction = *direction;
-                        cm.confidence = *confidence;
-                    }
-                }
-            }
-        }
-    }
-
-    /// Get the cross-market pairs that have active nodes in the graph.
-    pub fn active_cross_market_pairs(&self) -> Vec<&CrossMarketPair> {
-        CROSS_MARKET_PAIRS
-            .iter()
-            .filter(|p| {
-                self.cross_market_nodes
-                    .contains_key(&Symbol(p.us_symbol.to_string()))
-            })
-            .collect()
     }
 
     /// Find which HK symbol is linked to a US stock, if any.

@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 
 use rust_decimal::Decimal;
 
-use crate::graph::temporal::{GraphEdgeId, GraphEdgeTransition};
 use crate::ontology::objects::Symbol;
 
 use super::record::{SymbolSignals, TickRecord};
@@ -59,16 +58,6 @@ impl TickHistory {
             .collect()
     }
 
-    pub fn graph_edge_transitions_for_id(
-        &self,
-        edge_id: &GraphEdgeId,
-    ) -> Vec<&GraphEdgeTransition> {
-        self.records
-            .iter()
-            .flat_map(|record| record.graph_edge_transitions.iter())
-            .filter(|transition| &transition.edge_id == edge_id)
-            .collect()
-    }
 }
 
 #[cfg(test)]
