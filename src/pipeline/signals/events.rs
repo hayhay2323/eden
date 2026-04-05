@@ -50,7 +50,7 @@ impl EventSnapshot {
                         Some(ratio),
                         [format!("order_book:{}", order_book.symbol)],
                     );
-                    p.inputs.extend(attribution_inputs("company_specific", "local"));
+
                     p
                 },
             ));
@@ -85,7 +85,7 @@ impl EventSnapshot {
                         Some(magnitude),
                         [format!("calc_index:{}", calc.symbol)],
                     );
-                    p.inputs.extend(attribution_inputs("company_specific", "local"));
+
                     p
                 },
             ));
@@ -120,7 +120,7 @@ impl EventSnapshot {
                             format!("dimension:activity_momentum:{}", symbol),
                         ],
                     );
-                    p.inputs.extend(attribution_inputs("company_specific", "local"));
+
                     p
                 },
             ));
@@ -152,7 +152,7 @@ impl EventSnapshot {
                         Some(magnitude),
                         [format!("graph_pressure:{}", pressure.symbol)],
                     );
-                    p.inputs.extend(attribution_inputs("company_specific", "local"));
+
                     p
                 },
             ));
@@ -176,7 +176,7 @@ impl EventSnapshot {
                         Some(insights.stress.composite_stress),
                         ["graph_stress".to_string()],
                     );
-                    p.inputs.extend(attribution_inputs("macro_wide", "market"));
+
                     p
                 },
             ));
@@ -208,7 +208,7 @@ impl EventSnapshot {
                                     format!("convergence:{}", symbol),
                                 ],
                             );
-                            p.inputs.extend(attribution_inputs("sector_wide", "sector"));
+
                             p
                         },
                     ));
@@ -242,7 +242,7 @@ impl EventSnapshot {
                                     format!("institutional_alignment:{}", symbol),
                                 ],
                             );
-                            p.inputs.extend(attribution_inputs("sector_wide", "sector"));
+
                             p
                         },
                     ));
@@ -270,7 +270,7 @@ impl EventSnapshot {
                                 "graph_stress".to_string(),
                             ],
                         );
-                        p.inputs.extend(attribution_inputs("macro_wide", "market"));
+    
                         p
                     },
                 ));
@@ -296,7 +296,7 @@ impl EventSnapshot {
                                 format!("convergence:{}", suggestion.symbol),
                             ],
                         );
-                        p.inputs.extend(attribution_inputs("macro_wide", "market"));
+    
                         p
                     },
                 ));
@@ -324,10 +324,23 @@ impl EventSnapshot {
                             format!("shared_holder:{}", shared.symbol_b),
                         ],
                     );
-                    p.inputs.extend(attribution_inputs("sector_wide", "sector"));
                     p
                 },
             ));
+        }
+
+        // Inject attribution provenance from the static EVENT_ATTRIBUTION table
+        // instead of hardcoding per call site.
+        for event in &mut events {
+            let attr = super::types::attribution_inputs_for_kind(&event.value.kind);
+            if !attr.is_empty() {
+                // Remove any existing attr: entries (from inline calls) and replace with table lookup
+                event
+                    .provenance
+                    .inputs
+                    .retain(|i| !i.starts_with("attr:"));
+                event.provenance.inputs.extend(attr);
+            }
         }
 
         Self {
@@ -426,7 +439,9 @@ pub fn enrich_attribution_with_evidence(
             event
                 .provenance
                 .inputs
-                .extend(attribution_inputs("sector_wide", "sector"));
+                .extend(super::types::attribution_inputs_for_kind(
+                    &MarketEventKind::SharedHolderAnomaly,
+                ));
         }
     }
 }
@@ -525,8 +540,6 @@ pub fn catalyst_events_from_macro_events(
                         Some(magnitude),
                         [format!("macro_event:{}", e.event_id)],
                     );
-                    p.inputs
-                        .extend(attribution_inputs("sector_wide", "sector"));
                     p
                 },
             )
@@ -648,6 +661,18 @@ pub fn broker_events_from_delta(
                     },
                 ));
             }
+        }
+    }
+
+    // Inject attribution from table (same pattern as detect)
+    for event in &mut events {
+        let attr = super::types::attribution_inputs_for_kind(&event.value.kind);
+        if !attr.is_empty() {
+            event
+                .provenance
+                .inputs
+                .retain(|i| !i.starts_with("attr:"));
+            event.provenance.inputs.extend(attr);
         }
     }
 
