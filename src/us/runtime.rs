@@ -173,6 +173,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut us_hidden_force_state =
         crate::pipeline::residual::HiddenForceVerificationState::default();
+    let mut _edge_ledger = crate::graph::edge_learning::EdgeLearningLedger::default();
 
     loop {
         let Some(tick_advance) = ({
