@@ -412,14 +412,14 @@ fn diffusion_lag_factor(source_delta: Decimal, target_delta: Decimal) -> Decimal
         } else {
             Decimal::ZERO
         };
-    let opposite_direction_bonus =
+    let opposite_direction_penalty =
         if target_delta != Decimal::ZERO && source_delta.signum() != target_delta.signum() {
             Decimal::new(15, 2)
         } else {
             Decimal::ZERO
         };
 
-    (Decimal::ONE - absorbed + opposite_direction_bonus).clamp(Decimal::new(15, 2), Decimal::ONE)
+    (Decimal::ONE - absorbed - opposite_direction_penalty).clamp(Decimal::new(15, 2), Decimal::ONE)
 }
 
 fn mechanism_slug(mechanism: &str) -> String {
