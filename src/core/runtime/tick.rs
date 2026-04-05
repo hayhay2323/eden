@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 
-use crate::runtime_loop::{next_tick, spawn_periodic_fetch, TickAdvance, TickState};
+use crate::core::runtime_loop::{next_tick, spawn_periodic_fetch, TickAdvance, TickState};
 
 use super::telemetry::{emit_runtime_log, log_runtime_issue, RuntimeIssueLevel};
 use super::{RuntimeCounters, RuntimeInfraConfig};

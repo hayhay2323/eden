@@ -1,7 +1,7 @@
 use crate::external::polymarket::{
     fetch_polymarket_snapshot, load_polymarket_configs, PolymarketMarketConfig, PolymarketSnapshot,
 };
-use crate::operator_commands::OperatorCommandDescriptor;
+use crate::cli::commands::OperatorCommandDescriptor;
 #[cfg(feature = "persistence")]
 use crate::persistence::lineage_metric_row::{row_matches_filters, snapshot_records_from_rows};
 #[cfg(feature = "persistence")]
@@ -25,6 +25,8 @@ use rust_decimal::Decimal;
 
 type AppError = Box<dyn std::error::Error + Send + Sync>;
 
+#[path = "cli/commands.rs"]
+pub mod commands;
 #[path = "cli/parser.rs"]
 mod parser;
 #[path = "cli/query.rs"]

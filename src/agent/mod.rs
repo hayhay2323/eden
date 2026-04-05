@@ -38,6 +38,7 @@ use crate::us::temporal::lineage::UsLineageStats;
 use crate::us::temporal::record::UsSymbolSignals;
 
 mod alerts;
+pub mod codex;
 mod artifacts;
 mod attention;
 mod builders;

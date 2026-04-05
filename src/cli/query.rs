@@ -5,7 +5,7 @@ use super::render::{
 };
 use super::render::{print_operator_commands, print_polymarket_snapshot, print_runtime_tasks};
 use super::*;
-use crate::operator_commands::available_operator_commands;
+use crate::cli::commands::available_operator_commands;
 use crate::runtime_tasks::{default_runtime_tasks_path, RuntimeTaskStore};
 
 #[cfg(feature = "persistence")]

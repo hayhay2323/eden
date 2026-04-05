@@ -8,7 +8,7 @@ use crate::agent::{
     AgentStructureState, AgentSymbolState, AgentThread, AgentToolOutput, AgentToolRequest,
     AgentToolSpec, AgentTurn, AgentWakeState, AgentWatchlist,
 };
-use crate::agent_codex::CodexCliAnalyzeBody;
+use crate::agent::codex::CodexCliAnalyzeBody;
 use crate::agent::llm::{AgentAnalysis, AgentAnalystReview, AgentAnalystScoreboard, AgentNarration};
 use crate::live_snapshot::spawn_write_json_snapshot;
 use crate::ontology::world::{BackwardInvestigation, WorldStateSnapshot};
@@ -239,7 +239,7 @@ pub(super) async fn post_agent_analyze_codex_cli(
     Json(body): Json<CodexCliAnalyzeBody>,
 ) -> Result<Json<AgentAnalyzeResponse>, ApiError> {
     let market = parse_case_market(&market)?;
-    let (analysis, narration) = crate::agent_codex::run_codex_cli_analysis(market, &body)
+    let (analysis, narration) = crate::agent::codex::run_codex_cli_analysis(market, &body)
         .await
         .map_err(ApiError::internal)?;
     Ok(Json(AgentAnalyzeResponse {

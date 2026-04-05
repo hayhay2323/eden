@@ -1,4 +1,5 @@
 pub mod analyst_service;
+pub mod runtime_loop;
 pub mod artifact_repository;
 pub mod context;
 #[cfg(feature = "coordinator")]

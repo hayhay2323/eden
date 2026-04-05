@@ -1,6 +1,5 @@
 pub mod action;
 pub mod agent;
-pub mod agent_codex;
 pub mod api;
 pub mod bridges;
 pub mod cases;
@@ -12,10 +11,8 @@ pub mod hk;
 pub mod live_snapshot;
 pub mod math;
 pub mod ontology;
-pub mod operator_commands;
 pub mod persistence;
 pub mod pipeline;
-pub mod runtime_loop;
 pub mod runtime_tasks;
 pub mod temporal;
 pub mod trading;

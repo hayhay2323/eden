@@ -78,7 +78,7 @@ use crate::pipeline::signals::{
     DerivedSignalSnapshot, EventSnapshot, MarketEventKind, ObservationSnapshot, SignalScope,
 };
 use crate::pipeline::world::{derive_with_backward_confirmation, WorldSnapshots};
-use crate::runtime_loop::TickState;
+use crate::core::runtime_loop::TickState;
 use crate::temporal::analysis::{compute_dynamics, compute_polymarket_dynamics};
 use crate::temporal::buffer::TickHistory;
 use crate::temporal::causality::{compute_causal_timelines, CausalTimeline};
