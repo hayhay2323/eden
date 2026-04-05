@@ -194,6 +194,17 @@ impl ReasoningSnapshot {
     ) -> Self {
         let propagation_paths =
             derive_diffusion_propagation_paths(brain, stock_deltas, decision.timestamp);
+        // Apply diffusion energy to convergence scores (second-pass enrichment)
+        let energy_map =
+            crate::graph::energy::NodeEnergyMap::from_propagation_paths(&propagation_paths);
+        let mut decision = decision.clone();
+        if !energy_map.is_empty() {
+            crate::graph::energy::apply_energy_to_convergence(
+                &mut decision.convergence_scores,
+                &energy_map,
+            );
+        }
+        let decision = &decision;
         let family_gate = (!ctx.lineage_priors.is_empty()).then(|| {
             FamilyAlphaGate::from_lineage_priors(
                 ctx.lineage_priors,
