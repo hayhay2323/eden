@@ -58,6 +58,60 @@ fn scope_symbol(scope: &ReasoningScope) -> Option<Symbol> {
     }
 }
 
+// ── Energy Momentum (cross-tick resonance) ──
+
+/// Cross-tick energy accumulator. Consecutive ticks of same-direction energy
+/// resonate (amplitude grows), while single-tick noise decays quickly.
+/// Runtime holds this across ticks, similar to AbsenceMemory.
+#[derive(Debug, Clone, Default)]
+pub struct EnergyMomentum {
+    state: HashMap<Symbol, Decimal>,
+}
+
+impl EnergyMomentum {
+    /// Blend current tick's energy into momentum state.
+    /// `momentum = momentum * decay + new_energy * (1 - decay)`
+    ///
+    /// With decay=0.7:
+    /// - 3 ticks same direction → ~2.3x amplification
+    /// - Single tick noise → 70% after 1 tick, 49% after 2
+    pub fn update(&mut self, energy_map: &NodeEnergyMap, decay: Decimal) {
+        let blend = Decimal::ONE - decay;
+        // Decay existing momentum
+        for value in self.state.values_mut() {
+            *value *= decay;
+        }
+        // Blend in new energy
+        for (symbol, &new_energy) in &energy_map.flux {
+            let entry = self.state.entry(symbol.clone()).or_insert(Decimal::ZERO);
+            *entry += new_energy * blend;
+        }
+        // Remove negligible entries
+        self.state
+            .retain(|_, value| value.abs() >= Decimal::new(1, 3));
+    }
+
+    /// Get accumulated momentum for a symbol.
+    pub fn momentum_for(&self, symbol: &Symbol) -> Decimal {
+        self.state.get(symbol).copied().unwrap_or(Decimal::ZERO)
+    }
+
+    /// Convert momentum state to a NodeEnergyMap for use with apply_energy_to_convergence.
+    pub fn as_energy_map(&self) -> NodeEnergyMap {
+        NodeEnergyMap {
+            flux: self.state.clone(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.state.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.state.is_empty()
+    }
+}
+
 /// Apply energy flux to an existing set of convergence scores.
 /// This is a second-pass enrichment: after DecisionSnapshot computes baseline
 /// convergence, diffusion paths produce energy, and this function blends
@@ -150,5 +204,72 @@ mod tests {
 
         assert!(adjusted > baseline, "energy should increase composite");
         assert_eq!(adjusted, dec!(0.425));
+    }
+
+    // ── EnergyMomentum tests ──
+
+    #[test]
+    fn momentum_resonates_on_consecutive_same_direction() {
+        let mut momentum = EnergyMomentum::default();
+        let sym = Symbol("700.HK".into());
+        let decay = dec!(0.7);
+
+        // Tick 1: inject 0.5 energy
+        let mut flux1 = HashMap::new();
+        flux1.insert(sym.clone(), dec!(0.5));
+        let map1 = NodeEnergyMap { flux: flux1 };
+        momentum.update(&map1, decay);
+        let after_1 = momentum.momentum_for(&sym);
+
+        // Tick 2: inject another 0.5 same direction
+        let mut flux2 = HashMap::new();
+        flux2.insert(sym.clone(), dec!(0.5));
+        let map2 = NodeEnergyMap { flux: flux2 };
+        momentum.update(&map2, decay);
+        let after_2 = momentum.momentum_for(&sym);
+
+        // Tick 3: inject another 0.5
+        momentum.update(&map2, decay);
+        let after_3 = momentum.momentum_for(&sym);
+
+        assert!(after_2 > after_1, "momentum should grow: {} > {}", after_2, after_1);
+        assert!(after_3 > after_2, "momentum should keep growing: {} > {}", after_3, after_2);
+    }
+
+    #[test]
+    fn momentum_decays_without_new_energy() {
+        let mut momentum = EnergyMomentum::default();
+        let sym = Symbol("700.HK".into());
+        let decay = dec!(0.7);
+
+        // Inject energy once
+        let mut flux = HashMap::new();
+        flux.insert(sym.clone(), dec!(0.5));
+        let map = NodeEnergyMap { flux };
+        momentum.update(&map, decay);
+        let after_inject = momentum.momentum_for(&sym);
+
+        // Two ticks with no energy
+        let empty = NodeEnergyMap::default();
+        momentum.update(&empty, decay);
+        let after_1_decay = momentum.momentum_for(&sym);
+        momentum.update(&empty, decay);
+        let after_2_decay = momentum.momentum_for(&sym);
+
+        assert!(after_1_decay < after_inject, "should decay");
+        assert!(after_2_decay < after_1_decay, "should decay further");
+    }
+
+    #[test]
+    fn momentum_as_energy_map_works() {
+        let mut momentum = EnergyMomentum::default();
+        let sym = Symbol("700.HK".into());
+        let mut flux = HashMap::new();
+        flux.insert(sym.clone(), dec!(0.4));
+        let map = NodeEnergyMap { flux };
+        momentum.update(&map, dec!(0.7));
+
+        let converted = momentum.as_energy_map();
+        assert!(converted.energy_for(&sym) > Decimal::ZERO);
     }
 }

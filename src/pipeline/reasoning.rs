@@ -42,7 +42,8 @@ pub(crate) use policy::apply_midflight_health_check;
 pub use policy::derive_hypothesis_tracks;
 pub(crate) use policy::ReviewerDoctrinePressure;
 use policy::{apply_case_budget, apply_track_action_policy, prune_stale_tactical_setups};
-use propagation::{derive_diffusion_propagation_paths, derive_propagation_paths};
+pub(crate) use propagation::derive_diffusion_propagation_paths;
+use propagation::derive_propagation_paths;
 pub use propagation::{mechanism_family, path_has_family, path_is_mixed_multi_hop};
 pub use support::HypothesisTemplate;
 pub(crate) use support::hk_session_label;
@@ -194,17 +195,6 @@ impl ReasoningSnapshot {
     ) -> Self {
         let propagation_paths =
             derive_diffusion_propagation_paths(brain, stock_deltas, decision.timestamp);
-        // Apply diffusion energy to convergence scores (second-pass enrichment)
-        let energy_map =
-            crate::graph::energy::NodeEnergyMap::from_propagation_paths(&propagation_paths);
-        let mut decision = decision.clone();
-        if !energy_map.is_empty() {
-            crate::graph::energy::apply_energy_to_convergence(
-                &mut decision.convergence_scores,
-                &energy_map,
-            );
-        }
-        let decision = &decision;
         let family_gate = (!ctx.lineage_priors.is_empty()).then(|| {
             FamilyAlphaGate::from_lineage_priors(
                 ctx.lineage_priors,
