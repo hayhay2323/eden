@@ -48,20 +48,11 @@ const CONVERGENCE_HYPOTHESIS_KEY: &str = "convergence_hypothesis";
 const CONVERGENCE_HYPOTHESIS_LABEL: &str = "Convergence Hypothesis";
 
 fn shared_template_priority(template_key: &str) -> i32 {
-    match template_key {
-        CONVERGENCE_HYPOTHESIS_KEY => 118,
-        "flow" => 120,
-        "liquidity" => 115,
-        "breakout_contagion" => 110,
-        "catalyst_repricing" => 108,
-        "institution_reversal" => 104,
-        "propagation" => 100,
-        "shared_holder_spillover" | "institution_relay" | "sector_symbol_spillover" => 96,
-        "sector_rotation_spillover" => 92,
-        "stress_feedback_loop" | "stress_concentration" | "risk" => 88,
-        "cross_mechanism_chain" => 84,
-        _ => 80,
+    // convergence_hypothesis is synthesis-only; not in the shared registry.
+    if template_key == CONVERGENCE_HYPOTHESIS_KEY {
+        return 118;
     }
+    super::support::template_priority(template_key)
 }
 
 fn shared_hypothesis_sort_key(hypothesis: &Hypothesis) -> (i32, Decimal, Decimal, Decimal, String) {

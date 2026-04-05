@@ -15,6 +15,302 @@ pub(super) use super::family_gate::FamilyAlphaGate;
 
 use super::propagation::{path_has_family, path_is_mixed_multi_hop};
 
+// ---------------------------------------------------------------------------
+// Template metadata registry — single source of truth for all template
+// polarity, invalidation, expected-observation, and priority data.
+// ---------------------------------------------------------------------------
+
+struct TemplateMetadata {
+    key: &'static str,
+    /// Events that SUPPORT this template's thesis
+    supporting_events: &'static [MarketEventKind],
+    /// Events that CONTRADICT this template's thesis
+    contradicting_events: &'static [MarketEventKind],
+    /// Signal kinds that SUPPORT this template's thesis (checked via `signal_kind_matches`)
+    supporting_signal_tags: &'static [SignalTag],
+    /// Signal kinds that CONTRADICT this template's thesis
+    contradicting_signal_tags: &'static [SignalTag],
+    /// Whether propagation paths support (true) or contradict (false)
+    path_supports: bool,
+    /// Description of what would invalidate the hypothesis
+    invalidation: &'static str,
+    /// Expected observations if hypothesis is correct
+    expected_observations: &'static [&'static str],
+    /// Priority score for ranking
+    priority: i32,
+}
+
+/// Discriminant tags that mirror `DerivedSignalKind` variants without requiring
+/// `PartialEq` on the enum itself.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SignalTag {
+    StructuralComposite,
+    Convergence,
+    ActivityMomentum,
+    CandlestickConviction,
+    SmartMoneyPressure,
+    MarketStress,
+}
+
+fn signal_kind_matches(kind: &DerivedSignalKind, tag: &SignalTag) -> bool {
+    matches!(
+        (kind, tag),
+        (DerivedSignalKind::StructuralComposite, SignalTag::StructuralComposite)
+            | (DerivedSignalKind::Convergence, SignalTag::Convergence)
+            | (DerivedSignalKind::ActivityMomentum, SignalTag::ActivityMomentum)
+            | (DerivedSignalKind::CandlestickConviction, SignalTag::CandlestickConviction)
+            | (DerivedSignalKind::SmartMoneyPressure, SignalTag::SmartMoneyPressure)
+            | (DerivedSignalKind::MarketStress, SignalTag::MarketStress)
+    )
+}
+
+static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
+    TemplateMetadata {
+        key: "flow",
+        supporting_events: &[
+            MarketEventKind::SmartMoneyPressure,
+            MarketEventKind::VolumeDislocation,
+            MarketEventKind::CompositeAcceleration,
+        ],
+        contradicting_events: &[
+            MarketEventKind::ManualReviewRequired,
+            MarketEventKind::InstitutionalFlip,
+        ],
+        supporting_signal_tags: &[
+            SignalTag::Convergence,
+            SignalTag::SmartMoneyPressure,
+            SignalTag::ActivityMomentum,
+        ],
+        contradicting_signal_tags: &[SignalTag::MarketStress],
+        path_supports: false,
+        invalidation: "directional flow evidence reverses or weakens",
+        expected_observations: &["directional participation should persist"],
+        priority: 120,
+    },
+    TemplateMetadata {
+        key: "liquidity",
+        supporting_events: &[
+            MarketEventKind::OrderBookDislocation,
+            MarketEventKind::CandlestickBreakout,
+        ],
+        contradicting_events: &[
+            MarketEventKind::SharedHolderAnomaly,
+            MarketEventKind::StressRegimeShift,
+        ],
+        supporting_signal_tags: &[SignalTag::CandlestickConviction, SignalTag::StructuralComposite],
+        contradicting_signal_tags: &[SignalTag::MarketStress],
+        path_supports: false,
+        invalidation: "depth asymmetry and candle stress normalize",
+        expected_observations: &[
+            "local imbalance should remain visible in depth or candles",
+        ],
+        priority: 115,
+    },
+    TemplateMetadata {
+        key: "propagation",
+        supporting_events: &[
+            MarketEventKind::SharedHolderAnomaly,
+            MarketEventKind::StressRegimeShift,
+        ],
+        contradicting_events: &[
+            MarketEventKind::OrderBookDislocation,
+            MarketEventKind::PropagationAbsence,
+        ],
+        supporting_signal_tags: &[SignalTag::MarketStress, SignalTag::Convergence],
+        contradicting_signal_tags: &[SignalTag::CandlestickConviction],
+        path_supports: true,
+        invalidation: "connected scopes stop co-moving or the path breaks",
+        expected_observations: &[
+            "linked scopes should start repricing in sequence",
+        ],
+        priority: 100,
+    },
+    TemplateMetadata {
+        key: "risk",
+        supporting_events: &[
+            MarketEventKind::MarketStressElevated,
+            MarketEventKind::StressRegimeShift,
+            MarketEventKind::InstitutionalFlip,
+        ],
+        contradicting_events: &[MarketEventKind::CandlestickBreakout],
+        supporting_signal_tags: &[SignalTag::MarketStress],
+        contradicting_signal_tags: &[SignalTag::ActivityMomentum],
+        path_supports: true,
+        invalidation: "market stress and risk-sensitive events revert",
+        expected_observations: &[
+            "stress-sensitive assets should move coherently",
+        ],
+        priority: 88,
+    },
+    TemplateMetadata {
+        key: "catalyst_repricing",
+        supporting_events: &[MarketEventKind::CatalystActivation],
+        contradicting_events: &[
+            MarketEventKind::ManualReviewRequired,
+            MarketEventKind::PropagationAbsence,
+        ],
+        supporting_signal_tags: &[],
+        contradicting_signal_tags: &[],
+        path_supports: false,
+        invalidation: "the core supporting evidence disappears",
+        expected_observations: &["supporting evidence should persist"],
+        priority: 108,
+    },
+    TemplateMetadata {
+        key: "shared_holder_spillover",
+        supporting_events: &[MarketEventKind::SharedHolderAnomaly],
+        contradicting_events: &[MarketEventKind::InstitutionalFlip],
+        supporting_signal_tags: &[SignalTag::Convergence, SignalTag::SmartMoneyPressure],
+        contradicting_signal_tags: &[SignalTag::MarketStress],
+        path_supports: true,
+        invalidation: "shared-holder crowding link weakens or peers decouple",
+        expected_observations: &[
+            "peer names should move with shared-holder pressure",
+        ],
+        priority: 96,
+    },
+    TemplateMetadata {
+        key: "institution_relay",
+        supporting_events: &[
+            MarketEventKind::InstitutionalFlip,
+            MarketEventKind::SharedHolderAnomaly,
+        ],
+        contradicting_events: &[MarketEventKind::ManualReviewRequired],
+        supporting_signal_tags: &[SignalTag::SmartMoneyPressure, SignalTag::Convergence],
+        contradicting_signal_tags: &[SignalTag::MarketStress],
+        path_supports: true,
+        invalidation: "institution relay loses synchronization or affinity breaks",
+        expected_observations: &[
+            "institution-linked scopes should relay the move in sequence",
+        ],
+        priority: 96,
+    },
+    TemplateMetadata {
+        key: "sector_rotation_spillover",
+        supporting_events: &[
+            MarketEventKind::StressRegimeShift,
+            MarketEventKind::CompositeAcceleration,
+        ],
+        contradicting_events: &[
+            MarketEventKind::ManualReviewRequired,
+            MarketEventKind::PropagationAbsence,
+        ],
+        supporting_signal_tags: &[SignalTag::Convergence, SignalTag::StructuralComposite],
+        contradicting_signal_tags: &[SignalTag::MarketStress],
+        path_supports: true,
+        invalidation: "sector rotation stalls or reverses",
+        expected_observations: &[
+            "sector beneficiaries and victims should diverge further",
+        ],
+        priority: 92,
+    },
+    TemplateMetadata {
+        key: "stress_feedback_loop",
+        supporting_events: &[
+            MarketEventKind::MarketStressElevated,
+            MarketEventKind::StressRegimeShift,
+        ],
+        contradicting_events: &[MarketEventKind::CandlestickBreakout],
+        supporting_signal_tags: &[SignalTag::MarketStress, SignalTag::StructuralComposite],
+        contradicting_signal_tags: &[SignalTag::CandlestickConviction],
+        path_supports: true,
+        invalidation: "stress stops feeding back through the rotation complex",
+        expected_observations: &[
+            "stress and rotation should keep reinforcing each other",
+        ],
+        priority: 88,
+    },
+    TemplateMetadata {
+        key: "stress_concentration",
+        supporting_events: &[
+            MarketEventKind::MarketStressElevated,
+            MarketEventKind::StressRegimeShift,
+        ],
+        contradicting_events: &[MarketEventKind::CandlestickBreakout],
+        supporting_signal_tags: &[SignalTag::MarketStress],
+        contradicting_signal_tags: &[SignalTag::ActivityMomentum],
+        path_supports: true,
+        invalidation: "market stress diffuses and sectors decouple",
+        expected_observations: &[
+            "market stress should cluster into the same vulnerable sectors",
+        ],
+        priority: 88,
+    },
+    TemplateMetadata {
+        key: "sector_symbol_spillover",
+        supporting_events: &[
+            MarketEventKind::SharedHolderAnomaly,
+            MarketEventKind::VolumeDislocation,
+        ],
+        contradicting_events: &[
+            MarketEventKind::ManualReviewRequired,
+            MarketEventKind::PropagationAbsence,
+        ],
+        supporting_signal_tags: &[SignalTag::StructuralComposite, SignalTag::Convergence],
+        contradicting_signal_tags: &[SignalTag::MarketStress],
+        path_supports: true,
+        invalidation: "sector-symbol spillover stops transmitting",
+        expected_observations: &["sector move should leak into linked symbols"],
+        priority: 96,
+    },
+    TemplateMetadata {
+        key: "cross_mechanism_chain",
+        supporting_events: &[
+            MarketEventKind::SharedHolderAnomaly,
+            MarketEventKind::StressRegimeShift,
+            MarketEventKind::CompositeAcceleration,
+        ],
+        contradicting_events: &[
+            MarketEventKind::ManualReviewRequired,
+            MarketEventKind::PropagationAbsence,
+        ],
+        supporting_signal_tags: &[SignalTag::Convergence, SignalTag::MarketStress],
+        contradicting_signal_tags: &[SignalTag::CandlestickConviction],
+        path_supports: true,
+        invalidation: "one leg of the cross-mechanism chain breaks",
+        expected_observations: &[
+            "multiple mechanisms should reinforce the same direction",
+        ],
+        priority: 84,
+    },
+    TemplateMetadata {
+        key: "institution_reversal",
+        supporting_events: &[
+            MarketEventKind::InstitutionalFlip,
+            MarketEventKind::ManualReviewRequired,
+        ],
+        contradicting_events: &[MarketEventKind::CandlestickBreakout],
+        supporting_signal_tags: &[SignalTag::SmartMoneyPressure, SignalTag::Convergence],
+        contradicting_signal_tags: &[SignalTag::MarketStress],
+        path_supports: true,
+        invalidation: "institutional reversal no longer persists",
+        expected_observations: &[
+            "institutional flow should continue flipping the same way",
+        ],
+        priority: 104,
+    },
+    TemplateMetadata {
+        key: "breakout_contagion",
+        supporting_events: &[
+            MarketEventKind::CandlestickBreakout,
+            MarketEventKind::SharedHolderAnomaly,
+        ],
+        contradicting_events: &[MarketEventKind::MarketStressElevated],
+        supporting_signal_tags: &[SignalTag::CandlestickConviction, SignalTag::ActivityMomentum],
+        contradicting_signal_tags: &[SignalTag::MarketStress],
+        path_supports: true,
+        invalidation: "breakout loses follow-through or contagion stops",
+        expected_observations: &[
+            "breakout leaders should drag peers along",
+        ],
+        priority: 110,
+    },
+];
+
+fn lookup_template(key: &str) -> Option<&'static TemplateMetadata> {
+    TEMPLATE_REGISTRY.iter().find(|m| m.key == key)
+}
+
 pub(super) struct EvidenceWeightSummary {
     pub local_support: Decimal,
     pub local_contradict: Decimal,
@@ -399,105 +695,41 @@ pub(super) fn event_polarity(
     template: &HypothesisTemplate,
     kind: &MarketEventKind,
 ) -> Option<EvidencePolarity> {
-    use EvidencePolarity::{Contradicts as C, Supports as S};
-    use MarketEventKind as K;
-
-    let polarity = match (template.key.as_str(), kind) {
-        ("flow", K::SmartMoneyPressure | K::VolumeDislocation | K::CompositeAcceleration) => S,
-        ("flow", K::ManualReviewRequired | K::InstitutionalFlip) => C,
-        ("liquidity", K::OrderBookDislocation | K::CandlestickBreakout) => S,
-        ("liquidity", K::SharedHolderAnomaly | K::StressRegimeShift) => C,
-        ("propagation", K::SharedHolderAnomaly | K::StressRegimeShift) => S,
-        ("propagation", K::OrderBookDislocation) => C,
-        ("risk", K::MarketStressElevated | K::StressRegimeShift | K::InstitutionalFlip) => S,
-        ("risk", K::CandlestickBreakout) => C,
-        ("catalyst_repricing", K::CatalystActivation) => S,
-        ("catalyst_repricing", K::ManualReviewRequired) => C,
-        ("shared_holder_spillover", K::SharedHolderAnomaly) => S,
-        ("shared_holder_spillover", K::InstitutionalFlip) => C,
-        ("institution_relay", K::InstitutionalFlip | K::SharedHolderAnomaly) => S,
-        ("institution_relay", K::ManualReviewRequired) => C,
-        ("sector_rotation_spillover", K::StressRegimeShift | K::CompositeAcceleration) => S,
-        ("sector_rotation_spillover", K::ManualReviewRequired) => C,
-        ("stress_feedback_loop", K::MarketStressElevated | K::StressRegimeShift) => S,
-        ("stress_feedback_loop", K::CandlestickBreakout) => C,
-        ("stress_concentration", K::MarketStressElevated | K::StressRegimeShift) => S,
-        ("stress_concentration", K::CandlestickBreakout) => C,
-        ("sector_symbol_spillover", K::SharedHolderAnomaly | K::VolumeDislocation) => S,
-        ("sector_symbol_spillover", K::ManualReviewRequired) => C,
-        (
-            "propagation"
-            | "sector_rotation_spillover"
-            | "sector_symbol_spillover"
-            | "cross_mechanism_chain"
-            | "catalyst_repricing",
-            K::PropagationAbsence,
-        ) => C,
-        (
-            "cross_mechanism_chain",
-            K::SharedHolderAnomaly | K::StressRegimeShift | K::CompositeAcceleration,
-        ) => S,
-        ("cross_mechanism_chain", K::ManualReviewRequired) => C,
-        ("institution_reversal", K::InstitutionalFlip | K::ManualReviewRequired) => S,
-        ("institution_reversal", K::CandlestickBreakout) => C,
-        ("breakout_contagion", K::CandlestickBreakout | K::SharedHolderAnomaly) => S,
-        ("breakout_contagion", K::MarketStressElevated) => C,
-        _ => return None,
-    };
-    Some(polarity)
+    let meta = lookup_template(template.key.as_str())?;
+    if meta.supporting_events.contains(kind) {
+        Some(EvidencePolarity::Supports)
+    } else if meta.contradicting_events.contains(kind) {
+        Some(EvidencePolarity::Contradicts)
+    } else {
+        None
+    }
 }
 
 pub(super) fn signal_polarity(
     template: &HypothesisTemplate,
     kind: &DerivedSignalKind,
 ) -> Option<EvidencePolarity> {
-    use DerivedSignalKind as K;
-    use EvidencePolarity::{Contradicts as C, Supports as S};
-
-    let polarity = match (template.key.as_str(), kind) {
-        ("flow", K::Convergence | K::SmartMoneyPressure | K::ActivityMomentum) => S,
-        ("flow", K::MarketStress) => C,
-        ("liquidity", K::CandlestickConviction | K::StructuralComposite) => S,
-        ("liquidity", K::MarketStress) => C,
-        ("propagation", K::MarketStress | K::Convergence) => S,
-        ("propagation", K::CandlestickConviction) => C,
-        ("risk", K::MarketStress) => S,
-        ("risk", K::ActivityMomentum) => C,
-        ("shared_holder_spillover", K::Convergence | K::SmartMoneyPressure) => S,
-        ("shared_holder_spillover", K::MarketStress) => C,
-        ("institution_relay", K::SmartMoneyPressure | K::Convergence) => S,
-        ("institution_relay", K::MarketStress) => C,
-        ("sector_rotation_spillover", K::Convergence | K::StructuralComposite) => S,
-        ("sector_rotation_spillover", K::MarketStress) => C,
-        ("stress_feedback_loop", K::MarketStress | K::StructuralComposite) => S,
-        ("stress_feedback_loop", K::CandlestickConviction) => C,
-        ("stress_concentration", K::MarketStress) => S,
-        ("stress_concentration", K::ActivityMomentum) => C,
-        ("sector_symbol_spillover", K::StructuralComposite | K::Convergence) => S,
-        ("sector_symbol_spillover", K::MarketStress) => C,
-        ("cross_mechanism_chain", K::Convergence | K::MarketStress) => S,
-        ("cross_mechanism_chain", K::CandlestickConviction) => C,
-        ("institution_reversal", K::SmartMoneyPressure | K::Convergence) => S,
-        ("institution_reversal", K::MarketStress) => C,
-        ("breakout_contagion", K::CandlestickConviction | K::ActivityMomentum) => S,
-        ("breakout_contagion", K::MarketStress) => C,
-        _ => return None,
-    };
-    Some(polarity)
+    let meta = lookup_template(template.key.as_str())?;
+    if meta
+        .supporting_signal_tags
+        .iter()
+        .any(|tag| signal_kind_matches(kind, tag))
+    {
+        Some(EvidencePolarity::Supports)
+    } else if meta
+        .contradicting_signal_tags
+        .iter()
+        .any(|tag| signal_kind_matches(kind, tag))
+    {
+        Some(EvidencePolarity::Contradicts)
+    } else {
+        None
+    }
 }
 
 pub(super) fn path_polarity(template: &HypothesisTemplate) -> EvidencePolarity {
-    match template.key.as_str() {
-        "propagation"
-        | "risk"
-        | "shared_holder_spillover"
-        | "institution_relay"
-        | "sector_rotation_spillover"
-        | "stress_feedback_loop"
-        | "stress_concentration"
-        | "sector_symbol_spillover"
-        | "cross_mechanism_chain"
-        | "breakout_contagion" => EvidencePolarity::Supports,
+    match lookup_template(template.key.as_str()) {
+        Some(meta) if meta.path_supports => EvidencePolarity::Supports,
         _ => EvidencePolarity::Contradicts,
     }
 }
@@ -532,22 +764,9 @@ pub(super) fn template_statement(template: &HypothesisTemplate, scope: &Reasonin
 }
 
 pub(super) fn template_invalidation(template: &HypothesisTemplate) -> Vec<InvalidationCondition> {
-    let description = match template.key.as_str() {
-        "flow" => "directional flow evidence reverses or weakens",
-        "liquidity" => "depth asymmetry and candle stress normalize",
-        "propagation" => "connected scopes stop co-moving or the path breaks",
-        "risk" => "market stress and risk-sensitive events revert",
-        "shared_holder_spillover" => "shared-holder crowding link weakens or peers decouple",
-        "institution_relay" => "institution relay loses synchronization or affinity breaks",
-        "sector_rotation_spillover" => "sector rotation stalls or reverses",
-        "stress_feedback_loop" => "stress stops feeding back through the rotation complex",
-        "stress_concentration" => "market stress diffuses and sectors decouple",
-        "sector_symbol_spillover" => "sector-symbol spillover stops transmitting",
-        "cross_mechanism_chain" => "one leg of the cross-mechanism chain breaks",
-        "institution_reversal" => "institutional reversal no longer persists",
-        "breakout_contagion" => "breakout loses follow-through or contagion stops",
-        _ => "the core supporting evidence disappears",
-    };
+    let description = lookup_template(template.key.as_str())
+        .map(|m| m.invalidation)
+        .unwrap_or("the core supporting evidence disappears");
 
     vec![InvalidationCondition {
         description: description.into(),
@@ -556,36 +775,19 @@ pub(super) fn template_invalidation(template: &HypothesisTemplate) -> Vec<Invali
 }
 
 pub(super) fn template_expected_observations(template: &HypothesisTemplate) -> Vec<String> {
-    match template.key.as_str() {
-        "flow" => vec!["directional participation should persist".into()],
-        "liquidity" => vec!["local imbalance should remain visible in depth or candles".into()],
-        "propagation" => vec!["linked scopes should start repricing in sequence".into()],
-        "risk" => vec!["stress-sensitive assets should move coherently".into()],
-        "shared_holder_spillover" => {
-            vec!["peer names should move with shared-holder pressure".into()]
-        }
-        "institution_relay" => {
-            vec!["institution-linked scopes should relay the move in sequence".into()]
-        }
-        "sector_rotation_spillover" => {
-            vec!["sector beneficiaries and victims should diverge further".into()]
-        }
-        "stress_feedback_loop" => {
-            vec!["stress and rotation should keep reinforcing each other".into()]
-        }
-        "stress_concentration" => {
-            vec!["market stress should cluster into the same vulnerable sectors".into()]
-        }
-        "sector_symbol_spillover" => vec!["sector move should leak into linked symbols".into()],
-        "cross_mechanism_chain" => {
-            vec!["multiple mechanisms should reinforce the same direction".into()]
-        }
-        "institution_reversal" => {
-            vec!["institutional flow should continue flipping the same way".into()]
-        }
-        "breakout_contagion" => vec!["breakout leaders should drag peers along".into()],
+    match lookup_template(template.key.as_str()) {
+        Some(meta) if !meta.expected_observations.is_empty() => meta
+            .expected_observations
+            .iter()
+            .map(|s| (*s).into())
+            .collect(),
         _ => vec!["supporting evidence should persist".into()],
     }
+}
+
+/// Look up the priority score for a template key. Used by synthesis.rs.
+pub(super) fn template_priority(key: &str) -> i32 {
+    lookup_template(key).map(|m| m.priority).unwrap_or(80)
 }
 
 pub(super) fn competing_hypothesis_confidence(evidence: &[ReasoningEvidence]) -> Decimal {
