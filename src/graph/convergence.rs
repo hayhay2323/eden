@@ -29,10 +29,13 @@ pub struct ConvergenceScore {
 
 impl ConvergenceScore {
     /// Compute convergence score for a stock in the BrainGraph.
+    /// When `edge_ledger` is provided, edge weights are adjusted by learned
+    /// multipliers from historical outcomes.
     pub fn compute(
         symbol: &Symbol,
         brain: &BrainGraph,
         temporal_ctx: Option<&TemporalConvergenceContext>,
+        edge_ledger: Option<&super::edge_learning::EdgeLearningLedger>,
     ) -> Option<Self> {
         let &stock_idx = brain.stock_nodes.get(symbol)?;
 
@@ -45,7 +48,20 @@ impl ConvergenceScore {
         {
             if let EdgeKind::InstitutionToStock(e) = edge.weight() {
                 let w = Decimal::from(e.seat_count as i64);
-                weighted_sum += e.direction * w;
+                let learned = edge_ledger
+                    .map(|ledger| {
+                        let source = edge.source();
+                        if let NodeKind::Institution(inst) = &brain.graph[source] {
+                            ledger.weight_multiplier(&format!(
+                                "inst:{}→stock:{}",
+                                inst.institution_id, symbol
+                            ))
+                        } else {
+                            Decimal::ONE
+                        }
+                    })
+                    .unwrap_or(Decimal::ONE);
+                weighted_sum += e.direction * w * learned;
                 weight_total += w;
             }
         }
@@ -56,9 +72,8 @@ impl ConvergenceScore {
         };
 
         // 2. sector_coherence: sector node's mean_direction (signed) via stock→sector edge.
-        //    We use mean_direction rather than mean_coherence so this component is
-        //    directionally consistent with the other signed components.
         let mut sector_coherence = None;
+        let mut sector_learned = Decimal::ONE;
         for edge in brain
             .graph
             .edges_directed(stock_idx, GraphDirection::Outgoing)
@@ -67,9 +82,18 @@ impl ConvergenceScore {
                 let target = edge.target();
                 if let NodeKind::Sector(s) = &brain.graph[target] {
                     sector_coherence = Some(s.mean_direction);
+                    sector_learned = edge_ledger
+                        .map(|ledger| {
+                            ledger.weight_multiplier(&format!(
+                                "stock:{}→sector:{}",
+                                symbol, s.sector_id
+                            ))
+                        })
+                        .unwrap_or(Decimal::ONE);
                 }
             }
         }
+        sector_coherence = sector_coherence.map(|sc| sc * sector_learned);
 
         // 3. cross_stock_correlation: mean of (similarity * neighbor.mean_direction) across stock↔stock
         let mut corr_sum = Decimal::ZERO;
@@ -81,7 +105,17 @@ impl ConvergenceScore {
             if let EdgeKind::StockToStock(e) = edge.weight() {
                 let target = edge.target();
                 if let NodeKind::Stock(neighbor) = &brain.graph[target] {
-                    corr_sum += e.similarity * neighbor.mean_direction;
+                    let learned = edge_ledger
+                        .map(|ledger| {
+                            let mut pair = [symbol.to_string(), neighbor.symbol.to_string()];
+                            pair.sort();
+                            ledger.weight_multiplier(&format!(
+                                "stock:{}↔stock:{}",
+                                pair[0], pair[1]
+                            ))
+                        })
+                        .unwrap_or(Decimal::ONE);
+                    corr_sum += e.similarity * neighbor.mean_direction * learned;
                     corr_count += 1;
                 }
             }
