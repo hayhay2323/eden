@@ -22,7 +22,7 @@ use time::OffsetDateTime;
 
 #[cfg(feature = "persistence")]
 use crate::persistence::store::EdenStore;
-use crate::runtime_tasks::RuntimeTaskStore;
+use crate::core::runtime_tasks::RuntimeTaskStore;
 
 const DEFAULT_API_SCOPE: &str = "frontend:readonly";
 pub(crate) const API_KEY_PREFIX: &str = "eden_pk_";

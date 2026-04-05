@@ -602,7 +602,7 @@ async fn post_case_assign_rejects_queue_pin_owned_by_another_actor() {
         bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 8787)),
         auth,
         revocations,
-        runtime_tasks: crate::runtime_tasks::RuntimeTaskStore::load(
+        runtime_tasks: crate::core::runtime_tasks::RuntimeTaskStore::load(
             path.join("runtime_tasks.json"),
         )
         .expect("runtime task store"),
@@ -647,7 +647,7 @@ async fn post_case_queue_pin_sets_and_clears_marker() {
         bind_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 8787)),
         auth,
         revocations,
-        runtime_tasks: crate::runtime_tasks::RuntimeTaskStore::load(
+        runtime_tasks: crate::core::runtime_tasks::RuntimeTaskStore::load(
             path.join("runtime_tasks.json"),
         )
         .expect("runtime task store"),

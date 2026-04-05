@@ -10,7 +10,7 @@ use crate::persistence::lineage_snapshot::LineageSnapshotRecord;
 use crate::persistence::store::EdenStore;
 #[cfg(feature = "persistence")]
 use crate::persistence::tactical_setup::TacticalSetupRecord;
-use crate::runtime_tasks::{
+use crate::core::runtime_tasks::{
     RuntimeTaskCreateRequest, RuntimeTaskFilter, RuntimeTaskKind, RuntimeTaskRecord,
     RuntimeTaskStatus, RuntimeTaskStatusUpdateRequest,
 };

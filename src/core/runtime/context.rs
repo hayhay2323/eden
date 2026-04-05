@@ -1,5 +1,5 @@
 use super::*;
-use crate::runtime_tasks::RuntimeTaskHandle;
+use crate::core::runtime_tasks::RuntimeTaskHandle;
 #[cfg(feature = "persistence")]
 use super::persistence::{
     persist_market_knowledge_projection, persist_market_lineage_projection,
