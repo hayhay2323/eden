@@ -143,32 +143,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             cached_us_candidate_mechanisms = mechs;
         }
     }
-    // Backfill: generate auto-assessments from historical realized outcomes
     #[cfg(feature = "persistence")]
     if let Some(ref store) = runtime.store {
-        if let Ok(outcomes) = store.recent_case_realized_outcomes_by_market("us", 500).await {
-            if !outcomes.is_empty() {
-                let auto_assessments =
-                    eden::persistence::case_reasoning_assessment::auto_assessments_from_outcomes(
-                        &outcomes,
-                    );
-                if !auto_assessments.is_empty() {
-                    let count = auto_assessments.len();
-                    if let Err(err) = store
-                        .write_case_reasoning_assessments(&auto_assessments)
-                        .await
-                    {
-                        eprintln!("[us] failed to backfill doctrine assessments: {}", err);
-                    } else {
-                        eprintln!(
-                            "[us] backfilled {} doctrine assessments from {} historical outcomes",
-                            count,
-                            outcomes.len()
-                        );
-                    }
-                }
-            }
-        }
+        crate::persistence::case_reasoning_assessment::backfill_doctrine_assessments(store, "us").await;
     }
 
     let mut us_hidden_force_state =

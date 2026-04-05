@@ -200,33 +200,9 @@ pub async fn run() {
             cached_causal_schemas = schemas;
         }
     }
-    // Backfill: generate auto-assessments from historical realized outcomes
-    // so that doctrine pressure has seed data on first boot.
     #[cfg(feature = "persistence")]
     if let Some(ref store) = runtime.store {
-        if let Ok(outcomes) = store.recent_case_realized_outcomes_by_market("hk", 500).await {
-            if !outcomes.is_empty() {
-                let auto_assessments =
-                    eden::persistence::case_reasoning_assessment::auto_assessments_from_outcomes(
-                        &outcomes,
-                    );
-                if !auto_assessments.is_empty() {
-                    let count = auto_assessments.len();
-                    if let Err(err) = store
-                        .write_case_reasoning_assessments(&auto_assessments)
-                        .await
-                    {
-                        eprintln!("[hk] failed to backfill doctrine assessments: {}", err);
-                    } else {
-                        eprintln!(
-                            "[hk] backfilled {} doctrine assessments from {} historical outcomes",
-                            count,
-                            outcomes.len()
-                        );
-                    }
-                }
-            }
-        }
+        eden::persistence::case_reasoning_assessment::backfill_doctrine_assessments(store, "hk").await;
     }
 
     let mut hidden_force_state = eden::pipeline::residual::HiddenForceVerificationState::default();
@@ -595,6 +571,24 @@ pub async fn run() {
                 }
             }
         }
+        // Energy propagation: build energy map from diffusion paths, blend into momentum,
+        // then apply momentum-based energy to convergence scores (mutated in place,
+        // avoiding a full DecisionSnapshot clone).
+        let diffusion_paths = eden::pipeline::reasoning::derive_diffusion_propagation_paths(
+            &brain,
+            &reasoning_stock_deltas,
+            deep_reasoning_decision.timestamp,
+        );
+        let tick_energy =
+            eden::graph::energy::NodeEnergyMap::from_propagation_paths(&diffusion_paths);
+        energy_momentum.update(&tick_energy, Decimal::new(7, 1));
+        let mut deep_reasoning_decision = deep_reasoning_decision;
+        if !energy_momentum.is_empty() {
+            eden::graph::energy::apply_energy_to_convergence(
+                &mut deep_reasoning_decision.convergence_scores,
+                &energy_momentum,
+            );
+        }
         let family_boost = eden::pipeline::reasoning::FamilyBoostLedger::from_lineage_priors(
             &lineage_family_priors,
             eden::pipeline::reasoning::hk_session_label(deep_reasoning_event_snapshot.timestamp),
@@ -620,30 +614,12 @@ pub async fn run() {
             absence_memory: &absence_memory,
             family_boost: &family_boost,
         };
-        // Energy propagation: build energy map from diffusion paths, blend into momentum,
-        // then apply momentum-based energy to convergence scores.
-        let diffusion_paths = eden::pipeline::reasoning::derive_diffusion_propagation_paths(
-            &brain,
-            &reasoning_stock_deltas,
-            deep_reasoning_decision.timestamp,
-        );
-        let tick_energy =
-            eden::graph::energy::NodeEnergyMap::from_propagation_paths(&diffusion_paths);
-        energy_momentum.update(&tick_energy, Decimal::new(7, 1));
-        let mut energy_enriched_decision = deep_reasoning_decision.clone();
-        let momentum_energy = energy_momentum.as_energy_map();
-        if !momentum_energy.is_empty() {
-            eden::graph::energy::apply_energy_to_convergence(
-                &mut energy_enriched_decision.convergence_scores,
-                &momentum_energy,
-            );
-        }
 
         let mut reasoning_snapshot = ReasoningSnapshot::derive_with_diffusion(
             &deep_reasoning_event_snapshot,
             &deep_reasoning_derived_signal_snapshot,
             &graph_insights,
-            &energy_enriched_decision,
+            &deep_reasoning_decision,
             previous_setups,
             previous_tracks,
             &reasoning_ctx,

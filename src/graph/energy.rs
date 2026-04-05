@@ -118,10 +118,10 @@ impl EnergyMomentum {
 /// that energy into the composite.
 pub fn apply_energy_to_convergence(
     convergence_scores: &mut HashMap<Symbol, crate::graph::convergence::ConvergenceScore>,
-    energy_map: &NodeEnergyMap,
+    momentum: &EnergyMomentum,
 ) {
     for (symbol, score) in convergence_scores.iter_mut() {
-        let energy = energy_map.energy_for(symbol);
+        let energy = momentum.momentum_for(symbol);
         if energy == Decimal::ZERO {
             continue;
         }
@@ -194,12 +194,16 @@ mod tests {
             },
         );
 
+        // Build an EnergyMomentum with pre-seeded state via update
+        let mut momentum = EnergyMomentum::default();
         let mut flux = HashMap::new();
         flux.insert(Symbol("700.HK".into()), dec!(0.8));
         let energy_map = NodeEnergyMap { flux };
+        // Use decay=0 so momentum = 0*existing + 1.0*new = new energy exactly
+        momentum.update(&energy_map, dec!(0.0));
 
         let baseline = scores[&Symbol("700.HK".into())].composite;
-        apply_energy_to_convergence(&mut scores, &energy_map);
+        apply_energy_to_convergence(&mut scores, &momentum);
         let adjusted = scores[&Symbol("700.HK".into())].composite;
 
         assert!(adjusted > baseline, "energy should increase composite");

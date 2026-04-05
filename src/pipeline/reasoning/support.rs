@@ -26,10 +26,10 @@ struct TemplateMetadata {
     supporting_events: &'static [MarketEventKind],
     /// Events that CONTRADICT this template's thesis
     contradicting_events: &'static [MarketEventKind],
-    /// Signal kinds that SUPPORT this template's thesis (checked via `signal_kind_matches`)
-    supporting_signal_tags: &'static [SignalTag],
+    /// Signal kinds that SUPPORT this template's thesis
+    supporting_signals: &'static [DerivedSignalKind],
     /// Signal kinds that CONTRADICT this template's thesis
-    contradicting_signal_tags: &'static [SignalTag],
+    contradicting_signals: &'static [DerivedSignalKind],
     /// Whether propagation paths support (true) or contradict (false)
     path_supports: bool,
     /// Description of what would invalidate the hypothesis
@@ -38,30 +38,6 @@ struct TemplateMetadata {
     expected_observations: &'static [&'static str],
     /// Priority score for ranking
     priority: i32,
-}
-
-/// Discriminant tags that mirror `DerivedSignalKind` variants without requiring
-/// `PartialEq` on the enum itself.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SignalTag {
-    StructuralComposite,
-    Convergence,
-    ActivityMomentum,
-    CandlestickConviction,
-    SmartMoneyPressure,
-    MarketStress,
-}
-
-fn signal_kind_matches(kind: &DerivedSignalKind, tag: &SignalTag) -> bool {
-    matches!(
-        (kind, tag),
-        (DerivedSignalKind::StructuralComposite, SignalTag::StructuralComposite)
-            | (DerivedSignalKind::Convergence, SignalTag::Convergence)
-            | (DerivedSignalKind::ActivityMomentum, SignalTag::ActivityMomentum)
-            | (DerivedSignalKind::CandlestickConviction, SignalTag::CandlestickConviction)
-            | (DerivedSignalKind::SmartMoneyPressure, SignalTag::SmartMoneyPressure)
-            | (DerivedSignalKind::MarketStress, SignalTag::MarketStress)
-    )
 }
 
 static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
@@ -76,12 +52,12 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::ManualReviewRequired,
             MarketEventKind::InstitutionalFlip,
         ],
-        supporting_signal_tags: &[
-            SignalTag::Convergence,
-            SignalTag::SmartMoneyPressure,
-            SignalTag::ActivityMomentum,
+        supporting_signals: &[
+            DerivedSignalKind::Convergence,
+            DerivedSignalKind::SmartMoneyPressure,
+            DerivedSignalKind::ActivityMomentum,
         ],
-        contradicting_signal_tags: &[SignalTag::MarketStress],
+        contradicting_signals: &[DerivedSignalKind::MarketStress],
         path_supports: false,
         invalidation: "directional flow evidence reverses or weakens",
         expected_observations: &["directional participation should persist"],
@@ -97,8 +73,8 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::SharedHolderAnomaly,
             MarketEventKind::StressRegimeShift,
         ],
-        supporting_signal_tags: &[SignalTag::CandlestickConviction, SignalTag::StructuralComposite],
-        contradicting_signal_tags: &[SignalTag::MarketStress],
+        supporting_signals: &[DerivedSignalKind::CandlestickConviction, DerivedSignalKind::StructuralComposite],
+        contradicting_signals: &[DerivedSignalKind::MarketStress],
         path_supports: false,
         invalidation: "depth asymmetry and candle stress normalize",
         expected_observations: &[
@@ -116,8 +92,8 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::OrderBookDislocation,
             MarketEventKind::PropagationAbsence,
         ],
-        supporting_signal_tags: &[SignalTag::MarketStress, SignalTag::Convergence],
-        contradicting_signal_tags: &[SignalTag::CandlestickConviction],
+        supporting_signals: &[DerivedSignalKind::MarketStress, DerivedSignalKind::Convergence],
+        contradicting_signals: &[DerivedSignalKind::CandlestickConviction],
         path_supports: true,
         invalidation: "connected scopes stop co-moving or the path breaks",
         expected_observations: &[
@@ -133,8 +109,8 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::InstitutionalFlip,
         ],
         contradicting_events: &[MarketEventKind::CandlestickBreakout],
-        supporting_signal_tags: &[SignalTag::MarketStress],
-        contradicting_signal_tags: &[SignalTag::ActivityMomentum],
+        supporting_signals: &[DerivedSignalKind::MarketStress],
+        contradicting_signals: &[DerivedSignalKind::ActivityMomentum],
         path_supports: true,
         invalidation: "market stress and risk-sensitive events revert",
         expected_observations: &[
@@ -149,8 +125,8 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::ManualReviewRequired,
             MarketEventKind::PropagationAbsence,
         ],
-        supporting_signal_tags: &[],
-        contradicting_signal_tags: &[],
+        supporting_signals: &[],
+        contradicting_signals: &[],
         path_supports: false,
         invalidation: "the core supporting evidence disappears",
         expected_observations: &["supporting evidence should persist"],
@@ -160,8 +136,8 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
         key: "shared_holder_spillover",
         supporting_events: &[MarketEventKind::SharedHolderAnomaly],
         contradicting_events: &[MarketEventKind::InstitutionalFlip],
-        supporting_signal_tags: &[SignalTag::Convergence, SignalTag::SmartMoneyPressure],
-        contradicting_signal_tags: &[SignalTag::MarketStress],
+        supporting_signals: &[DerivedSignalKind::Convergence, DerivedSignalKind::SmartMoneyPressure],
+        contradicting_signals: &[DerivedSignalKind::MarketStress],
         path_supports: true,
         invalidation: "shared-holder crowding link weakens or peers decouple",
         expected_observations: &[
@@ -176,8 +152,8 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::SharedHolderAnomaly,
         ],
         contradicting_events: &[MarketEventKind::ManualReviewRequired],
-        supporting_signal_tags: &[SignalTag::SmartMoneyPressure, SignalTag::Convergence],
-        contradicting_signal_tags: &[SignalTag::MarketStress],
+        supporting_signals: &[DerivedSignalKind::SmartMoneyPressure, DerivedSignalKind::Convergence],
+        contradicting_signals: &[DerivedSignalKind::MarketStress],
         path_supports: true,
         invalidation: "institution relay loses synchronization or affinity breaks",
         expected_observations: &[
@@ -195,8 +171,8 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::ManualReviewRequired,
             MarketEventKind::PropagationAbsence,
         ],
-        supporting_signal_tags: &[SignalTag::Convergence, SignalTag::StructuralComposite],
-        contradicting_signal_tags: &[SignalTag::MarketStress],
+        supporting_signals: &[DerivedSignalKind::Convergence, DerivedSignalKind::StructuralComposite],
+        contradicting_signals: &[DerivedSignalKind::MarketStress],
         path_supports: true,
         invalidation: "sector rotation stalls or reverses",
         expected_observations: &[
@@ -211,8 +187,8 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::StressRegimeShift,
         ],
         contradicting_events: &[MarketEventKind::CandlestickBreakout],
-        supporting_signal_tags: &[SignalTag::MarketStress, SignalTag::StructuralComposite],
-        contradicting_signal_tags: &[SignalTag::CandlestickConviction],
+        supporting_signals: &[DerivedSignalKind::MarketStress, DerivedSignalKind::StructuralComposite],
+        contradicting_signals: &[DerivedSignalKind::CandlestickConviction],
         path_supports: true,
         invalidation: "stress stops feeding back through the rotation complex",
         expected_observations: &[
@@ -227,8 +203,8 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::StressRegimeShift,
         ],
         contradicting_events: &[MarketEventKind::CandlestickBreakout],
-        supporting_signal_tags: &[SignalTag::MarketStress],
-        contradicting_signal_tags: &[SignalTag::ActivityMomentum],
+        supporting_signals: &[DerivedSignalKind::MarketStress],
+        contradicting_signals: &[DerivedSignalKind::ActivityMomentum],
         path_supports: true,
         invalidation: "market stress diffuses and sectors decouple",
         expected_observations: &[
@@ -246,8 +222,8 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::ManualReviewRequired,
             MarketEventKind::PropagationAbsence,
         ],
-        supporting_signal_tags: &[SignalTag::StructuralComposite, SignalTag::Convergence],
-        contradicting_signal_tags: &[SignalTag::MarketStress],
+        supporting_signals: &[DerivedSignalKind::StructuralComposite, DerivedSignalKind::Convergence],
+        contradicting_signals: &[DerivedSignalKind::MarketStress],
         path_supports: true,
         invalidation: "sector-symbol spillover stops transmitting",
         expected_observations: &["sector move should leak into linked symbols"],
@@ -264,8 +240,8 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::ManualReviewRequired,
             MarketEventKind::PropagationAbsence,
         ],
-        supporting_signal_tags: &[SignalTag::Convergence, SignalTag::MarketStress],
-        contradicting_signal_tags: &[SignalTag::CandlestickConviction],
+        supporting_signals: &[DerivedSignalKind::Convergence, DerivedSignalKind::MarketStress],
+        contradicting_signals: &[DerivedSignalKind::CandlestickConviction],
         path_supports: true,
         invalidation: "one leg of the cross-mechanism chain breaks",
         expected_observations: &[
@@ -280,8 +256,8 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::ManualReviewRequired,
         ],
         contradicting_events: &[MarketEventKind::CandlestickBreakout],
-        supporting_signal_tags: &[SignalTag::SmartMoneyPressure, SignalTag::Convergence],
-        contradicting_signal_tags: &[SignalTag::MarketStress],
+        supporting_signals: &[DerivedSignalKind::SmartMoneyPressure, DerivedSignalKind::Convergence],
+        contradicting_signals: &[DerivedSignalKind::MarketStress],
         path_supports: true,
         invalidation: "institutional reversal no longer persists",
         expected_observations: &[
@@ -296,8 +272,8 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::SharedHolderAnomaly,
         ],
         contradicting_events: &[MarketEventKind::MarketStressElevated],
-        supporting_signal_tags: &[SignalTag::CandlestickConviction, SignalTag::ActivityMomentum],
-        contradicting_signal_tags: &[SignalTag::MarketStress],
+        supporting_signals: &[DerivedSignalKind::CandlestickConviction, DerivedSignalKind::ActivityMomentum],
+        contradicting_signals: &[DerivedSignalKind::MarketStress],
         path_supports: true,
         invalidation: "breakout loses follow-through or contagion stops",
         expected_observations: &[
@@ -710,17 +686,9 @@ pub(super) fn signal_polarity(
     kind: &DerivedSignalKind,
 ) -> Option<EvidencePolarity> {
     let meta = lookup_template(template.key.as_str())?;
-    if meta
-        .supporting_signal_tags
-        .iter()
-        .any(|tag| signal_kind_matches(kind, tag))
-    {
+    if meta.supporting_signals.contains(kind) {
         Some(EvidencePolarity::Supports)
-    } else if meta
-        .contradicting_signal_tags
-        .iter()
-        .any(|tag| signal_kind_matches(kind, tag))
-    {
+    } else if meta.contradicting_signals.contains(kind) {
         Some(EvidencePolarity::Contradicts)
     } else {
         None

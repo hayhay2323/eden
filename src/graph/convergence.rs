@@ -52,10 +52,10 @@ impl ConvergenceScore {
                     .map(|ledger| {
                         let source = edge.source();
                         if let NodeKind::Institution(inst) = &brain.graph[source] {
-                            ledger.weight_multiplier(&format!(
-                                "inst:{}→stock:{}",
-                                inst.institution_id, symbol
-                            ))
+                            ledger.weight_multiplier(&super::edge_learning::EdgeKey::InstitutionToStock {
+                                institution_id: inst.institution_id,
+                                symbol: symbol.clone(),
+                            })
                         } else {
                             Decimal::ONE
                         }
@@ -84,10 +84,10 @@ impl ConvergenceScore {
                     sector_coherence = Some(s.mean_direction);
                     sector_learned = edge_ledger
                         .map(|ledger| {
-                            ledger.weight_multiplier(&format!(
-                                "stock:{}→sector:{}",
-                                symbol, s.sector_id
-                            ))
+                            ledger.weight_multiplier(&super::edge_learning::EdgeKey::StockToSector {
+                                symbol: symbol.clone(),
+                                sector_id: s.sector_id.clone(),
+                            })
                         })
                         .unwrap_or(Decimal::ONE);
                 }
@@ -107,12 +107,12 @@ impl ConvergenceScore {
                 if let NodeKind::Stock(neighbor) = &brain.graph[target] {
                     let learned = edge_ledger
                         .map(|ledger| {
-                            let mut pair = [symbol.to_string(), neighbor.symbol.to_string()];
-                            pair.sort();
-                            ledger.weight_multiplier(&format!(
-                                "stock:{}↔stock:{}",
-                                pair[0], pair[1]
-                            ))
+                            let (a, b) = if symbol.0 < neighbor.symbol.0 {
+                                (symbol.clone(), neighbor.symbol.clone())
+                            } else {
+                                (neighbor.symbol.clone(), symbol.clone())
+                            };
+                            ledger.weight_multiplier(&super::edge_learning::EdgeKey::StockToStock { a, b })
                         })
                         .unwrap_or(Decimal::ONE);
                     corr_sum += e.similarity * neighbor.mean_direction * learned;

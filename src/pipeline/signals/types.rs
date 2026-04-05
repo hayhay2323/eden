@@ -124,7 +124,7 @@ pub struct MarketEventRecord {
     pub summary: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum DerivedSignalKind {
     StructuralComposite,
     Convergence,
@@ -214,25 +214,20 @@ pub fn attribution_for_event_kind(kind: &MarketEventKind) -> Option<(EventDriver
 }
 
 /// Build provenance input strings for a given event kind's attribution.
-pub fn attribution_inputs_for_kind(kind: &MarketEventKind) -> Vec<String> {
-    attribution_for_event_kind(kind)
-        .map(|(driver, scope)| {
-            let driver_str = match driver {
-                EventDriverKind::CompanySpecific => "company_specific",
-                EventDriverKind::SectorWide => "sector_wide",
-                EventDriverKind::MacroWide => "macro_wide",
-            };
-            let scope_str = match scope {
-                EventPropagationScope::Local => "local",
-                EventPropagationScope::Sector => "sector",
-                EventPropagationScope::Market => "market",
-            };
-            vec![
-                format!("{}{}", ATTR_DRIVER_PREFIX, driver_str),
-                format!("{}{}", ATTR_SCOPE_PREFIX, scope_str),
-            ]
-        })
-        .unwrap_or_default()
+/// Returns static slices to avoid per-call allocation.
+pub fn attribution_inputs_for_kind(kind: &MarketEventKind) -> &'static [&'static str] {
+    match attribution_for_event_kind(kind) {
+        Some((EventDriverKind::CompanySpecific, EventPropagationScope::Local)) => {
+            &["attr:driver=company_specific", "attr:scope=local"]
+        }
+        Some((EventDriverKind::SectorWide, EventPropagationScope::Sector)) => {
+            &["attr:driver=sector_wide", "attr:scope=sector"]
+        }
+        Some((EventDriverKind::MacroWide, EventPropagationScope::Market)) => {
+            &["attr:driver=macro_wide", "attr:scope=market"]
+        }
+        _ => &[],
+    }
 }
 
 pub fn event_propagation_scope(

@@ -339,7 +339,7 @@ impl EventSnapshot {
                     .provenance
                     .inputs
                     .retain(|i| !i.starts_with("attr:"));
-                event.provenance.inputs.extend(attr);
+                event.provenance.inputs.extend(attr.iter().map(|s| s.to_string()));
             }
         }
 
@@ -441,7 +441,7 @@ pub fn enrich_attribution_with_evidence(
                 .inputs
                 .extend(super::types::attribution_inputs_for_kind(
                     &MarketEventKind::SharedHolderAnomaly,
-                ));
+                ).iter().map(|s| s.to_string()));
         }
     }
 }
@@ -672,7 +672,7 @@ pub fn broker_events_from_delta(
                 .provenance
                 .inputs
                 .retain(|i| !i.starts_with("attr:"));
-            event.provenance.inputs.extend(attr);
+            event.provenance.inputs.extend(attr.iter().map(|s| s.to_string()));
         }
     }
 
