@@ -141,14 +141,29 @@ pub(super) fn derive_hypotheses(
             world_state,
             &scope,
         );
-        if let Some(hypothesis) = derive_convergence_hypothesis(
+        // Convergence hypothesis takes priority: if the vortex is strong enough,
+        // skip template matching — the graph topology IS the hypothesis.
+        // Templates serve as cold-start fallback when convergence is weak or absent.
+        let convergence_hypothesis = derive_convergence_hypothesis(
             &scope,
             events.timestamp,
             &relevant_events,
             &relevant_signals,
             &relevant_paths,
-        ) {
+        );
+        let convergence_supersedes = convergence_hypothesis
+            .as_ref()
+            .map(|h| h.confidence >= Decimal::new(45, 2))
+            .unwrap_or(false);
+        if let Some(hypothesis) = convergence_hypothesis {
             scope_hypotheses.push(hypothesis);
+        }
+        if convergence_supersedes {
+            // Strong convergence vortex detected — templates are redundant for this scope.
+            // The graph's energy flow has already identified the hypothesis.
+            scope_hypotheses.truncate(MAX_SYMBOL_HYPOTHESES_PER_SCOPE);
+            hypotheses.extend(scope_hypotheses);
+            continue;
         }
         for template in &templates {
             let mut evidence = Vec::new();

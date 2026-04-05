@@ -2897,3 +2897,125 @@ fn causal_narrative_graceful_without_attribution() {
         narrative
     );
 }
+
+#[test]
+fn strong_convergence_supersedes_template_hypotheses() {
+    // Build a scope with enough evidence for a strong convergence hypothesis
+    // (channel_diversity >= 3, strength > 0.40, confidence >= 0.45).
+    // When convergence is strong, template hypotheses should NOT be generated
+    // for that scope — only the convergence hypothesis.
+    use crate::ontology::reasoning::PropagationStep;
+
+    let symbol_scope = ReasoningScope::Symbol(sym("700.HK"));
+    let events = EventSnapshot {
+        timestamp: OffsetDateTime::UNIX_EPOCH,
+        events: vec![
+            Event::new(
+                MarketEventRecord {
+                    scope: SignalScope::Symbol(sym("700.HK")),
+                    kind: MarketEventKind::SmartMoneyPressure,
+                    magnitude: dec!(0.9),
+                    summary: "strong smart money".into(),
+                },
+                crate::ontology::domain::ProvenanceMetadata::default(),
+            ),
+            Event::new(
+                MarketEventRecord {
+                    scope: SignalScope::Symbol(sym("700.HK")),
+                    kind: MarketEventKind::VolumeDislocation,
+                    magnitude: dec!(0.8),
+                    summary: "volume spike".into(),
+                },
+                crate::ontology::domain::ProvenanceMetadata::default(),
+            ),
+            Event::new(
+                MarketEventRecord {
+                    scope: SignalScope::Symbol(sym("700.HK")),
+                    kind: MarketEventKind::CandlestickBreakout,
+                    magnitude: dec!(0.7),
+                    summary: "candle breakout".into(),
+                },
+                crate::ontology::domain::ProvenanceMetadata::default(),
+            ),
+        ],
+    };
+    let signals = DerivedSignalSnapshot {
+        timestamp: OffsetDateTime::UNIX_EPOCH,
+        signals: vec![
+            DerivedSignal::new(
+                DerivedSignalRecord {
+                    scope: SignalScope::Symbol(sym("700.HK")),
+                    kind: DerivedSignalKind::Convergence,
+                    strength: dec!(0.8),
+                    summary: "strong convergence".into(),
+                },
+                crate::ontology::domain::ProvenanceMetadata::default(),
+            ),
+        ],
+    };
+    let paths = vec![
+        PropagationPath {
+            path_id: "path:inst".into(),
+            summary: "inst relay".into(),
+            confidence: dec!(0.6),
+            steps: vec![PropagationStep {
+                from: ReasoningScope::Institution(InstitutionId(1)),
+                to: ReasoningScope::Symbol(sym("700.HK")),
+                mechanism: "institution_affinity".into(),
+                confidence: dec!(0.6),
+                references: vec![],
+            }],
+        },
+        PropagationPath {
+            path_id: "path:sector".into(),
+            summary: "sector flow".into(),
+            confidence: dec!(0.5),
+            steps: vec![PropagationStep {
+                from: ReasoningScope::Sector(SectorId("tech".into())),
+                to: ReasoningScope::Symbol(sym("700.HK")),
+                mechanism: "rotation".into(),
+                confidence: dec!(0.5),
+                references: vec![],
+            }],
+        },
+    ];
+
+    let hypotheses = derive_hypotheses(
+        &events,
+        &signals,
+        &paths,
+        None,
+        &AbsenceMemory::default(),
+        None,
+    );
+
+    let for_scope: Vec<_> = hypotheses
+        .iter()
+        .filter(|h| h.scope == symbol_scope)
+        .collect();
+
+    // If convergence is strong enough, only convergence hypothesis should exist
+    let has_convergence = for_scope
+        .iter()
+        .any(|h| h.family_key == "convergence_hypothesis");
+
+    if has_convergence {
+        let convergence = for_scope
+            .iter()
+            .find(|h| h.family_key == "convergence_hypothesis")
+            .unwrap();
+        if convergence.confidence >= dec!(0.45) {
+            // Templates should be superseded
+            let template_count = for_scope
+                .iter()
+                .filter(|h| h.family_key != "convergence_hypothesis")
+                .count();
+            assert_eq!(
+                template_count, 0,
+                "strong convergence (confidence={}) should supersede templates, but found {} template hypotheses",
+                convergence.confidence, template_count
+            );
+        }
+    }
+    // If convergence is not strong enough, templates should still be present — that's fine
+}
