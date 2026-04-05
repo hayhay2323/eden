@@ -373,7 +373,7 @@ fn order_direction_from_composite() {
 
     let store = make_store_with_stocks(vec![make_stock("700.HK", 100)]);
     let brain = build_brain(narratives, dimensions, &links, &store);
-    let snapshot = DecisionSnapshot::compute(&brain, &links, &[], &store, None);
+    let snapshot = DecisionSnapshot::compute(&brain, &links, &[], &store, None, None);
 
     let suggestion = snapshot
         .order_suggestions
@@ -443,7 +443,7 @@ fn price_range_from_order_book() {
 
     let store = make_store_with_stocks(vec![make_stock("700.HK", 100)]);
     let brain = build_brain(narratives, dimensions, &links, &store);
-    let snapshot = DecisionSnapshot::compute(&brain, &links, &[], &store, None);
+    let snapshot = DecisionSnapshot::compute(&brain, &links, &[], &store, None, None);
 
     let s = snapshot
         .order_suggestions
@@ -829,7 +829,7 @@ fn zero_composite_no_suggestions() {
     let links = empty_links();
     let store = make_store_with_stocks(vec![]);
     let brain = build_brain(narratives, dimensions, &links, &store);
-    let snapshot = DecisionSnapshot::compute(&brain, &links, &[], &store, None);
+    let snapshot = DecisionSnapshot::compute(&brain, &links, &[], &store, None, None);
 
     // Composite is zero → no suggestion
     let suggestion = snapshot

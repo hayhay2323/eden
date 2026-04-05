@@ -143,7 +143,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             );
             let active_fps = tracker.active_fingerprints();
             let decision =
-                DecisionSnapshot::compute(&brain, &links, &active_fps, &current_store, None);
+                DecisionSnapshot::compute(&brain, &links, &active_fps, &current_store, None, None);
             let observation_snapshot = ObservationSnapshot::from_links(&links);
             let mut event_snapshot = EventSnapshot::detect(
                 &history,

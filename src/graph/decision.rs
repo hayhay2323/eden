@@ -68,11 +68,12 @@ impl DecisionSnapshot {
         active_fingerprints: &[StructuralFingerprint],
         store: &ObjectStore,
         temporal_ctx: Option<&TemporalConvergenceContext>,
+        edge_ledger: Option<&crate::graph::edge_learning::EdgeLearningLedger>,
     ) -> Self {
         // Compute ConvergenceScore for all stock nodes
         let mut convergence_scores = HashMap::new();
         for symbol in brain.stock_nodes.keys() {
-            if let Some(score) = ConvergenceScore::compute(symbol, brain, temporal_ctx, None) {
+            if let Some(score) = ConvergenceScore::compute(symbol, brain, temporal_ctx, edge_ledger) {
                 convergence_scores.insert(symbol.clone(), score);
             }
         }

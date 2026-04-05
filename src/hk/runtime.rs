@@ -231,6 +231,7 @@ pub async fn run() {
 
     let mut hidden_force_state = eden::pipeline::residual::HiddenForceVerificationState::default();
     let mut absence_memory = eden::pipeline::reasoning::AbsenceMemory::default();
+    let mut edge_ledger = eden::graph::edge_learning::EdgeLearningLedger::default();
 
     loop {
         let mut rest_updated = false;
@@ -445,7 +446,7 @@ pub async fn run() {
             rolling_composites,
         };
         let mut decision =
-            DecisionSnapshot::compute(&brain, &links, &active_fps, &store, Some(&temporal_ctx));
+            DecisionSnapshot::compute(&brain, &links, &active_fps, &store, Some(&temporal_ctx), Some(&edge_ledger));
 
         display_hk_temporal_debug(tick, &decision, &graph_node_delta, &broker_delta);
 
@@ -691,6 +692,7 @@ pub async fn run() {
                 );
             }
             absence_memory.decay(deep_reasoning_decision.timestamp);
+            edge_ledger.decay(deep_reasoning_decision.timestamp);
         }
 
         // Crystallize confirmed forces → attention boosts + emergent paths + graph edges
