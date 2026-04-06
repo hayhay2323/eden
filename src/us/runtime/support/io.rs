@@ -152,16 +152,32 @@ pub(crate) async fn fetch_us_rest_data(ctx: &QuoteContext, watchlist: &[Symbol])
     let (flow_results, calc_indexes, quotes, intraday_results) =
         tokio::join!(flow_future, calc_future, quote_future, intraday_future);
 
+    // Fetch option surfaces for top symbols by turnover (limit to 20 to avoid API rate limits)
+    let mut top_symbols: Vec<_> = quotes
+        .iter()
+        .filter(|(_, q)| q.turnover > rust_decimal::Decimal::ZERO)
+        .collect::<Vec<_>>();
+    top_symbols.sort_by(|a, b| b.1.turnover.cmp(&a.1.turnover));
+    let option_watchlist: Vec<Symbol> = top_symbols
+        .into_iter()
+        .take(20)
+        .map(|(sym, _)| sym.clone())
+        .collect();
+    let option_surfaces = if !option_watchlist.is_empty() {
+        fetch_us_option_surfaces(ctx, &option_watchlist, &quotes).await
+    } else {
+        Vec::new()
+    };
+
     UsRestSnapshot {
         quotes,
         calc_indexes,
         capital_flows: flow_results.into_iter().flatten().collect(),
         intraday_lines: intraday_results.into_iter().flatten().collect(),
-        option_surfaces: Vec::new(),
+        option_surfaces,
     }
 }
 
-#[allow(dead_code)]
 pub(crate) async fn fetch_us_option_surfaces(
     ctx: &QuoteContext,
     watchlist: &[Symbol],
