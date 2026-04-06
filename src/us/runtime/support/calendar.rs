@@ -9,10 +9,12 @@ pub(crate) fn is_us_regular_market_hours(now: time::OffsetDateTime) -> bool {
 }
 
 pub(crate) fn us_market_hours_utc(now: time::OffsetDateTime) -> (u32, u32, u32, u32) {
+    // Include pre-market (04:00 EDT) through regular close (16:00 EDT).
+    // Pre-market data is valuable for gap analysis and institutional positioning.
     if is_us_eastern_dst(now) {
-        (13, 30, 20, 0)
+        (8, 0, 20, 0) // 04:00-16:00 EDT = 08:00-20:00 UTC
     } else {
-        (14, 30, 21, 0)
+        (9, 0, 21, 0) // 04:00-16:00 EST = 09:00-21:00 UTC
     }
 }
 
