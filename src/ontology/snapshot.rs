@@ -47,17 +47,23 @@ pub async fn fetch_quotes_only(
     ctx: &QuoteContext,
     watchlist: &[Symbol],
 ) -> HashMap<Symbol, SecurityQuote> {
-    let symbols_vec: Vec<String> = watchlist.iter().map(|s| s.0.clone()).collect();
-    match ctx.quote(symbols_vec).await {
-        Ok(quotes) => quotes
-            .into_iter()
-            .map(|q| (Symbol(q.symbol.clone()), q))
-            .collect(),
-        Err(e) => {
-            eprintln!("Warning: quote bootstrap failed: {}", e);
-            HashMap::new()
+    // Longport batch limit: 500 symbols per request
+    const BATCH_CHUNK: usize = 500;
+    let mut all_quotes = HashMap::new();
+    for chunk in watchlist.chunks(BATCH_CHUNK) {
+        let symbols_vec: Vec<String> = chunk.iter().map(|s| s.0.clone()).collect();
+        match ctx.quote(symbols_vec).await {
+            Ok(quotes) => {
+                for q in quotes {
+                    all_quotes.insert(Symbol(q.symbol.clone()), q);
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning: quote bootstrap chunk failed: {}", e);
+            }
         }
     }
+    all_quotes
 }
 
 /// Fetch broker queues, capital flows, and capital distributions for all watchlist symbols.

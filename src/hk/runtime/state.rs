@@ -247,14 +247,13 @@ pub(super) async fn fetch_rest_data(
 
     use futures::stream::{self, StreamExt};
 
-    // Longport SDK serializes requests internally at ~6 req/s.
-    // Concurrency > 1 doesn't help but avoids blocking on slow responses.
-    const API_CONCURRENCY: usize = 4;
-    // Only fetch per-symbol data for top N by turnover.
-    // calc_indexes (batch) already provides CapitalFlow indicator for ALL symbols.
-    const CAPITAL_FLOW_TOP_N: usize = 80;
-    const CAPITAL_DIST_TOP_N: usize = 80;
-    const INTRADAY_TOP_N: usize = 80;
+    // Longport SDK auto-throttles at ~6 req/s. Keep concurrency low.
+    const API_CONCURRENCY: usize = 2;
+    // calc_indexes batch provides CapitalFlow indicator for ALL symbols (0 extra reqs).
+    // Per-symbol capital_flow() is redundant — removed.
+    // capital_distribution provides institutional breakdown (large/medium/small) — keep.
+    const CAPITAL_DIST_TOP_N: usize = 40;
+    const INTRADAY_TOP_N: usize = 20;
 
     // Step 1: Batch endpoints first (calc_indexes + market_temperature + polymarket).
     // These are 1-2 requests total regardless of symbol count.
@@ -287,11 +286,6 @@ pub(super) async fn fetch_rest_data(
         .collect();
     ranked_symbols.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    let top_flow_symbols: Vec<Symbol> = ranked_symbols
-        .iter()
-        .take(CAPITAL_FLOW_TOP_N)
-        .map(|(sym, _)| sym.clone())
-        .collect();
     let top_dist_symbols: Vec<Symbol> = ranked_symbols
         .iter()
         .take(CAPITAL_DIST_TOP_N)
@@ -304,23 +298,7 @@ pub(super) async fn fetch_rest_data(
         .collect();
 
     // Step 3: Per-symbol endpoints for top N only.
-    // 80 + 80 + 80 = 240 requests ÷ 6 req/s = ~40s (fits in 60s cycle).
-    let flow_future = stream::iter(top_flow_symbols.into_iter())
-        .map(|sym| {
-            let ctx = ctx.clone();
-            async move {
-                match ctx.capital_flow(sym.0.clone()).await {
-                    Ok(f) => Some((sym, f)),
-                    Err(e) => {
-                        eprintln!("Warning: capital_flow({}) failed: {}", sym, e);
-                        None
-                    }
-                }
-            }
-        })
-        .buffer_unordered(API_CONCURRENCY)
-        .collect::<Vec<_>>();
-
+    // 40 dist + 20 intraday = 60 requests ÷ 6 req/s = ~10s (well within 60s cycle).
     let dist_future = stream::iter(top_dist_symbols.into_iter())
         .map(|sym| {
             let ctx = ctx.clone();
@@ -356,12 +334,12 @@ pub(super) async fn fetch_rest_data(
         .buffer_unordered(API_CONCURRENCY)
         .collect::<Vec<_>>();
 
-    let (flow_results, dist_results, intraday_results) =
-        tokio::join!(flow_future, dist_future, intraday_future);
+    let (dist_results, intraday_results) =
+        tokio::join!(dist_future, intraday_future);
 
     RestSnapshot {
         calc_indexes,
-        capital_flows: flow_results.into_iter().flatten().collect(),
+        capital_flows: HashMap::new(), // capital flow covered by calc_indexes batch
         capital_distributions: dist_results.into_iter().flatten().collect(),
         market_temperature,
         polymarket: polymarket_snapshot.unwrap_or_else(|error| {

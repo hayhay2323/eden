@@ -69,14 +69,12 @@ pub(crate) async fn fetch_us_rest_data(ctx: &QuoteContext, watchlist: &[Symbol])
         return UsRestSnapshot::empty();
     }
 
-    // Longport rate limit: 10 req/s, max 5 concurrent.
-    // capital_flow and intraday are per-symbol (no batch support).
-    // With 414+ symbols we must limit what we fetch per cycle.
-    const API_CONCURRENCY: usize = 4;
-    // Only fetch detailed per-symbol data for top N by turnover.
-    // calc_indexes (batch) already provides CapitalFlow for all symbols.
-    const CAPITAL_FLOW_TOP_N: usize = 80;
-    const INTRADAY_TOP_N: usize = 80;
+    // Longport SDK auto-throttles at ~6 req/s. Keep concurrency low to avoid 301606.
+    const API_CONCURRENCY: usize = 2;
+    // calc_indexes batch already provides CapitalFlow indicator for ALL symbols (0 extra reqs).
+    // Per-symbol capital_flow() is redundant — removed to save 80 reqs/cycle.
+    // Only fetch intraday for top N (needed for VWAP divergence detection).
+    const INTRADAY_TOP_N: usize = 20;
 
     // Step 1: Batch endpoints first (quote + calc_indexes).
     // Longport batch limit is 500 symbols per request, so chunk if needed.
@@ -149,35 +147,13 @@ pub(crate) async fn fetch_us_rest_data(ctx: &QuoteContext, watchlist: &[Symbol])
         .collect::<Vec<_>>();
     ranked_symbols.sort_by(|a, b| b.1.turnover.cmp(&a.1.turnover));
 
-    let flow_watchlist: Vec<Symbol> = ranked_symbols
-        .iter()
-        .take(CAPITAL_FLOW_TOP_N)
-        .map(|(sym, _)| (*sym).clone())
-        .collect();
     let intraday_watchlist: Vec<Symbol> = ranked_symbols
         .iter()
         .take(INTRADAY_TOP_N)
         .map(|(sym, _)| (*sym).clone())
         .collect();
 
-    // Step 3: Per-symbol endpoints sequentially to respect rate limit
-    let flow_results: Vec<_> = stream::iter(flow_watchlist.into_iter())
-        .map(|sym| {
-            let ctx = ctx.clone();
-            async move {
-                match ctx.capital_flow(sym.0.clone()).await {
-                    Ok(f) => Some((sym, f)),
-                    Err(e) => {
-                        eprintln!("Warning: capital_flow({}) failed: {}", sym, e);
-                        None
-                    }
-                }
-            }
-        })
-        .buffer_unordered(API_CONCURRENCY)
-        .collect()
-        .await;
-
+    // Step 3: Per-symbol endpoints — only intraday (capital_flow covered by calc_indexes batch)
     let intraday_results: Vec<_> = stream::iter(intraday_watchlist.into_iter())
         .map(|sym| {
             let ctx = ctx.clone();
@@ -195,10 +171,10 @@ pub(crate) async fn fetch_us_rest_data(ctx: &QuoteContext, watchlist: &[Symbol])
         .collect()
         .await;
 
-    // Step 4: Option surfaces for top 50 (expanded from 20 for better IV coverage)
+    // Step 4: Option surfaces for top 20 by turnover
     let option_watchlist: Vec<Symbol> = ranked_symbols
         .iter()
-        .take(50)
+        .take(20)
         .map(|(sym, _)| (*sym).clone())
         .collect();
     let option_surfaces = if !option_watchlist.is_empty() {
@@ -210,7 +186,7 @@ pub(crate) async fn fetch_us_rest_data(ctx: &QuoteContext, watchlist: &[Symbol])
     UsRestSnapshot {
         quotes,
         calc_indexes,
-        capital_flows: flow_results.into_iter().flatten().collect(),
+        capital_flows: HashMap::new(), // capital flow covered by calc_indexes batch
         intraday_lines: intraday_results.into_iter().flatten().collect(),
         option_surfaces,
     }
