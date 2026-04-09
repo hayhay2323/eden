@@ -162,6 +162,20 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .await;
     }
 
+    #[cfg(feature = "persistence")]
+    let mut baseline_quality: Option<crate::temporal::lineage::evolution::SurfaceQualitySnapshot> =
+        None;
+    #[cfg(feature = "persistence")]
+    let mut cached_us_causal_schemas: Vec<crate::persistence::causal_schema::CausalSchemaRecord> =
+        Vec::new();
+    #[cfg(feature = "persistence")]
+    if let Some(ref store) = runtime.store {
+        if let Ok(schemas) = store.load_causal_schemas("us").await {
+            eprintln!("[us] loaded {} causal schemas from store", schemas.len());
+            cached_us_causal_schemas = schemas;
+        }
+    }
+
     let mut us_hidden_force_state =
         crate::pipeline::residual::HiddenForceVerificationState::default();
     let mut edge_ledger = crate::graph::edge_learning::EdgeLearningLedger::default();
@@ -734,6 +748,79 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Schema extraction requires TickHistory (HK type) for vortex lookup.
             // US stores fingerprints/outcomes for future schema extraction once
             // the schema module is generalized to accept UsTickHistory.
+        }
+
+        // Evolution cycle (every 50 ticks): surface quality + mechanism governance
+        #[cfg(feature = "persistence")]
+        if tick % 50 == 0 && tick_history.len() > 20 {
+            let all_outcomes =
+                crate::us::temporal::outcomes::compute_us_case_realized_outcomes_adaptive(
+                    &tick_history,
+                    SIGNAL_RESOLUTION_LAG,
+                );
+            let hits = all_outcomes
+                .iter()
+                .filter(|o| o.net_return > Decimal::ZERO && o.followed_through)
+                .count();
+            let misses = all_outcomes
+                .iter()
+                .filter(|o| o.net_return <= Decimal::ZERO || !o.followed_through)
+                .count();
+            let total_return: Decimal = all_outcomes.iter().map(|o| o.net_return).sum();
+            let live_mech_count = cached_us_candidate_mechanisms
+                .iter()
+                .filter(|m| m.mode == "live")
+                .count();
+            let live_schema_count = cached_us_causal_schemas
+                .iter()
+                .filter(|s| s.status == "active")
+                .count();
+
+            let current_quality =
+                crate::temporal::lineage::evolution::SurfaceQualitySnapshot::from_outcomes(
+                    tick,
+                    hits,
+                    misses,
+                    total_return,
+                    live_mech_count,
+                    live_schema_count,
+                );
+
+            if baseline_quality.is_none() && live_mech_count == 0 && live_schema_count == 0 {
+                baseline_quality = Some(current_quality.clone());
+            }
+
+            eprintln!(
+                "[us] evolution cycle tick={}: hits={} misses={} return={:.4} mechs={} schemas={}",
+                tick, hits, misses, total_return, live_mech_count, live_schema_count,
+            );
+
+            let _evolution_result =
+                crate::temporal::lineage::evolution::run_evolution_cycle(
+                    &mut cached_us_candidate_mechanisms,
+                    &mut cached_us_causal_schemas,
+                    &std::collections::HashMap::new(), // shadow scores (not yet computed for US)
+                    baseline_quality.as_ref(),
+                    Some(&current_quality),
+                    tick,
+                    &now.format(&time::format_description::well_known::Rfc3339)
+                        .unwrap_or_default(),
+                );
+
+            if let Some(ref store) = runtime.store {
+                if let Err(err) = store
+                    .write_candidate_mechanisms(&cached_us_candidate_mechanisms)
+                    .await
+                {
+                    eprintln!("[us] evolution: failed to persist mechanisms: {err}");
+                }
+                if let Err(err) = store
+                    .write_causal_schemas(&cached_us_causal_schemas)
+                    .await
+                {
+                    eprintln!("[us] evolution: failed to persist schemas: {err}");
+                }
+            }
         }
 
         let dynamics = compute_us_dynamics(&tick_history);

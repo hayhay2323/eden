@@ -9,7 +9,7 @@ use crate::pipeline::reasoning::ConvergenceDetail;
 
 use super::buffer::TickHistory;
 #[path = "lineage/evolution.rs"]
-mod evolution;
+pub mod evolution;
 #[path = "lineage/outcomes.rs"]
 mod outcomes;
 #[path = "lineage/schema.rs"]
