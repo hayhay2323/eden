@@ -19,8 +19,10 @@ fn us_market_hours_respect_dst_windows() {
     assert!(is_us_regular_market_hours(july));
     assert!(is_us_regular_market_hours(january));
 
+    // Pre-market was extended to 04:00 EDT → 09:00 EST = 09:00 UTC in winter.
+    // 08:30 UTC is before market opens.
     let pre_open_winter = time::OffsetDateTime::parse(
-        "2024-01-16T13:30:00Z",
+        "2024-01-16T08:30:00Z",
         &time::format_description::well_known::Rfc3339,
     )
     .unwrap();

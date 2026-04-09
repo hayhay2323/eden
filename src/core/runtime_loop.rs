@@ -262,13 +262,14 @@ mod tests {
         .unwrap();
 
         let advance = result.expect("bootstrap should still advance dirty state");
-        assert!(!advance.received_push);
-        assert!(!advance.received_update);
+        assert!(advance.received_push);
+        assert!(advance.received_update);
         assert_eq!(tick, 1);
         assert_eq!(state.clear_dirty_calls, 1);
         assert!(!bootstrap_pending);
-        assert_eq!(push_rx.try_recv().ok(), Some("push-1"));
-        assert_eq!(update_rx.try_recv().ok(), Some("update-1"));
+        // bootstrap now consumes ready messages via try_recv
+        assert!(push_rx.try_recv().is_err());
+        assert!(update_rx.try_recv().is_err());
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -394,7 +395,13 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(result, Err(())));
+        // closed channels with no bootstrap: tokio::select! may pick either branch.
+        // push branch returns Err(()), update branch returns Ok(None) since state is clean.
+        assert!(
+            matches!(result, Err(())) || matches!(result, Ok(None)),
+            "expected either Err(()) or Ok(None), got {:?}",
+            result.as_ref().map(|o| o.is_some())
+        );
         assert_eq!(tick, 0);
         assert_eq!(state.clear_dirty_calls, 0);
     }

@@ -471,6 +471,253 @@ pub const US_WATCHLIST: &[&str] = &[
     "ICLN.US", // iShares Global Clean Energy
     "IBIT.US", // iShares Bitcoin Trust
     "BITO.US", // ProShares Bitcoin Strategy
+    // ═══════════════════════════════════════════════════
+    // ── Hot / Trending (2026-04-07) ──
+    // ═══════════════════════════════════════════════════
+    "SNDK.US",  // SanDisk (re-listed, storage)
+    "RKLB.US",  // Rocket Lab (space launch)
+    "ASTS.US",  // AST SpaceMobile (satellite)
+    "LUNR.US",  // Intuitive Machines (lunar/space)
+    "RDDT.US",  // Reddit
+    "HIMS.US",  // Hims & Hers Health
+    "CELH.US",  // Celsius Holdings
+    "AFRM.US",  // Affirm (BNPL)
+    "DUOL.US",  // Duolingo
+    "RGTI.US",  // Rigetti (quantum computing)
+    "QUBT.US",  // Quantum Computing Inc
+    "UPST.US",  // Upstart (AI lending)
+    "SE.US",    // Sea Limited (SE Asia tech)
+    "NU.US",    // Nu Holdings (LatAm fintech)
+    "GRAB.US",  // Grab (SE Asia super-app)
+    "MELI.US",  // MercadoLibre (LatAm e-commerce)
+    "BIRK.US",  // Birkenstock
+    // ═══════════════════════════════════════════════════
+    // ── S&P 500 gap fill (2026-04-07) ──
+    // ── Added to complete S&P 500 coverage ──
+    // ═══════════════════════════════════════════════════
+    "ACN.US",  // Accenture
+    "ADM.US",  // Archer-Daniels-Midland
+    "AEE.US",  // Ameren
+    "AES.US",  // AES Corp
+    "AIZ.US",  // Assurant
+    "AKAM.US", // Akamai
+    "ALB.US",  // Albemarle
+    "ALGN.US", // Align Technology
+    "ALLE.US", // Allegion
+    "AMCR.US", // Amcor
+    "AME.US",  // AMETEK
+    "AMP.US",  // Ameriprise
+    "AOS.US",  // A.O. Smith
+    "APA.US",  // APA Corp
+    "APH.US",  // Amphenol
+    "APO.US",  // Apollo Global
+    "APTV.US", // Aptiv
+    "ARE.US",  // Alexandria Real Estate
+    "ARES.US", // Ares Management
+    "ATO.US",  // Atmos Energy
+    "AVY.US",  // Avery Dennison
+    "AWK.US",  // American Water Works
+    "AXON.US", // Axon Enterprise
+    "BALL.US", // Ball Corp
+    "BAX.US",  // Baxter
+    "BBY.US",  // Best Buy
+    "BEN.US",  // Franklin Templeton
+    "BG.US",   // Bunge
+    "BKR.US",  // Baker Hughes
+    "BLDR.US", // Builders FirstSource
+    "BRO.US",  // Brown & Brown
+    "BX.US",   // Blackstone
+    "BXP.US",  // BXP (Boston Properties)
+    "CAG.US",  // Conagra
+    "CAH.US",  // Cardinal Health
+    "CB.US",   // Chubb
+    "CCL.US",  // Carnival
+    "CF.US",   // CF Industries
+    "CFG.US",  // Citizens Financial
+    "CHD.US",  // Church & Dwight
+    "CHRW.US", // C.H. Robinson
+    "CIEN.US", // Ciena
+    "CINF.US", // Cincinnati Financial
+    "CLX.US",  // Clorox
+    "CMI.US",  // Cummins
+    "CMS.US",  // CMS Energy
+    "CNC.US",  // Centene
+    "CNP.US",  // CenterPoint Energy
+    "COHR.US", // Coherent
+    "COO.US",  // CooperCompanies
+    "COR.US",  // Cencora
+    "CPAY.US", // Corpay
+    "CPB.US",  // Campbell Soup
+    "CPT.US",  // Camden Property
+    "CRH.US",  // CRH plc
+    "CRL.US",  // Charles River Labs
+    "CSCO.US", // Cisco
+    "CTAS.US", // Cintas
+    "CTRA.US", // Coterra Energy
+    "CTVA.US", // Corteva
+    "CVNA.US", // Carvana
+    "DELL.US", // Dell Technologies
+    "DGX.US",  // Quest Diagnostics
+    "DHI.US",  // D.R. Horton
+    "DOC.US",  // Healthpeak Properties
+    "DOV.US",  // Dover
+    "DRI.US",  // Darden Restaurants
+    "DTE.US",  // DTE Energy
+    "DVA.US",  // DaVita
+    "EFX.US",  // Equifax
+    "EG.US",   // Everest Group
+    "EIX.US",  // Edison International
+    "EL.US",   // Estée Lauder
+    "EME.US",  // EMCOR
+    "EPAM.US", // EPAM Systems
+    "EQT.US",  // EQT Corp
+    "ERIE.US", // Erie Indemnity
+    "ES.US",   // Eversource Energy
+    "ESS.US",  // Essex Property
+    "ETR.US",  // Entergy
+    "EVRG.US", // Evergy
+    "EXE.US",  // Expand Energy
+    "EXPD.US", // Expeditors
+    "EXPE.US", // Expedia
+    "EXR.US",  // Extra Space Storage
+    "FDS.US",  // FactSet
+    "FE.US",   // FirstEnergy
+    "FFIV.US", // F5 Networks
+    "FISV.US", // Fiserv
+    "FITB.US", // Fifth Third Bancorp
+    "FIX.US",  // Comfort Systems
+    "FOX.US",  // Fox Corp B
+    "FOXA.US", // Fox Corp A
+    "FRT.US",  // Federal Realty
+    "FTV.US",  // Fortive
+    "GDDY.US", // GoDaddy
+    "GEHC.US", // GE HealthCare
+    "GEN.US",  // Gen Digital
+    "GL.US",   // Globe Life
+    "GLW.US",  // Corning
+    "GNRC.US", // Generac
+    "GOOG.US", // Alphabet C
+    "GPC.US",  // Genuine Parts
+    "HAS.US",  // Hasbro
+    "HBAN.US", // Huntington Bancshares
+    "HIG.US",  // Hartford Financial
+    "HII.US",  // Huntington Ingalls
+    "HOLX.US", // Hologic
+    "HPE.US",  // Hewlett Packard Enterprise
+    "HRL.US",  // Hormel Foods
+    "HSIC.US", // Henry Schein
+    "HST.US",  // Host Hotels
+    "HWM.US",  // Howmet Aerospace
+    "IBKR.US", // Interactive Brokers
+    "IBM.US",  // IBM
+    "IEX.US",  // IDEX
+    "IFF.US",  // IFF
+    "INCY.US", // Incyte
+    "INVH.US", // Invitation Homes
+    "IP.US",   // International Paper
+    "IQV.US",  // IQVIA
+    "IR.US",   // Ingersoll Rand
+    "IVZ.US",  // Invesco
+    "J.US",    // Jacobs Solutions
+    "JBHT.US", // J.B. Hunt
+    "JBL.US",  // Jabil
+    "JCI.US",  // Johnson Controls
+    "JKHY.US", // Jack Henry
+    "KEY.US",  // KeyCorp
+    "KIM.US",  // Kimco Realty
+    "KKR.US",  // KKR & Co
+    "KVUE.US", // Kenvue
+    "L.US",    // Loews
+    "LEN.US",  // Lennar
+    "LH.US",   // Labcorp
+    "LII.US",  // Lennox
+    "LITE.US", // Lumentum
+    "LNT.US",  // Alliant Energy
+    "LYB.US",  // LyondellBasell
+    "LYV.US",  // Live Nation
+    "MAA.US",  // Mid-America Apartment
+    "MAS.US",  // Masco
+    "MGM.US",  // MGM Resorts
+    "MKC.US",  // McCormick
+    "MNST.US", // Monster Beverage
+    "MOS.US",  // Mosaic
+    "MRSH.US", // Marsh McLennan
+    "MSI.US",  // Motorola Solutions
+    "MTB.US",  // M&T Bank
+    "MTD.US",  // Mettler-Toledo
+    "NCLH.US", // Norwegian Cruise Line
+    "NDSN.US", // Nordson
+    "NI.US",   // NiSource
+    "NRG.US",  // NRG Energy
+    "NTAP.US", // NetApp
+    "NTRS.US", // Northern Trust
+    "NVR.US",  // NVR
+    "NWS.US",  // News Corp B
+    "NWSA.US", // News Corp A
+    "OMC.US",  // Omnicom
+    "PEG.US",  // PSEG
+    "PFG.US",  // Principal Financial
+    "PH.US",   // Parker-Hannifin
+    "PNR.US",  // Pentair
+    "PNW.US",  // Pinnacle West
+    "PODD.US", // Insulet
+    "PPG.US",  // PPG Industries
+    "PPL.US",  // PPL Corp
+    "PRU.US",  // Prudential
+    "PTC.US",  // PTC Inc
+    "PWR.US",  // Quanta Services
+    "QRVO.US", // Qorvo
+    "REG.US",  // Regency Centers
+    "RF.US",   // Regions Financial
+    "RHI.US",  // Robert Half
+    "RJF.US",  // Raymond James
+    "RL.US",   // Ralph Lauren
+    "ROL.US",  // Rollins
+    "ROP.US",  // Roper Technologies
+    "RVTY.US", // Revvity
+    "SATS.US", // EchoStar
+    "SJM.US",  // J.M. Smucker
+    "SNA.US",  // Snap-on
+    "SOLV.US", // Solventum
+    "STE.US",  // STERIS
+    "STLD.US", // Steel Dynamics
+    "STT.US",  // State Street
+    "STX.US",  // Seagate
+    "SW.US",   // Smurfit Westrock
+    "SWK.US",  // Stanley Black & Decker
+    "SYF.US",  // Synchrony
+    "TAP.US",  // Molson Coors
+    "TDG.US",  // TransDigm
+    "TDY.US",  // Teledyne
+    "TECH.US", // Bio-Techne
+    "TEL.US",  // TE Connectivity
+    "TER.US",  // Teradyne
+    "TFX.US",  // Teleflex
+    "TPR.US",  // Tapestry
+    "TRMB.US", // Trimble
+    "TROW.US", // T. Rowe Price
+    "TSN.US",  // Tyson Foods
+    "TXT.US",  // Textron
+    "TYL.US",  // Tyler Technologies
+    "UDR.US",  // UDR Inc
+    "UHS.US",  // Universal Health Services
+    "ULTA.US", // Ulta Beauty
+    "URI.US",  // United Rentals
+    "VFC.US",  // VF Corp
+    "VICI.US", // VICI Properties
+    "VRSN.US", // VeriSign
+    "VRT.US",  // Vertiv
+    "VTRS.US", // Viatris
+    "WAB.US",  // Westinghouse Air Brake
+    "WAT.US",  // Waters Corp
+    "WBA.US",  // Walgreens
+    "WDC.US",  // Western Digital
+    "WEC.US",  // WEC Energy
+    "WRB.US",  // Berkley
+    "WRK.US",  // WestRock
+    "WY.US",   // Weyerhaeuser
+    "XYL.US",  // Xylem
+    "XYZ.US",  // Block (fka Square)
 ];
 
 /// A dual-listed stock that trades on both US and HK exchanges.
@@ -602,6 +849,6 @@ mod tests {
 
     #[test]
     fn pair_count() {
-        assert_eq!(CROSS_MARKET_PAIRS.len(), 9);
+        assert_eq!(CROSS_MARKET_PAIRS.len(), 14);
     }
 }
