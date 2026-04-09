@@ -1,1 +1,21 @@
-zsh:1: command not found: setsid
++----------+------------------------------------+
+| CN       | ChinaConnect  LV1 Real-time Quotes |
+|----------+------------------------------------|
+| HK       | LV2 Advanced Quotes (OpenAPI)      |
+|----------+------------------------------------|
+| US       | Nasdaq Basic                       |
+|----------+------------------------------------|
+| USOption | LV1 Real-time Quotes               |
++----------+------------------------------------+
+Connected to Longport. Initializing ObjectStore...
+
+=== ObjectStore Stats ===
+Institutions: 526
+Brokers:      2719
+Stocks:       493
+Sectors:      17
+
+Broker B4497 → Barclays Asia (I2040)
+
+Subscribing to WebSocket (DEPTH + BROKER + QUOTE + TRADE)...
+Subscribed to 493 symbols × 4 channels.

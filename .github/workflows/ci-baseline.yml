@@ -1,0 +1,25 @@
+name: ci-baseline
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-baseline
+
+      - name: Run CI baseline
+        run: ./scripts/tests/test_ci_baseline.sh

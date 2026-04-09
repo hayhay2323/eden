@@ -9,11 +9,14 @@ check:
 test:
   cargo test --lib
 
+ci-baseline:
+  ./scripts/tests/test_ci_baseline.sh
+
 gate:
-  ./scripts/test_gate.sh
+  ./scripts/tests/test_gate.sh
 
 gate-persist:
-  ./scripts/test_gate_persistence.sh
+  ./scripts/tests/test_gate_persistence.sh
 
 api:
   cargo run --bin eden-api -- serve
@@ -46,4 +49,4 @@ frontend-build:
   cd frontend && npm run build
 
 health-report:
-  node scripts/health_report.mjs
+  node scripts/ops/health_report.mjs
