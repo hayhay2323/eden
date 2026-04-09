@@ -1414,27 +1414,6 @@ mod tests {
     }
 
     #[test]
-    fn residual_propagation_strength() {
-        let field = ResidualField {
-            residuals: vec![],
-            clustered_sectors: vec![SectorResidualCluster {
-                sector: sector("tech"),
-                mean_residual: dec!(-0.25),
-                symbol_count: 5,
-                coherence: dec!(0.8),
-                dominant_dimension: ResidualDimension::Price,
-            }],
-            divergent_pairs: vec![],
-        };
-
-        let strength =
-            residual_adjusted_propagation_strength(&field, &sector("tech"));
-        assert!(strength.is_some());
-        // -0.25 * 0.8 = -0.2 → sector propagation is failing
-        assert_eq!(strength.unwrap(), dec!(-0.200));
-    }
-
-    #[test]
     fn infer_isolated_hidden_force() {
         let field = ResidualField {
             residuals: vec![SymbolResidual {

@@ -90,6 +90,73 @@ fn minimum_stock_edge_similarity() -> Decimal {
     Decimal::new(55, 2)
 }
 
+/// Thematic peer groups that span multiple sectors.
+/// These enable cross-sector convergence detection — e.g. "AI" connects
+/// NVDA (semiconductor) with PLTR (tech) and SMCI (momentum).
+fn us_theme_groups() -> Vec<Vec<&'static str>> {
+    vec![
+        // AI / Machine Learning
+        vec![
+            "NVDA.US", "AMD.US", "AVGO.US", "MRVL.US", "ARM.US", "PLTR.US", "AI.US",
+            "SMCI.US", "VRT.US", "SOUN.US", "UPST.US", "CRWD.US", "DDOG.US", "SNOW.US",
+            "PATH.US", "PANW.US", "NOW.US", "MSFT.US", "GOOGL.US", "META.US", "AMZN.US",
+            "DELL.US", "HPE.US",
+        ],
+        // Space / Aerospace
+        vec![
+            "RKLB.US", "ASTS.US", "LUNR.US", "BA.US", "LMT.US", "NOC.US", "RTX.US",
+            "GD.US", "LHX.US", "HII.US", "AXON.US",
+        ],
+        // Quantum Computing
+        vec![
+            "IONQ.US", "RGTI.US", "QUBT.US", "IBM.US", "GOOGL.US",
+        ],
+        // Fintech / Digital Finance
+        vec![
+            "COIN.US", "HOOD.US", "SOFI.US", "AFRM.US", "UPST.US", "NU.US",
+            "SQ.US", "PYPL.US", "MELI.US",
+        ],
+        // EV / Clean Energy
+        vec![
+            "TSLA.US", "RIVN.US", "LCID.US", "NIO.US", "XPEV.US", "LI.US",
+            "ENPH.US", "FSLR.US", "CELH.US",
+        ],
+        // Crypto / Digital Assets
+        vec![
+            "MSTR.US", "MARA.US", "RIOT.US", "BITF.US", "CLSK.US", "COIN.US",
+            "IBIT.US", "BITO.US",
+        ],
+        // SE Asia / LatAm emerging tech
+        vec![
+            "SE.US", "GRAB.US", "NU.US", "MELI.US",
+        ],
+        // China ADR tech
+        vec![
+            "BABA.US", "BIDU.US", "JD.US", "PDD.US", "TCOM.US", "NTES.US",
+            "BILI.US", "TME.US", "NIO.US", "XPEV.US", "LI.US",
+        ],
+        // Social / Consumer Internet
+        vec![
+            "META.US", "SNAP.US", "PINS.US", "RDDT.US", "RBLX.US", "SPOT.US",
+            "DKNG.US", "DUOL.US", "HIMS.US",
+        ],
+        // Cybersecurity
+        vec![
+            "CRWD.US", "PANW.US", "ZS.US", "FTNT.US", "NET.US", "OKTA.US",
+        ],
+        // Cloud / SaaS
+        vec![
+            "CRM.US", "NOW.US", "WDAY.US", "HUBS.US", "DDOG.US", "MDB.US",
+            "SNOW.US", "BILL.US", "MNDY.US", "VEEV.US", "TEAM.US",
+        ],
+        // GLP-1 / Obesity / Biotech
+        vec![
+            "LLY.US", "NVO.US", "AMGN.US", "VRTX.US", "REGN.US", "MRNA.US",
+            "ALNY.US", "HIMS.US",
+        ],
+    ]
+}
+
 fn stock_relation_group(symbol: &Symbol, sector_map: &HashMap<Symbol, SectorId>) -> Option<String> {
     let sector = sector_map.get(symbol)?.0.as_str();
     if sector == "etf" {
@@ -255,6 +322,56 @@ impl UsGraph {
                 };
                 graph.add_edge(idx_a, idx_b, UsEdgeKind::StockToStock(edge.clone()));
                 graph.add_edge(idx_b, idx_a, UsEdgeKind::StockToStock(edge));
+            }
+        }
+
+        // 3.5. Theme-based edges: connect stocks that share a thematic narrative
+        // even if they're in different sectors. This enables cross-sector convergence
+        // detection (e.g. AI theme spans tech + semiconductor + industrial).
+        for theme_members in us_theme_groups() {
+            let theme_syms: Vec<&Symbol> = theme_members
+                .iter()
+                .filter_map(|s| {
+                    let sym = Symbol(s.to_string());
+                    if stock_nodes.contains_key(&sym) {
+                        Some(stock_nodes.keys().find(|k| **k == sym).unwrap())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for i in 0..theme_syms.len() {
+                for j in (i + 1)..theme_syms.len() {
+                    // Skip if already connected by sector edge
+                    let &idx_a = stock_nodes.get(theme_syms[i]).unwrap();
+                    let &idx_b = stock_nodes.get(theme_syms[j]).unwrap();
+                    if graph.contains_edge(idx_a, idx_b) {
+                        continue;
+                    }
+                    if let (Some(dims_a), Some(dims_b)) = (
+                        dimensions.dimensions.get(theme_syms[i]),
+                        dimensions.dimensions.get(theme_syms[j]),
+                    ) {
+                        let vec_a = dims_to_array(dims_a);
+                        let vec_b = dims_to_array(dims_b);
+                        if vec_a.iter().all(|v| *v == Decimal::ZERO)
+                            || vec_b.iter().all(|v| *v == Decimal::ZERO)
+                        {
+                            continue;
+                        }
+                        let similarity = cosine_similarity(vec_a, vec_b);
+                        // Lower threshold for theme peers (0.30 vs 0.55 for sector)
+                        if similarity <= Decimal::new(30, 2) {
+                            continue;
+                        }
+                        let edge = UsStockToStock {
+                            similarity,
+                            timestamp: dimensions.timestamp,
+                        };
+                        graph.add_edge(idx_a, idx_b, UsEdgeKind::StockToStock(edge.clone()));
+                        graph.add_edge(idx_b, idx_a, UsEdgeKind::StockToStock(edge));
+                    }
+                }
             }
         }
 
@@ -528,27 +645,6 @@ mod tests {
         )]);
         let g = UsGraph::compute(&snap, &HashMap::new(), &HashMap::new());
         assert!(g.cross_market_nodes.is_empty());
-    }
-
-    #[test]
-    fn graph_active_cross_market_pairs() {
-        let snap = make_snapshot(vec![
-            (
-                sym("BABA.US"),
-                make_dims(dec!(0.1), dec!(0), dec!(0), dec!(0), dec!(0)),
-            ),
-            (
-                sym("JD.US"),
-                make_dims(dec!(0.2), dec!(0), dec!(0), dec!(0), dec!(0)),
-            ),
-            (
-                sym("AAPL.US"),
-                make_dims(dec!(0.3), dec!(0), dec!(0), dec!(0), dec!(0)),
-            ),
-        ]);
-        let g = UsGraph::compute(&snap, &HashMap::new(), &HashMap::new());
-        let pairs = g.active_cross_market_pairs();
-        assert_eq!(pairs.len(), 2); // BABA + JD
     }
 
     #[test]

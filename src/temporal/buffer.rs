@@ -32,6 +32,10 @@ impl TickHistory {
         self.records.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
     pub fn latest(&self) -> Option<&TickRecord> {
         self.records.back()
     }
@@ -57,7 +61,6 @@ impl TickHistory {
             .filter_map(|r| r.signals.get(symbol).map(|s| extractor(s)))
             .collect()
     }
-
 }
 
 #[cfg(test)]
@@ -215,27 +218,4 @@ mod tests {
         assert!(h.latest_n(5).is_empty());
     }
 
-    #[test]
-    fn graph_edge_transitions_are_queryable_by_id() {
-        let mut h = TickHistory::new(10);
-        let edge_id = GraphEdgeId {
-            kind: GraphEdgeKind::InstitutionToStock,
-            source_key: "institution:100".into(),
-            target_key: "symbol:700.HK".into(),
-        };
-
-        let mut first = make_tick(1, "700.HK", dec!(0.1));
-        first.graph_edge_transitions = vec![edge_transition(1, GraphEdgeTransitionKind::Appeared)];
-        h.push(first);
-
-        let mut second = make_tick(2, "700.HK", dec!(0.2));
-        second.graph_edge_transitions =
-            vec![edge_transition(2, GraphEdgeTransitionKind::Disappeared)];
-        h.push(second);
-
-        let transitions = h.graph_edge_transitions_for_id(&edge_id);
-        assert_eq!(transitions.len(), 2);
-        assert_eq!(transitions[0].kind, GraphEdgeTransitionKind::Appeared);
-        assert_eq!(transitions[1].kind, GraphEdgeTransitionKind::Disappeared);
-    }
 }

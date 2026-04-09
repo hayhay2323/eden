@@ -60,6 +60,12 @@ impl AbsenceMemory {
         let cutoff = now - time::Duration::minutes(30);
         self.entries.retain(|_, entry| entry.last_seen >= cutoff);
     }
+
+    /// Clear absence state for a sector when propagation actually occurs.
+    /// Without this, suppression is sticky for 30 minutes even when propagation fires.
+    pub fn record_propagation(&mut self, sector: &SectorId) {
+        self.entries.retain(|(s, _), _| s != &sector.0);
+    }
 }
 
 // ── Family Boost Ledger ──
@@ -105,8 +111,7 @@ fn compute_family_boost(prior: &FamilyContextLineageOutcome) -> Decimal {
     if prior.follow_through_rate < Decimal::new(55, 2) || prior.mean_net_return <= Decimal::ZERO {
         return Decimal::ONE;
     }
-    let raw = Decimal::ONE
-        + (prior.follow_through_rate - Decimal::new(50, 2)) * Decimal::new(5, 1);
+    let raw = Decimal::ONE + (prior.follow_through_rate - Decimal::new(50, 2)) * Decimal::new(5, 1);
     raw.min(Decimal::new(125, 2))
 }
 
@@ -132,6 +137,21 @@ impl ConvergenceDetail {
             cross_stock_correlation: score.cross_stock_correlation,
             component_spread: score.component_spread,
             edge_stability: score.edge_stability,
+        }
+    }
+
+    pub fn from_us_convergence_score(
+        score: &crate::us::graph::decision::UsConvergenceScore,
+    ) -> Self {
+        Self {
+            // US convergence has no institutional leg yet; use dimension composite as the
+            // primary local topology axis so policy and downstream learning still preserve
+            // a stable "dominant component" slot.
+            institutional_alignment: score.dimension_composite,
+            sector_coherence: score.sector_coherence,
+            cross_stock_correlation: score.cross_stock_correlation,
+            component_spread: None,
+            edge_stability: None,
         }
     }
 }

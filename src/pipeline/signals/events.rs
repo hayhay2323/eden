@@ -44,7 +44,7 @@ impl EventSnapshot {
                     summary: format!("{} book imbalance widened", order_book.symbol),
                 },
                 {
-                    let mut p = provenance(
+                    let p = provenance(
                         ProvenanceSource::Computed,
                         links.timestamp,
                         Some(ratio),
@@ -79,7 +79,7 @@ impl EventSnapshot {
                     summary: format!("{} volume ratio elevated to {}", calc.symbol, volume_ratio),
                 },
                 {
-                    let mut p = provenance(
+                    let p = provenance(
                         ProvenanceSource::Computed,
                         links.timestamp,
                         Some(magnitude),
@@ -111,7 +111,7 @@ impl EventSnapshot {
                     summary: format!("{} candle conviction confirms short-term move", symbol),
                 },
                 {
-                    let mut p = provenance(
+                    let p = provenance(
                         ProvenanceSource::Computed,
                         links.timestamp,
                         Some(magnitude),
@@ -146,7 +146,7 @@ impl EventSnapshot {
                     summary: format!("{} smart-money pressure remains elevated", pressure.symbol),
                 },
                 {
-                    let mut p = provenance(
+                    let p = provenance(
                         ProvenanceSource::Computed,
                         links.timestamp,
                         Some(magnitude),
@@ -170,7 +170,7 @@ impl EventSnapshot {
                     summary: "market stress composite elevated".into(),
                 },
                 {
-                    let mut p = provenance(
+                    let p = provenance(
                         ProvenanceSource::Computed,
                         links.timestamp,
                         Some(insights.stress.composite_stress),
@@ -199,7 +199,7 @@ impl EventSnapshot {
                             ),
                         },
                         {
-                            let mut p = provenance(
+                            let p = provenance(
                                 ProvenanceSource::Computed,
                                 links.timestamp,
                                 Some(composite_delta.abs()),
@@ -233,7 +233,7 @@ impl EventSnapshot {
                             ),
                         },
                         {
-                            let mut p = provenance(
+                            let p = provenance(
                                 ProvenanceSource::Computed,
                                 links.timestamp,
                                 Some((curr_inst - prev_inst).abs()),
@@ -261,7 +261,7 @@ impl EventSnapshot {
                         summary: format!("market stress shifted by {:+}", stress_delta.round_dp(3)),
                     },
                     {
-                        let mut p = provenance(
+                        let p = provenance(
                             ProvenanceSource::Computed,
                             links.timestamp,
                             Some(stress_delta.abs()),
@@ -287,7 +287,7 @@ impl EventSnapshot {
                         summary: format!("{} order suggestion requires review", suggestion.symbol),
                     },
                     {
-                        let mut p = provenance(
+                        let p = provenance(
                             ProvenanceSource::Computed,
                             links.timestamp,
                             Some(suggestion.convergence.composite.abs()),
@@ -315,7 +315,7 @@ impl EventSnapshot {
                     ),
                 },
                 {
-                    let mut p = provenance(
+                    let p = provenance(
                         ProvenanceSource::Computed,
                         links.timestamp,
                         Some(shared.jaccard),
@@ -534,7 +534,7 @@ pub fn catalyst_events_from_macro_events(
                     summary: e.headline.clone(),
                 },
                 {
-                    let mut p = provenance(
+                    let p = provenance(
                         ProvenanceSource::Computed,
                         timestamp,
                         Some(magnitude),

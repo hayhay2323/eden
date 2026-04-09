@@ -29,7 +29,7 @@ use eden::live_snapshot::{
     LiveBackwardChain, LiveEvent, LiveHypothesisTrack, LiveMarketRegime, LivePressure, LiveSignal,
     LiveStressSnapshot, LiveTacticalCase,
 };
-use eden::logic::tension::TensionSnapshot;
+use eden::pipeline::tension::TensionSnapshot;
 use eden::ontology::links::LinkSnapshot;
 use eden::ontology::microstructure::TickArchive;
 use eden::ontology::objects::{Market, Symbol};

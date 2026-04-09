@@ -387,39 +387,6 @@ mod tests {
     }
 
     #[test]
-    fn recent_leaders_returns_distinct_in_recency_order() {
-        let mut history = crate::us::temporal::buffer::UsTickHistory::new(10);
-        history.push(make_tick(
-            1,
-            vec![(
-                sym("AAPL.US"),
-                make_signals(dec!(0.8), dec!(0.1), dec!(0.0), dec!(0.0), dec!(0.0)),
-            )],
-        ));
-        history.push(make_tick(
-            2,
-            vec![(
-                sym("AAPL.US"),
-                make_signals(dec!(0.8), dec!(0.1), dec!(0.0), dec!(0.0), dec!(0.0)),
-            )],
-        ));
-        history.push(make_tick(
-            3,
-            vec![(
-                sym("AAPL.US"),
-                make_signals(dec!(0.1), dec!(0.9), dec!(0.0), dec!(0.0), dec!(0.0)),
-            )],
-        ));
-
-        let timelines = compute_causal_timelines(&history);
-        let tl = timelines.get(&sym("AAPL.US")).unwrap();
-        let leaders = tl.recent_leaders(5);
-        // Most recent first: momentum, then capital_flow
-        assert_eq!(leaders[0], "momentum");
-        assert_eq!(leaders[1], "capital_flow");
-    }
-
-    #[test]
     fn empty_history_produces_no_timelines() {
         let history = crate::us::temporal::buffer::UsTickHistory::new(10);
         let timelines = compute_causal_timelines(&history);

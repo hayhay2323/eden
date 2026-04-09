@@ -507,6 +507,56 @@ fn convergence_hypothesis_requires_three_us_channels() {
 }
 
 #[test]
+fn latent_vortex_emerges_before_convergence_is_strong_enough() {
+    let events = UsEventSnapshot {
+        timestamp: ts(),
+        events: vec![make_event(
+            "BABA.US",
+            UsEventKind::CrossMarketDivergence,
+            dec!(0.40),
+        )],
+    };
+    let signals = UsDerivedSignalSnapshot {
+        timestamp: ts(),
+        signals: vec![make_signal(
+            "BABA.US",
+            UsDerivedSignalKind::StructuralComposite,
+            dec!(0.30),
+        )],
+    };
+    let paths = vec![PropagationPath {
+        path_id: "path:us:sector".into(),
+        summary: "sector pressure may diffuse into BABA.US".into(),
+        confidence: dec!(0.50),
+        steps: vec![PropagationStep {
+            from: ReasoningScope::Sector(SectorId("china-tech".into())),
+            to: ReasoningScope::Symbol(sym("BABA.US")),
+            mechanism: "sector diffusion".into(),
+            confidence: dec!(0.50),
+            references: vec![],
+        }],
+    }];
+
+    let hypotheses = derive_hypotheses(&events, &signals, &paths, None);
+    let latent = hypotheses
+        .iter()
+        .find(|item| item.family_key == "latent_vortex")
+        .expect("latent vortex hypothesis");
+
+    assert!(latent.statement.contains("topology-first vortex"));
+    assert_eq!(latent.propagation_path_ids, vec!["path:us:sector"]);
+    assert!(latent
+        .provenance
+        .note
+        .as_deref()
+        .unwrap_or_default()
+        .contains("channel_signature="));
+    assert!(hypotheses
+        .iter()
+        .all(|item| item.family_key != "convergence_hypothesis"));
+}
+
+#[test]
 fn learned_us_convergence_pattern_feedback_promotes_convergence_hypothesis() {
     let convergence_hypothesis = Hypothesis {
         hypothesis_id: "hyp:BABA.US:convergence_hypothesis".into(),
@@ -577,6 +627,7 @@ fn learned_us_convergence_pattern_feedback_promotes_convergence_hypothesis() {
             mean_coherence: dec!(0.70),
             mean_channel_diversity: dec!(3),
         }],
+        None,
     );
 
     assert!(changed);
@@ -601,6 +652,74 @@ fn learned_us_convergence_pattern_feedback_promotes_convergence_hypothesis() {
         .risk_notes
         .iter()
         .any(|note| note.contains("learned_convergence_boost=")));
+}
+
+#[test]
+fn learned_us_convergence_pattern_feedback_also_boosts_latent_vortex() {
+    let latent_vortex = Hypothesis {
+        hypothesis_id: "hyp:BABA.US:latent_vortex".into(),
+        family_key: "latent_vortex".into(),
+        family_label: "Latent Vortex".into(),
+        provenance: prov().with_note(
+            "family=Latent Vortex; vortex_strength=0.34; channel_diversity=2; coherence=0.70; dominant_channels=cross-market|structure",
+        ),
+        scope: ReasoningScope::Symbol(sym("BABA.US")),
+        statement: "BABA.US is forming a topology-first vortex".into(),
+        confidence: dec!(0.45),
+        local_support_weight: dec!(0.40),
+        local_contradict_weight: Decimal::ZERO,
+        propagated_support_weight: dec!(0.18),
+        propagated_contradict_weight: Decimal::ZERO,
+        evidence: vec![],
+        invalidation_conditions: vec![],
+        propagation_path_ids: vec!["path:us:sector".into()],
+        expected_observations: vec![],
+    };
+    let mut snapshot = UsReasoningSnapshot {
+        timestamp: ts(),
+        hypotheses: vec![latent_vortex.clone()],
+        propagation_paths: vec![],
+        investigation_selections: vec![],
+        tactical_setups: vec![],
+        hypothesis_tracks: vec![],
+    };
+
+    let changed = apply_us_convergence_success_pattern_feedback(
+        &mut snapshot,
+        1,
+        &[],
+        &[],
+        Some(UsMarketRegimeBias::Neutral),
+        None,
+        None,
+        None,
+        None,
+        &[crate::us::temporal::lineage::UsConvergenceSuccessPattern {
+            channel_signature: "cross-market|structure".into(),
+            dominant_channels: vec!["cross-market".into(), "structure".into()],
+            top_family: "Latent Vortex".into(),
+            samples: 3,
+            mean_net_return: dec!(0.04),
+            mean_strength: dec!(0.36),
+            mean_coherence: dec!(0.66),
+            mean_channel_diversity: dec!(2),
+        }],
+        None,
+    );
+
+    assert!(changed);
+    let boosted = snapshot
+        .hypotheses
+        .iter()
+        .find(|hypothesis| hypothesis.hypothesis_id == latent_vortex.hypothesis_id)
+        .expect("boosted latent vortex");
+    assert!(boosted.confidence > latent_vortex.confidence);
+    assert!(boosted
+        .provenance
+        .note
+        .as_deref()
+        .unwrap_or_default()
+        .contains("matched_success_pattern=cross-market|structure"));
 }
 
 #[test]
@@ -662,6 +781,7 @@ fn doctrine_pressure_tightens_us_enter_promotions() {
         None,
         None,
         None,
+        None,
         Some(&doctrine),
     );
 
@@ -686,6 +806,78 @@ fn doctrine_pressure_targets_timing_sensitive_us_families() {
     let momentum = doctrine.pressure_for_family(Some(TEMPLATE_MOMENTUM_CONTINUATION));
 
     assert!(pre_market > momentum);
+}
+
+#[test]
+fn derive_tactical_setups_preserves_us_convergence_detail() {
+    let hypothesis = Hypothesis {
+        hypothesis_id: "hyp:BABA.US:latent_vortex".into(),
+        family_key: "latent_vortex".into(),
+        family_label: "Latent Vortex".into(),
+        provenance: prov(),
+        scope: ReasoningScope::Symbol(sym("BABA.US")),
+        statement: "BABA.US topology-first vortex".into(),
+        confidence: dec!(0.55),
+        local_support_weight: dec!(0.40),
+        local_contradict_weight: Decimal::ZERO,
+        propagated_support_weight: dec!(0.20),
+        propagated_contradict_weight: Decimal::ZERO,
+        evidence: vec![],
+        invalidation_conditions: vec![],
+        propagation_path_ids: vec![],
+        expected_observations: vec![],
+    };
+    let selection = crate::ontology::reasoning::InvestigationSelection {
+        investigation_id: "inv:BABA.US".into(),
+        hypothesis_id: hypothesis.hypothesis_id.clone(),
+        runner_up_hypothesis_id: None,
+        provenance: prov(),
+        scope: ReasoningScope::Symbol(sym("BABA.US")),
+        title: "BABA.US investigation".into(),
+        family_key: "latent_vortex".into(),
+        family_label: "Latent Vortex".into(),
+        rationale: "topology-first".into(),
+        priority_score: dec!(0.42),
+        confidence: dec!(0.55),
+        confidence_gap: dec!(0.10),
+        attention_hint: "review".into(),
+        review_reason_code: None,
+        notes: vec![],
+    };
+    let convergence_scores = HashMap::from([(
+        sym("BABA.US"),
+        crate::us::graph::decision::UsConvergenceScore {
+            symbol: sym("BABA.US"),
+            dimension_composite: dec!(0.32),
+            capital_flow_direction: dec!(0.10),
+            price_momentum: dec!(0.12),
+            volume_profile: dec!(0.08),
+            pre_post_market_anomaly: Decimal::ZERO,
+            valuation: dec!(0.05),
+            cross_market_propagation: Some(dec!(0.41)),
+            cross_stock_correlation: dec!(0.36),
+            sector_coherence: Some(dec!(0.28)),
+            composite: dec!(0.34),
+        },
+    )]);
+
+    let setups = derive_tactical_setups(
+        &[hypothesis],
+        &[selection],
+        &[],
+        None,
+        Some(&convergence_scores),
+    );
+    let setup = setups.first().expect("us tactical setup");
+
+    assert_eq!(setup.convergence_score, Some(dec!(0.34)));
+    let detail = setup
+        .convergence_detail
+        .as_ref()
+        .expect("convergence detail");
+    assert_eq!(detail.institutional_alignment, dec!(0.32));
+    assert_eq!(detail.cross_stock_correlation, dec!(0.36));
+    assert_eq!(detail.sector_coherence, Some(dec!(0.28)));
 }
 
 #[test]
@@ -973,6 +1165,7 @@ fn diffusion_paths_seed_structural_diffusion_hypothesis() {
         None,
         None,
         Some(&structural_metrics),
+        None,
         &graph,
         &[],
         None,
@@ -1054,7 +1247,7 @@ fn lineage_feedback_can_flip_scope_winner() {
         None,
         None,
     );
-    let setups = derive_tactical_setups(&hypotheses, &investigations, &[], Some(&stats));
+    let setups = derive_tactical_setups(&hypotheses, &investigations, &[], Some(&stats), None);
 
     assert_eq!(setups.len(), 1);
     assert_eq!(setups[0].hypothesis_id, "hyp:rotation");

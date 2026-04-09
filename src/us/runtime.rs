@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::bridges::service::FileSystemBridgeService;
@@ -12,6 +12,7 @@ use crate::core::projection::{project_us, UsProjectionInputs};
 use crate::core::runtime::prepare_runtime_context_or_exit;
 #[cfg(feature = "persistence")]
 use crate::core::runtime::PreparedRuntimeContext;
+use crate::core::runtime_loop::TickState;
 use crate::live_snapshot::{
     LiveBackwardChain, LiveCausalLeader, LiveCrossMarketAnomaly, LiveCrossMarketSignal, LiveEvent,
     LiveHypothesisTrack, LiveLineageMetric, LiveMarket, LiveMarketRegime, LivePressure,
@@ -45,17 +46,19 @@ use crate::pipeline::learning_loop::{
     derive_learning_feedback, derive_outcome_learning_context_from_us_rows,
     ReasoningLearningFeedback,
 };
-use crate::core::runtime_loop::TickState;
 use crate::us::action::tracker::{UsPositionTracker, UsStructuralFingerprint};
 use crate::us::action::workflow::{UsActionStage, UsActionWorkflow};
 use crate::us::common::SIGNAL_RESOLUTION_LAG;
-use crate::us::graph::decision::{UsDecisionSnapshot, UsSignalRecord, UsSignalScorecard};
+use crate::us::graph::decision::{
+    UsDecisionSnapshot, UsSignalRecord, UsSignalScorecard, UsSignalScorecardAccumulator,
+};
 use crate::us::graph::graph::UsGraph;
 use crate::us::graph::insights::{compute_propagation_senses, UsGraphInsights};
 use crate::us::pipeline::dimensions::UsDimensionSnapshot;
 use crate::us::pipeline::reasoning::{UsReasoningSnapshot, UsStructuralRankMetrics};
 use crate::us::pipeline::signals::{
-    PreviousFlows, UsDerivedSignalSnapshot, UsEventSnapshot, UsObservationSnapshot, UsSignalScope,
+    PreviousFlows, UsDerivedSignalSnapshot, UsEventKind, UsEventSnapshot, UsObservationSnapshot,
+    UsSignalScope,
 };
 use crate::us::pipeline::world::derive_backward_snapshot;
 use crate::us::temporal::analysis::compute_us_dynamics;
@@ -63,7 +66,8 @@ use crate::us::temporal::buffer::UsTickHistory;
 use crate::us::temporal::causality::compute_causal_timelines;
 use crate::us::temporal::lineage::{
     compute_us_convergence_success_patterns, compute_us_lineage_stats,
-    compute_us_multi_horizon_lineage_metrics, evaluate_us_candidate_mechanisms, UsLineageStats,
+    compute_us_multi_horizon_lineage_metrics,
+    evaluate_us_candidate_mechanisms, UsLineageStats,
 };
 use crate::us::temporal::record::{UsSymbolSignals, UsTickRecord};
 use crate::us::watchlist::US_WATCHLIST;
@@ -93,8 +97,8 @@ const US_SIGNAL_RECORD_CAP: usize = 4_000;
 const US_SIGNAL_RECORD_RETENTION_TICKS: u64 = 240;
 const US_WORKFLOW_CAP: usize = 512;
 const TRADE_BUFFER_CAP_PER_SYMBOL: usize = 2_000;
-const US_PUSH_BATCH_SIZE: usize = 256;
-const US_PUSH_BATCH_CHANNEL_CAP: usize = 1024;
+const US_PUSH_BATCH_SIZE: usize = 2_048;
+const US_PUSH_BATCH_CHANNEL_CAP: usize = 8_192;
 #[cfg(feature = "persistence")]
 const US_PERSISTENCE_MAX_IN_FLIGHT: usize = 16;
 #[cfg(feature = "persistence")]
@@ -109,10 +113,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         mut rest,
         mut tick_history,
         mut signal_records,
+        mut scorecard_accumulator,
+        mut signal_momentum,
         mut previous_setups,
         mut previous_tracks,
         mut previous_flows,
         mut lineage_stats,
+        mut lineage_accumulator,
+        mut lineage_prev_resolved,
         mut prev_insights,
         mut position_tracker,
         mut workflows,
@@ -139,18 +147,23 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "persistence")]
     if let Some(ref store) = runtime.store {
         if let Ok(mechs) = store.load_candidate_mechanisms("us").await {
-            eprintln!("[us] loaded {} candidate mechanisms from store", mechs.len());
+            eprintln!(
+                "[us] loaded {} candidate mechanisms from store",
+                mechs.len()
+            );
             cached_us_candidate_mechanisms = mechs;
         }
     }
     #[cfg(feature = "persistence")]
     if let Some(ref store) = runtime.store {
-        crate::persistence::case_reasoning_assessment::backfill_doctrine_assessments(store, "us").await;
+        crate::persistence::case_reasoning_assessment::backfill_doctrine_assessments(store, "us")
+            .await;
     }
 
     let mut us_hidden_force_state =
         crate::pipeline::residual::HiddenForceVerificationState::default();
-    let mut _edge_ledger = crate::graph::edge_learning::EdgeLearningLedger::default();
+    let mut edge_ledger = crate::graph::edge_learning::EdgeLearningLedger::default();
+    let mut seen_us_edge_learning_setups = HashSet::new();
 
     loop {
         let Some(tick_advance) = ({
@@ -355,11 +368,31 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         let derived_snapshot = UsDerivedSignalSnapshot::compute(&dim_snapshot, &hk_signal_map, now);
 
+        if edge_ledger.is_empty() && !tick_history.is_empty() {
+            let credited = crate::graph::edge_learning::ingest_us_topology_outcomes(
+                &mut edge_ledger,
+                &mut seen_us_edge_learning_setups,
+                &tick_history,
+                &graph,
+                SIGNAL_RESOLUTION_LAG,
+                now,
+            );
+            if credited > 0 {
+                eprintln!(
+                    "[us] seeded edge ledger from restored history (credited_setups={}, learned_edges={})",
+                    credited,
+                    edge_ledger.len()
+                );
+            }
+        }
+
         // 4. Decision: convergence + regime + suggestions
-        let decision = UsDecisionSnapshot::compute(&graph, &cross_market_signals, tick);
+        let decision =
+            UsDecisionSnapshot::compute(&graph, &cross_market_signals, tick, Some(&edge_ledger));
 
         // 5. Reasoning: hypotheses + tactical setups
-        let lineage_prior = compute_us_lineage_stats(&tick_history, SIGNAL_RESOLUTION_LAG);
+        let mut lineage_prior = compute_us_lineage_stats(&tick_history, SIGNAL_RESOLUTION_LAG);
+        lineage_prior.enrich_with_cumulative(&lineage_accumulator);
         let multi_horizon_lineage = compute_us_multi_horizon_lineage_metrics(&tick_history);
         let multi_horizon_gate =
             crate::temporal::lineage::MultiHorizonGate::from_metrics(&multi_horizon_lineage);
@@ -414,6 +447,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Some(&lineage_prior),
             Some(&multi_horizon_gate),
             Some(&structural_metrics),
+            Some(&deep_reasoning_decision.convergence_scores),
             &graph,
             &cross_market_signals,
             {
@@ -455,6 +489,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             },
             &convergence_success_patterns,
+            Some(&reasoning_decision.convergence_scores),
         );
 
         // 5b. Residual Field: compute, infer hidden forces, verify, cross-validate with options
@@ -474,15 +509,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let us_hidden_forces =
             crate::pipeline::residual::infer_hidden_forces(&us_residual_field, now);
         if !us_hidden_forces.is_empty() {
-            eprintln!("[us] injected {} hidden force hypotheses", us_hidden_forces.len());
+            eprintln!(
+                "[us] injected {} hidden force hypotheses",
+                us_hidden_forces.len()
+            );
             reasoning.hypotheses.extend(us_hidden_forces);
         }
         // Verify hidden forces (tick-level)
-        let us_verify = us_hidden_force_state.tick(
-            &us_residual_field,
-            &reasoning.hypotheses,
-            tick,
-        );
+        let us_verify = us_hidden_force_state.tick(&us_residual_field, &reasoning.hypotheses, tick);
         if !us_verify.confirmed.is_empty() || !us_verify.invalidated.is_empty() {
             eprintln!(
                 "[us] hidden force verification: {}c/{}d/{}i/{}r",
@@ -494,8 +528,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         // Apply residual-based confidence adjustments
         for (hyp_id, adj) in us_hidden_force_state.confidence_adjustments() {
-            if let Some(hyp) = reasoning.hypotheses.iter_mut().find(|h| h.hypothesis_id == hyp_id) {
-                hyp.confidence = (hyp.confidence + adj).clamp(Decimal::ZERO, Decimal::ONE).round_dp(4);
+            if let Some(hyp) = reasoning
+                .hypotheses
+                .iter_mut()
+                .find(|h| h.hypothesis_id == hyp_id)
+            {
+                hyp.confidence = (hyp.confidence + adj)
+                    .clamp(Decimal::ZERO, Decimal::ONE)
+                    .round_dp(4);
             }
         }
         // Option cross-validation (US has option surfaces!)
@@ -511,9 +551,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             // Apply option-based confidence adjustments
-            for (hyp_id, adj) in crate::pipeline::residual::option_confidence_adjustments(&option_validations) {
-                if let Some(hyp) = reasoning.hypotheses.iter_mut().find(|h| h.hypothesis_id == hyp_id) {
-                    hyp.confidence = (hyp.confidence + adj).clamp(Decimal::ZERO, Decimal::ONE).round_dp(4);
+            for (hyp_id, adj) in
+                crate::pipeline::residual::option_confidence_adjustments(&option_validations)
+            {
+                if let Some(hyp) = reasoning
+                    .hypotheses
+                    .iter_mut()
+                    .find(|h| h.hypothesis_id == hyp_id)
+                {
+                    hyp.confidence = (hyp.confidence + adj)
+                        .clamp(Decimal::ZERO, Decimal::ONE)
+                        .round_dp(4);
                 }
             }
         }
@@ -580,6 +628,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(feature = "persistence")]
         run_us_persistence_stage(&runtime, tick, now, &live, &rest, &tick_record).await;
         tick_history.push(tick_record);
+        crate::graph::edge_learning::ingest_us_topology_outcomes(
+            &mut edge_ledger,
+            &mut seen_us_edge_learning_setups,
+            &tick_history,
+            &graph,
+            SIGNAL_RESOLUTION_LAG,
+            now,
+        );
+        edge_ledger.decay(now);
 
         // Evaluate and persist US candidate mechanisms
         {
@@ -640,10 +697,19 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .find(|q| q.symbol == record.symbol)
                 .map(|q| q.last_done);
-            UsSignalScorecard::try_resolve(record, tick, current_price);
+            UsSignalScorecard::try_resolve_with_accumulator(
+                record,
+                tick,
+                current_price,
+                &mut scorecard_accumulator,
+            );
         }
         prune_us_signal_records(&mut signal_records, tick);
-        let scorecard = UsSignalScorecard::compute(&signal_records);
+        let active_signal_count = signal_records
+            .iter()
+            .filter(|record| !record.resolved)
+            .count();
+        let scorecard = scorecard_accumulator.to_scorecard(active_signal_count);
         vortex_attention =
             derive_us_vortex_attention(&reasoning.hypotheses, &reasoning.propagation_paths);
         for symbol in graph.stock_nodes.keys() {
@@ -702,6 +768,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // 8. Lineage stats every 30 ticks
         if tick % 30 == 0 && tick_history.len() > 1 {
             lineage_stats = compute_us_lineage_stats(&tick_history, SIGNAL_RESOLUTION_LAG);
+            // Feed cumulative accumulator so gate decisions have stable long-term stats
+            lineage_accumulator.ingest(&lineage_stats, &lineage_prev_resolved);
+            lineage_prev_resolved = lineage_stats
+                .by_template
+                .iter()
+                .map(|s| (s.template.clone(), s.resolved))
+                .collect();
             #[cfg(feature = "persistence")]
             maybe_persist_us_lineage_stage(&runtime, tick, now, tick_history.len(), &lineage_stats)
                 .await;
@@ -738,9 +811,18 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         // 12. Position tracker: auto-enter high-confidence setups, monitor exits
+        //     Signal momentum check: skip enter if signal is peaking/collapsing (Palantir 2nd derivative)
         for setup in &reasoning.tactical_setups {
             if setup.action == "enter" && setup.confidence >= Decimal::new(7, 1) {
                 if let crate::ontology::reasoning::ReasoningScope::Symbol(sym) = &setup.scope {
+                    let health = signal_momentum.signal_health(sym);
+                    if matches!(
+                        health,
+                        crate::us::temporal::lineage::SignalHealth::Peaking
+                            | crate::us::temporal::lineage::SignalHealth::Collapsing
+                    ) {
+                        continue; // skip enter when signal is peaking or collapsing
+                    }
                     if !position_tracker.is_active(sym) {
                         let price = quotes
                             .iter()
@@ -843,6 +925,18 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let mut sorted_convergence: Vec<_> = decision.convergence_scores.iter().collect();
         sorted_convergence.sort_by(|a, b| b.1.composite.abs().cmp(&a.1.composite.abs()));
 
+        // Feed signal momentum tracker (Palantir-style second derivative detection)
+        for (sym, score) in &decision.convergence_scores {
+            signal_momentum.record_convergence(sym.clone(), score.composite);
+        }
+        for event in &event_snapshot.events {
+            if matches!(event.value.kind, UsEventKind::VolumeSpike) {
+                if let UsSignalScope::Symbol(symbol) = &event.value.scope {
+                    signal_momentum.record_volume_spike(symbol.clone(), event.value.magnitude);
+                }
+            }
+        }
+
         // Build projection bundle
         let artifact_projection = project_us(UsProjectionInputs {
             live_snapshot,
@@ -876,6 +970,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             &artifact_projection.agent_briefing,
             &artifact_projection.agent_session,
             runtime.projection_state.previous_agent_session.as_ref(),
+            edge_ledger.len(),
         );
         #[cfg(feature = "persistence")]
         run_us_projection_stage(
@@ -891,6 +986,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             &reasoning,
             &artifact_projection,
             &store,
+            &tick_history,
         )
         .await;
         #[cfg(not(feature = "persistence"))]
@@ -926,6 +1022,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "tick_history_len": tick_history.len(),
                 "signal_records": signal_records.len(),
                 "workflows": workflows.len(),
+                "learned_edges": edge_ledger.len(),
+                "latent_vortex_hypotheses": reasoning
+                    .hypotheses
+                    .iter()
+                    .filter(|hypothesis| hypothesis.family_key == "latent_vortex")
+                    .count(),
                 "market_open": true,
             }),
         );
