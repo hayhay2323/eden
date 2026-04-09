@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use rust_decimal::prelude::Signed;
 use rust_decimal::Decimal;
 
 use crate::ontology::objects::Symbol;
@@ -28,7 +27,7 @@ impl NodeEnergyMap {
             let polarity = path
                 .steps
                 .first()
-                .map(|step| step.confidence.signum())
+                .map(|step| Decimal::from(step.polarity))
                 .unwrap_or(Decimal::ONE);
             let energy = path.confidence * polarity;
             *flux.entry(symbol).or_insert(Decimal::ZERO) += energy;

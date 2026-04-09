@@ -157,8 +157,16 @@ pub struct PropagationStep {
     pub to: ReasoningScope,
     pub mechanism: String,
     pub confidence: Decimal,
+    /// Signed direction from source_delta: +1 = bullish, -1 = bearish.
+    /// Defaults to +1 for backwards compatibility with paths that predate this field.
+    #[serde(default = "default_polarity")]
+    pub polarity: i8,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<String>,
+}
+
+fn default_polarity() -> i8 {
+    1
 }
 
 /// A candidate transmission route for a market situation.

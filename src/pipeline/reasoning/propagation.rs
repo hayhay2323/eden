@@ -381,6 +381,7 @@ fn push_diffusion_path(
     ));
     step_references.push(format!("observed_at:{}", observed_at));
 
+    let polarity = if source_delta.is_sign_negative() { -1i8 } else { 1i8 };
     paths.push(PropagationPath {
         path_id,
         summary: format!(
@@ -395,6 +396,7 @@ fn push_diffusion_path(
             to: to.clone(),
             mechanism: mechanism.into(),
             confidence,
+            polarity,
             references: step_references,
         }],
     });
@@ -465,6 +467,7 @@ fn rotation_one_hop_paths(
                     } else {
                         "capital rotation narrowing".into()
                     },
+                    polarity: 1,
                     confidence,
                     references: vec![
                         format!("rotation:{}:{}", rotation.from_sector, rotation.to_sector),
@@ -499,6 +502,7 @@ fn shared_holder_one_hop_paths(
                     to: ReasoningScope::Symbol(to.clone()),
                     mechanism: "shared holder overlap".into(),
                     confidence,
+                    polarity: 1,
                     references: vec![
                         format!("shared_holder:{}", from),
                         format!("shared_holder:{}", to),
@@ -578,6 +582,7 @@ fn shared_holder_bridge_paths(
                     to,
                     mechanism: mechanism.into(),
                     confidence,
+                    polarity: 1,
                     references: vec![
                         format!("shared_holder:{}", shared.symbol_a),
                         format!("shared_holder:{}", shared.symbol_b),
@@ -616,6 +621,7 @@ fn market_stress_sector_paths(
                     to: ReasoningScope::Sector(sector.0.as_str().into()),
                     mechanism: "market stress concentration".into(),
                     confidence,
+                    polarity: 1,
                     references: vec![
                         format!(
                             "market_stress:{}",

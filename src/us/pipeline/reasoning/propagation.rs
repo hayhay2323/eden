@@ -151,7 +151,45 @@ fn derive_diffusion_one_hop_paths(
                     vec![format!("sector_membership:{}", source.symbol)],
                 );
             }
-            UsEdgeKind::CrossMarket(_) => {}
+            UsEdgeKind::CrossMarket(cm) => {
+                // Cross-market propagation: HK signal → US stock
+                let (UsNodeKind::CrossMarket(cm_node), UsNodeKind::Stock(target)) =
+                    (&graph.graph[edge.source()], &graph.graph[edge.target()])
+                else {
+                    // Try reverse direction: Stock → CrossMarket node
+                    if let (UsNodeKind::Stock(source), UsNodeKind::CrossMarket(cm_node)) =
+                        (&graph.graph[edge.source()], &graph.graph[edge.target()])
+                    {
+                        let confidence = cm.confidence.abs().max(Decimal::new(40, 2));
+                        push_diffusion_path(
+                            &mut paths,
+                            ReasoningScope::Symbol(source.symbol.clone()),
+                            ReasoningScope::Symbol(cm_node.hk_symbol.clone()),
+                            "cross_market_diffusion",
+                            confidence,
+                            node_deltas,
+                            vec![format!(
+                                "cross_market:{}:{}",
+                                source.symbol, cm_node.hk_symbol
+                            )],
+                        );
+                    }
+                    continue;
+                };
+                let confidence = cm.confidence.abs().max(Decimal::new(40, 2));
+                push_diffusion_path(
+                    &mut paths,
+                    ReasoningScope::Symbol(cm_node.hk_symbol.clone()),
+                    ReasoningScope::Symbol(target.symbol.clone()),
+                    "cross_market_diffusion",
+                    confidence,
+                    node_deltas,
+                    vec![format!(
+                        "cross_market:{}:{}",
+                        cm_node.hk_symbol, target.symbol
+                    )],
+                );
+            }
         }
     }
 
@@ -196,6 +234,7 @@ fn derive_cross_market_diffusion_paths(
                 to: target_scope,
                 mechanism: "cross-market diffusion".into(),
                 confidence,
+                polarity: 1,
                 references: vec![
                     format!("hk_symbol:{}", signal.hk_symbol),
                     format!("us_symbol:{}", signal.us_symbol),
@@ -237,6 +276,7 @@ fn push_diffusion_path(
         scope_id(&from),
         scope_id(&to)
     );
+    let polarity = if source_delta.is_sign_negative() { -1i8 } else { 1i8 };
     paths.push(PropagationPath {
         path_id,
         summary: format!(
@@ -251,6 +291,7 @@ fn push_diffusion_path(
             to,
             mechanism: mechanism.into(),
             confidence,
+            polarity,
             references,
         }],
     });

@@ -1029,6 +1029,7 @@ pub fn emergent_paths_to_propagation_paths(
                 to: ReasoningScope::Symbol(path.to_symbol.clone()),
                 mechanism: path.mechanism.clone(),
                 confidence: path.confidence,
+                polarity: 1,
                 references: vec![path.evidence.clone()],
             }],
         })

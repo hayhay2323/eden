@@ -694,6 +694,26 @@ pub async fn run() {
 
         // Update absence memory for next tick
         {
+            // Clear suppression for sectors where propagation actually fired
+            {
+                let mut propagated_sectors = std::collections::HashSet::new();
+                for path in &diffusion_paths {
+                    for step in &path.steps {
+                        if let eden::ontology::reasoning::ReasoningScope::Sector(ref sid) = step.to
+                        {
+                            propagated_sectors.insert(sid.clone());
+                        }
+                        if let eden::ontology::reasoning::ReasoningScope::Sector(ref sid) =
+                            step.from
+                        {
+                            propagated_sectors.insert(sid.clone());
+                        }
+                    }
+                }
+                for sector in &propagated_sectors {
+                    absence_memory.record_propagation(sector);
+                }
+            }
             let absence_sectors = eden::pipeline::reasoning::propagation_absence_sectors(
                 &deep_reasoning_event_snapshot,
             );
