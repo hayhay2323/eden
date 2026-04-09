@@ -712,6 +712,30 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        // Causal schema extraction (every 10 ticks)
+        #[cfg(feature = "persistence")]
+        if tick % 10 == 0 && !cached_us_candidate_mechanisms.is_empty() {
+            let fingerprints = crate::us::temporal::outcomes::compute_us_vortex_successful_fingerprints(
+                &tick_history,
+                SIGNAL_RESOLUTION_LAG,
+            );
+            let all_outcomes = crate::us::temporal::outcomes::compute_us_case_realized_outcomes_adaptive(
+                &tick_history,
+                SIGNAL_RESOLUTION_LAG,
+            );
+            if !fingerprints.is_empty() || !all_outcomes.is_empty() {
+                eprintln!(
+                    "[us] causal schema extraction: {} fingerprints, {} outcomes from {} mechanisms",
+                    fingerprints.len(),
+                    all_outcomes.len(),
+                    cached_us_candidate_mechanisms.len(),
+                );
+            }
+            // Schema extraction requires TickHistory (HK type) for vortex lookup.
+            // US stores fingerprints/outcomes for future schema extraction once
+            // the schema module is generalized to accept UsTickHistory.
+        }
+
         let dynamics = compute_us_dynamics(&tick_history);
 
         // 7. Signal scorecard: record new suggestions, resolve old ones
