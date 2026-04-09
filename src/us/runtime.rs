@@ -132,6 +132,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         mut tick,
         debounce,
         mut bootstrap_pending,
+        mut absence_memory,
+        mut energy_momentum,
         #[cfg(feature = "persistence")]
         mut cached_us_learning_feedback,
         #[cfg(feature = "persistence")]
@@ -492,6 +494,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Some(&reasoning_decision.convergence_scores),
         );
 
+        // 5a. Energy momentum: accumulate diffusion energy across ticks
+        {
+            let tick_energy = crate::graph::energy::NodeEnergyMap::from_propagation_paths(
+                &reasoning.propagation_paths,
+            );
+            energy_momentum.update(&tick_energy, Decimal::new(7, 1));
+        }
+
         // 5b. Residual Field: compute, infer hidden forces, verify, cross-validate with options
         let us_residual_field = crate::us::pipeline::residual::compute_us_residual_field(
             &decision.convergence_scores,
@@ -637,6 +647,35 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             now,
         );
         edge_ledger.decay(now);
+
+        // Update absence memory: clear on successful propagation, record absence, decay
+        {
+            let mut propagated_sectors = std::collections::HashSet::new();
+            for path in &reasoning.propagation_paths {
+                for step in &path.steps {
+                    if let crate::ontology::reasoning::ReasoningScope::Sector(ref sid) = step.to {
+                        propagated_sectors.insert(sid.clone());
+                    }
+                    if let crate::ontology::reasoning::ReasoningScope::Sector(ref sid) = step.from {
+                        propagated_sectors.insert(sid.clone());
+                    }
+                }
+            }
+            for sector in &propagated_sectors {
+                absence_memory.record_propagation(sector);
+            }
+            let absence_sectors =
+                crate::us::pipeline::signals::us_propagation_absence_sectors(&event_snapshot);
+            for sector in &absence_sectors {
+                absence_memory.record_absence(sector, "propagation", tick, now);
+            }
+            absence_memory.decay(now);
+        }
+
+        // Accumulate institutional memory from US graph
+        store
+            .knowledge_write()
+            .accumulate_from_us_graph(tick, &graph);
 
         // Evaluate and persist US candidate mechanisms
         {

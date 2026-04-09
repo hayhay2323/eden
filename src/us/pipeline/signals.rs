@@ -1588,3 +1588,18 @@ mod tests {
         assert_eq!(dimension_composite(&dims), dec!(0.4));
     }
 }
+
+/// Extract sectors where propagation absence was detected this tick.
+pub(crate) fn us_propagation_absence_sectors(
+    events: &UsEventSnapshot,
+) -> Vec<SectorId> {
+    events
+        .events
+        .iter()
+        .filter(|ev| ev.value.kind == UsEventKind::PropagationAbsence)
+        .filter_map(|ev| match &ev.value.scope {
+            UsSignalScope::Sector(sector_id) => Some(sector_id.clone()),
+            _ => None,
+        })
+        .collect()
+}

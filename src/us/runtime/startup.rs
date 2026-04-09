@@ -27,6 +27,8 @@ pub(super) struct UsRuntimeBootstrap {
     pub(super) tick: u64,
     pub(super) debounce: std::time::Duration,
     pub(super) bootstrap_pending: bool,
+    pub(super) absence_memory: crate::pipeline::reasoning::AbsenceMemory,
+    pub(super) energy_momentum: crate::graph::energy::EnergyMomentum,
     #[cfg(feature = "persistence")]
     pub(super) cached_us_learning_feedback: Option<ReasoningLearningFeedback>,
     #[cfg(feature = "persistence")]
@@ -239,6 +241,8 @@ pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dy
         tick: restored_tick,
         debounce,
         bootstrap_pending,
+        absence_memory: crate::pipeline::reasoning::AbsenceMemory::default(),
+        energy_momentum: crate::graph::energy::EnergyMomentum::default(),
         #[cfg(feature = "persistence")]
         cached_us_learning_feedback: None,
         #[cfg(feature = "persistence")]

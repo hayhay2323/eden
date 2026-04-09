@@ -115,6 +115,58 @@ impl AccumulatedKnowledge {
         }
     }
 
+    /// US version of institutional memory accumulation.
+    /// US has no broker/institution data, so we use sector→stock edges from
+    /// the UsGraph. Sectors act as pseudo-institutions, and their stock edges
+    /// capture directional bias.
+    pub fn accumulate_from_us_graph(
+        &mut self,
+        tick_number: u64,
+        graph: &crate::us::graph::graph::UsGraph,
+    ) {
+        use crate::ontology::objects::InstitutionId;
+        use crate::us::graph::graph::{UsEdgeKind, UsNodeKind};
+        use petgraph::visit::EdgeRef;
+
+        // Use sector nodes as pseudo-institutions (hash sector name to u32).
+        for (sector_id, &sector_idx) in &graph.sector_nodes {
+            let hash = sector_id
+                .0
+                .bytes()
+                .fold(0i32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as i32));
+            let pseudo_id = InstitutionId(hash);
+            for edge in graph.graph.edges(sector_idx) {
+                if !matches!(edge.weight(), UsEdgeKind::StockToSector(_)) {
+                    continue;
+                }
+                let target_idx = edge.source(); // edge direction: stock→sector, so source is stock
+                if let UsNodeKind::Stock(stock_node) = &graph.graph[target_idx] {
+                    let direction = stock_node.mean_direction;
+                    let key = (pseudo_id, stock_node.symbol.clone());
+                    let profile = self.institutional_memory.entry(key).or_insert(
+                        InstitutionSymbolProfile {
+                            observation_count: 0,
+                            directional_hit_count: 0,
+                            avg_presence_ticks: Decimal::ZERO,
+                            last_seen_tick: tick_number,
+                            directional_bias: Decimal::ZERO,
+                        },
+                    );
+                    profile.observation_count += 1;
+                    profile.last_seen_tick = tick_number;
+                    let n = Decimal::from(profile.observation_count);
+                    profile.directional_bias =
+                        profile.directional_bias * (n - Decimal::ONE) / n + direction / n;
+                }
+            }
+        }
+
+        // Evict stale entries
+        let cutoff = tick_number.saturating_sub(Self::INSTITUTIONAL_MEMORY_STALE_TICKS);
+        self.institutional_memory
+            .retain(|_, profile| profile.last_seen_tick >= cutoff);
+    }
+
     #[cfg(feature = "persistence")]
     pub async fn restore_from(db: &crate::persistence::store::EdenStore, market: &str) -> Self {
         use crate::pipeline::learning_loop::{
