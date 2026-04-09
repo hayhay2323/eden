@@ -88,6 +88,12 @@ impl LiveState {
         }
     }
 
+    pub(super) fn apply_batch(&mut self, events: Vec<PushEvent>) {
+        for event in events {
+            self.apply(event);
+        }
+    }
+
     /// Merge live push state with REST-fetched capital data into a RawSnapshot.
     /// Consumes accumulated trades (they're per-tick, not cumulative).
     pub(super) fn to_raw_snapshot(&mut self, rest: &RestSnapshot) -> RawSnapshot {
@@ -145,9 +151,9 @@ pub(super) struct HkTickState<'a> {
     pub(super) rest_updated: &'a mut bool,
 }
 
-impl TickState<PushEvent, RestSnapshot> for HkTickState<'_> {
-    fn apply_push(&mut self, event: PushEvent) {
-        self.live.apply(event);
+impl TickState<Vec<PushEvent>, RestSnapshot> for HkTickState<'_> {
+    fn apply_push(&mut self, events: Vec<PushEvent>) {
+        self.live.apply_batch(events);
     }
 
     fn apply_update(&mut self, update: RestSnapshot) {
@@ -216,7 +222,13 @@ pub(super) async fn fetch_market_context(
 }
 
 /// Fetch REST-only data that doesn't come via push.
-/// Batches requests to stay under Longport's 10 req/s rate limit.
+///
+/// Longport SDK throttles to ~6 req/s internally. Per-symbol endpoints
+/// (capital_flow, capital_distribution, intraday) are the bottleneck:
+///   494 symbols × 3 endpoints ÷ 6 req/s = ~247s (far exceeds 60s cycle).
+///
+/// Solution: fetch batch endpoints for ALL symbols, then fetch per-symbol
+/// data only for the top N by turnover (matching US runtime strategy).
 pub(super) async fn fetch_rest_data(
     ctx: &QuoteContext,
     watchlist: &[Symbol],
@@ -235,9 +247,65 @@ pub(super) async fn fetch_rest_data(
 
     use futures::stream::{self, StreamExt};
 
-    const BATCH_CONCURRENCY: usize = 8; // max concurrent requests per stream
+    // Longport SDK serializes requests internally at ~6 req/s.
+    // Concurrency > 1 doesn't help but avoids blocking on slow responses.
+    const API_CONCURRENCY: usize = 4;
+    // Only fetch per-symbol data for top N by turnover.
+    // calc_indexes (batch) already provides CapitalFlow indicator for ALL symbols.
+    const CAPITAL_FLOW_TOP_N: usize = 80;
+    const CAPITAL_DIST_TOP_N: usize = 80;
+    const INTRADAY_TOP_N: usize = 80;
 
-    let flow_future = stream::iter(watchlist.iter().cloned())
+    // Step 1: Batch endpoints first (calc_indexes + market_temperature + polymarket).
+    // These are 1-2 requests total regardless of symbol count.
+    let market_context_future = fetch_market_context(ctx, watchlist);
+    let polymarket_future = fetch_polymarket_snapshot(polymarket_configs);
+
+    let quote_future = async {
+        match ctx
+            .quote(watchlist.iter().map(|s| s.0.clone()).collect::<Vec<_>>())
+            .await
+        {
+            Ok(quotes) => quotes
+                .into_iter()
+                .map(|q| (Symbol(q.symbol.clone()), q))
+                .collect::<HashMap<_, _>>(),
+            Err(e) => {
+                eprintln!("Warning: HK quote batch failed: {}", e);
+                HashMap::new()
+            }
+        }
+    };
+
+    let ((calc_indexes, market_temperature), polymarket_snapshot, quotes) =
+        tokio::join!(market_context_future, polymarket_future, quote_future);
+
+    // Step 2: Rank symbols by turnover to select top N for per-symbol endpoints.
+    let mut ranked_symbols: Vec<_> = quotes
+        .iter()
+        .map(|(sym, q)| (sym.clone(), q.turnover))
+        .collect();
+    ranked_symbols.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let top_flow_symbols: Vec<Symbol> = ranked_symbols
+        .iter()
+        .take(CAPITAL_FLOW_TOP_N)
+        .map(|(sym, _)| sym.clone())
+        .collect();
+    let top_dist_symbols: Vec<Symbol> = ranked_symbols
+        .iter()
+        .take(CAPITAL_DIST_TOP_N)
+        .map(|(sym, _)| sym.clone())
+        .collect();
+    let top_intraday_symbols: Vec<Symbol> = ranked_symbols
+        .iter()
+        .take(INTRADAY_TOP_N)
+        .map(|(sym, _)| sym.clone())
+        .collect();
+
+    // Step 3: Per-symbol endpoints for top N only.
+    // 80 + 80 + 80 = 240 requests ÷ 6 req/s = ~40s (fits in 60s cycle).
+    let flow_future = stream::iter(top_flow_symbols.into_iter())
         .map(|sym| {
             let ctx = ctx.clone();
             async move {
@@ -250,10 +318,10 @@ pub(super) async fn fetch_rest_data(
                 }
             }
         })
-        .buffer_unordered(BATCH_CONCURRENCY)
+        .buffer_unordered(API_CONCURRENCY)
         .collect::<Vec<_>>();
 
-    let dist_future = stream::iter(watchlist.iter().cloned())
+    let dist_future = stream::iter(top_dist_symbols.into_iter())
         .map(|sym| {
             let ctx = ctx.clone();
             async move {
@@ -266,13 +334,10 @@ pub(super) async fn fetch_rest_data(
                 }
             }
         })
-        .buffer_unordered(BATCH_CONCURRENCY)
+        .buffer_unordered(API_CONCURRENCY)
         .collect::<Vec<_>>();
 
-    let market_context_future = fetch_market_context(ctx, watchlist);
-    let polymarket_future = fetch_polymarket_snapshot(polymarket_configs);
-
-    let intraday_future = stream::iter(watchlist.iter().cloned())
+    let intraday_future = stream::iter(top_intraday_symbols.into_iter())
         .map(|sym| {
             let ctx = ctx.clone();
             async move {
@@ -288,22 +353,11 @@ pub(super) async fn fetch_rest_data(
                 }
             }
         })
-        .buffer_unordered(BATCH_CONCURRENCY)
+        .buffer_unordered(API_CONCURRENCY)
         .collect::<Vec<_>>();
 
-    let (
-        flow_results,
-        dist_results,
-        (calc_indexes, market_temperature),
-        polymarket_snapshot,
-        intraday_results,
-    ) = tokio::join!(
-        flow_future,
-        dist_future,
-        market_context_future,
-        polymarket_future,
-        intraday_future
-    );
+    let (flow_results, dist_results, intraday_results) =
+        tokio::join!(flow_future, dist_future, intraday_future);
 
     RestSnapshot {
         calc_indexes,
@@ -335,7 +389,11 @@ pub(super) async fn fetch_warrant_sentiment(
                 sym.0.clone(),
                 WarrantSortBy::LastDone,
                 SortOrderType::Descending,
-                None, None, None, None, None,
+                None,
+                None,
+                None,
+                None,
+                None,
             )
             .await
         {
@@ -367,7 +425,9 @@ pub(super) async fn fetch_warrant_sentiment(
                         call_iv_n += 1;
                     }
                 }
-                if top_call_oustanding.is_none() || w.outstanding_ratio > top_call_oustanding.unwrap_or(Decimal::ZERO) {
+                if top_call_oustanding.is_none()
+                    || w.outstanding_ratio > top_call_oustanding.unwrap_or(Decimal::ZERO)
+                {
                     top_call_oustanding = Some(w.outstanding_ratio);
                 }
             } else if is_put {
@@ -378,7 +438,9 @@ pub(super) async fn fetch_warrant_sentiment(
                         put_iv_n += 1;
                     }
                 }
-                if top_put_outstanding.is_none() || w.outstanding_ratio > top_put_outstanding.unwrap_or(Decimal::ZERO) {
+                if top_put_outstanding.is_none()
+                    || w.outstanding_ratio > top_put_outstanding.unwrap_or(Decimal::ZERO)
+                {
                     top_put_outstanding = Some(w.outstanding_ratio);
                 }
             }
