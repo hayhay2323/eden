@@ -74,7 +74,7 @@ async fn open_upgrades_legacy_schema_without_version_record() {
         .unwrap();
     db.use_ns("eden").use_db("market").await.unwrap();
     db.query(schema::migrations()[0].statements).await.unwrap();
-    EdenStore::apply_schema_migrations(&db).await.unwrap();
+    EdenStore::apply_schema_migrations(&db, path.to_str().unwrap()).await.unwrap();
     let store = EdenStore { db };
     let version = EdenStore::stored_schema_version(&store.db).await.unwrap();
     assert_eq!(version, Some(schema::LATEST_SCHEMA_VERSION));

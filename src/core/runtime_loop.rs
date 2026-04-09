@@ -27,6 +27,18 @@ pub async fn wait_for_activity<P, U>(
 ) -> Result<LoopActivity<P, U>, ()> {
     if *bootstrap_pending {
         *bootstrap_pending = false;
+        let first_push = push_rx.try_recv().ok();
+        let mut latest_update = None;
+        while let Ok(update) = update_rx.try_recv() {
+            latest_update = Some(update);
+        }
+
+        if first_push.is_some() || latest_update.is_some() {
+            return Ok(LoopActivity {
+                first_push,
+                latest_update,
+            });
+        }
         return Ok(LoopActivity::bootstrap());
     }
 
@@ -59,7 +71,8 @@ pub async fn wait_for_activity<P, U>(
                     silent_rounds,
                 );
                 if silent_rounds >= 10 {
-                    eprintln!("[runtime watchdog] 5 minutes with no data — feed is likely dead.");
+                    eprintln!("[runtime watchdog] 5 minutes with no data — feed is likely dead. Terminating loop.");
+                    return Err(());
                 }
             }
         }
@@ -75,6 +88,9 @@ pub async fn drain_debounced<P, F>(
 {
     let deadline = Instant::now() + debounce;
     loop {
+        while let Ok(event) = push_rx.try_recv() {
+            apply(event);
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             break;

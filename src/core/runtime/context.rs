@@ -1,10 +1,10 @@
-use super::*;
-use crate::core::runtime_tasks::RuntimeTaskHandle;
 #[cfg(feature = "persistence")]
 use super::persistence::{
     persist_market_knowledge_projection, persist_market_lineage_projection,
     schedule_store_batch_operations, schedule_store_operation,
 };
+use super::*;
+use crate::core::runtime_tasks::RuntimeTaskHandle;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeInfraConfig {
@@ -54,14 +54,16 @@ pub struct PreparedRuntimeContext {
     pub persistence_limit: Arc<Semaphore>,
 }
 
-
 impl RuntimeInfraConfig {
     pub fn load(market: MarketId) -> Result<Self, String> {
         let slug = market.slug().to_ascii_uppercase();
+        let default_debounce_ms = match market {
+            MarketId::Hk | MarketId::Us => 250,
+        };
         let debounce_ms = load_u64_override(
             &format!("EDEN_{}_DEBOUNCE_MS", slug),
             "EDEN_DEBOUNCE_MS",
-            2_000,
+            default_debounce_ms,
         )?;
         let rest_refresh_secs = load_u64_override(
             &format!("EDEN_{}_REST_REFRESH_SECS", slug),
@@ -203,31 +205,19 @@ impl PreparedRuntimeContext {
         log_runtime_monitoring_active(&self.config, label);
     }
 
-    pub fn runtime_task_heartbeat(
-        &self,
-        detail: impl Into<String>,
-        metadata: serde_json::Value,
-    ) {
+    pub fn runtime_task_heartbeat(&self, detail: impl Into<String>, metadata: serde_json::Value) {
         if let Some(handle) = &self.runtime_task {
             let _ = handle.heartbeat(detail, metadata);
         }
     }
 
-    pub fn complete_runtime_task(
-        &self,
-        detail: impl Into<String>,
-        metadata: serde_json::Value,
-    ) {
+    pub fn complete_runtime_task(&self, detail: impl Into<String>, metadata: serde_json::Value) {
         if let Some(handle) = &self.runtime_task {
             let _ = handle.complete(detail, metadata);
         }
     }
 
-    pub fn spawn_rest_refresh<U, F, Fut>(
-        &self,
-        capacity: usize,
-        fetcher: F,
-    ) -> mpsc::Receiver<U>
+    pub fn spawn_rest_refresh<U, F, Fut>(&self, capacity: usize, fetcher: F) -> mpsc::Receiver<U>
     where
         U: Send + 'static,
         F: FnMut() -> Fut + Send + 'static,
@@ -309,7 +299,12 @@ impl PreparedRuntimeContext {
         receiver: mpsc::UnboundedReceiver<PushEvent>,
         capacity: usize,
     ) -> mpsc::Receiver<PushEvent> {
-        spawn_push_forwarder(receiver, capacity, self.counters.clone(), self.config.clone())
+        spawn_push_forwarder(
+            receiver,
+            capacity,
+            self.counters.clone(),
+            self.config.clone(),
+        )
     }
 
     pub fn spawn_batched_push_forwarder(
@@ -602,14 +597,12 @@ impl PreparedRuntimeContext {
         if records.is_empty() {
             return;
         }
-        self.persist_case_reasoning_assessments(market, records).await;
+        self.persist_case_reasoning_assessments(market, records)
+            .await;
     }
 
     #[cfg(feature = "persistence")]
-    pub async fn persist_hk_case_realized_outcomes(
-        &self,
-        records: Vec<CaseRealizedOutcomeRecord>,
-    ) {
+    pub async fn persist_hk_case_realized_outcomes(&self, records: Vec<CaseRealizedOutcomeRecord>) {
         // Auto-generate assessments from realized outcomes to feed doctrine pressure
         let auto_assessments =
             crate::persistence::case_reasoning_assessment::auto_assessments_from_outcomes(&records);
@@ -796,9 +789,12 @@ impl PreparedRuntimeContext {
                 "write_tick_archive failed",
             ),
         };
-        self.schedule_store_operation(label, issue_code, error_prefix, move |store_ref| async move {
-            store_ref.write_tick_archive(&archive).await
-        })
+        self.schedule_store_operation(
+            label,
+            issue_code,
+            error_prefix,
+            move |store_ref| async move { store_ref.write_tick_archive(&archive).await },
+        )
         .await;
     }
 
@@ -813,7 +809,9 @@ impl PreparedRuntimeContext {
             "write_hk_institution_states_failed",
             "failed to write institution states",
             move |store_ref| async move {
-                store_ref.write_institution_states(&presences, recorded_at).await
+                store_ref
+                    .write_institution_states(&presences, recorded_at)
+                    .await
             },
         )
         .await;
@@ -848,7 +846,13 @@ impl PreparedRuntimeContext {
         stats: &LineageStats,
     ) {
         let snapshot = LineageSnapshotRecord::new(tick_number, recorded_at, window_size, stats);
-        let rows = rows_from_lineage_stats(snapshot.record_id(), tick_number, recorded_at, window_size, stats);
+        let rows = rows_from_lineage_stats(
+            snapshot.record_id(),
+            tick_number,
+            recorded_at,
+            window_size,
+            stats,
+        );
         self.persist_hk_lineage_projection(snapshot, rows).await;
     }
 

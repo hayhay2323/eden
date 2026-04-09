@@ -706,9 +706,13 @@ DEFINE INDEX idx_schema_market ON causal_schema FIELDS market;
 DEFINE INDEX idx_schema_status ON causal_schema FIELDS status;
 "#;
 
-pub const LATEST_SCHEMA_VERSION: u32 = 17;
+const MIGRATION_018: &str = r#"
+DEFINE FIELD primary_lens ON case_realized_outcome TYPE option<string>;
+"#;
 
-const MIGRATIONS: [SchemaMigration; 17] = [
+pub const LATEST_SCHEMA_VERSION: u32 = 18;
+
+const MIGRATIONS: [SchemaMigration; 18] = [
     SchemaMigration {
         version: 1,
         name: "bootstrap_core_schema",
@@ -793,6 +797,11 @@ const MIGRATIONS: [SchemaMigration; 17] = [
         version: 17,
         name: "causal_schema_table",
         statements: MIGRATION_017,
+    },
+    SchemaMigration {
+        version: 18,
+        name: "case_realized_outcome_primary_lens",
+        statements: MIGRATION_018,
     },
 ];
 

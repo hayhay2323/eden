@@ -75,67 +75,123 @@ pub fn define_sectors() -> Vec<Sector> {
 
 pub fn us_symbol_sector(symbol: &str) -> Option<&'static str> {
     match symbol {
-        "AAPL.US" | "MSFT.US" | "GOOGL.US" | "AMZN.US" | "META.US" | "NFLX.US" | "CRM.US"
-        | "ORCL.US" | "ADBE.US" | "NOW.US" | "INTU.US" | "SHOP.US" | "SNOW.US" | "PLTR.US"
-        | "UBER.US" | "ABNB.US" | "DASH.US" | "SQ.US" | "PYPL.US" | "COIN.US" | "DDOG.US"
-        | "CRWD.US" | "ZS.US" | "NET.US" | "MDB.US" | "PANW.US" | "WDAY.US" | "TEAM.US"
-        | "HUBS.US" | "VEEV.US" | "DKNG.US" | "ROKU.US" | "TTD.US" | "SNAP.US" | "PINS.US"
-        | "SPOT.US" | "RBLX.US" | "U.US" | "ZM.US" | "DOCU.US" | "TWLO.US" | "OKTA.US"
-        | "MNDY.US" | "PATH.US" | "APP.US" | "BILL.US" | "GTLB.US" | "IOT.US" | "ADP.US"
-        | "ADSK.US" | "ANET.US" | "ANSS.US" | "CDW.US" | "CSGP.US" | "CTSH.US" | "FICO.US"
-        | "FTNT.US" | "GPN.US" | "HPQ.US" | "IT.US" | "KEYS.US" | "PAYC.US" | "VRSK.US"
-        | "ZBRA.US" | "BR.US" => Some("tech"),
+        // ── Tech / Software / IT Services ──
+        "AAPL.US" | "MSFT.US" | "GOOGL.US" | "GOOG.US" | "AMZN.US" | "META.US" | "NFLX.US"
+        | "CRM.US" | "ORCL.US" | "ADBE.US" | "NOW.US" | "INTU.US" | "SHOP.US" | "SNOW.US"
+        | "PLTR.US" | "UBER.US" | "ABNB.US" | "DASH.US" | "SQ.US" | "PYPL.US" | "COIN.US"
+        | "DDOG.US" | "CRWD.US" | "ZS.US" | "NET.US" | "MDB.US" | "PANW.US" | "WDAY.US"
+        | "TEAM.US" | "HUBS.US" | "VEEV.US" | "DKNG.US" | "ROKU.US" | "TTD.US" | "SNAP.US"
+        | "PINS.US" | "SPOT.US" | "RBLX.US" | "U.US" | "ZM.US" | "DOCU.US" | "TWLO.US"
+        | "OKTA.US" | "MNDY.US" | "PATH.US" | "APP.US" | "BILL.US" | "GTLB.US" | "IOT.US"
+        | "ADP.US" | "ADSK.US" | "ANET.US" | "ANSS.US" | "CDW.US" | "CSGP.US" | "CTSH.US"
+        | "FICO.US" | "FTNT.US" | "GPN.US" | "HPQ.US" | "IT.US" | "KEYS.US" | "PAYC.US"
+        | "VRSK.US" | "ZBRA.US" | "BR.US" | "ACN.US" | "AKAM.US" | "CSCO.US" | "EPAM.US"
+        | "FFIV.US" | "FISV.US" | "GDDY.US" | "GEN.US" | "IBM.US" | "JKHY.US" | "PTC.US"
+        | "SNPS.US" | "CDNS.US" | "TRMB.US" | "TYL.US" | "VRSN.US" | "TECH.US" | "FDS.US"
+        | "DELL.US" | "HPE.US" | "STX.US" | "WDC.US" | "XYZ.US" => Some("tech"),
+        // ── Semiconductor ──
         "NVDA.US" | "AMD.US" | "AVGO.US" | "QCOM.US" | "INTC.US" | "MU.US" | "AMAT.US"
         | "LRCX.US" | "KLAC.US" | "TSM.US" | "TXN.US" | "ADI.US" | "MRVL.US" | "ON.US"
-        | "NXPI.US" | "MCHP.US" | "SWKS.US" | "MPWR.US" | "ARM.US" | "ASML.US" | "SNPS.US"
-        | "CDNS.US" | "GFS.US" | "GRMN.US" => Some("semiconductor"),
+        | "NXPI.US" | "MCHP.US" | "SWKS.US" | "MPWR.US" | "ARM.US" | "ASML.US"
+        | "GFS.US" | "GRMN.US" | "COHR.US" | "QRVO.US" | "TER.US" | "LITE.US" => {
+            Some("semiconductor")
+        }
+        // ── China ADR ──
         "BABA.US" | "BIDU.US" | "NIO.US" | "XPEV.US" | "LI.US" | "PDD.US" | "JD.US" | "TCOM.US"
         | "ZTO.US" | "BILI.US" | "NTES.US" | "TME.US" | "WB.US" | "IQ.US" | "VNET.US"
         | "FUTU.US" | "TIGR.US" | "MNSO.US" | "TAL.US" | "EDU.US" | "HTHT.US" | "YMM.US"
         | "QFIN.US" | "LX.US" | "FINV.US" | "GDS.US" | "KC.US" | "ZLAB.US" | "BGNE.US"
         | "LEGN.US" => Some("china_adr"),
-        "TSLA.US" | "RIVN.US" | "LCID.US" | "GM.US" | "F.US" | "TM.US" | "STLA.US" => {
-            Some("ev_auto")
-        }
+        // ── EV / Auto ──
+        "TSLA.US" | "RIVN.US" | "LCID.US" | "GM.US" | "F.US" | "TM.US" | "STLA.US"
+        | "APTV.US" | "CVNA.US" => Some("ev_auto"),
+        // ── Finance / Insurance ──
         "JPM.US" | "GS.US" | "MS.US" | "BAC.US" | "WFC.US" | "C.US" | "USB.US" | "PNC.US"
         | "SCHW.US" | "BK.US" | "TFC.US" | "COF.US" | "AXP.US" | "BLK.US" | "ICE.US" | "CME.US"
         | "SPGI.US" | "MCO.US" | "MSCI.US" | "FIS.US" | "MA.US" | "V.US" | "HOOD.US"
         | "SOFI.US" | "PGR.US" | "TRV.US" | "ALL.US" | "MET.US" | "AIG.US" | "AFL.US"
         | "ACGL.US" | "AJG.US" | "AON.US" | "CBOE.US" | "DFS.US" | "MKTX.US" | "NDAQ.US"
-        | "LPLA.US" => Some("finance"),
+        | "LPLA.US" | "APO.US" | "ARES.US" | "BX.US" | "BEN.US" | "BRO.US" | "CB.US"
+        | "CFG.US" | "CINF.US" | "CPAY.US" | "EG.US" | "ERIE.US" | "FITB.US" | "GL.US"
+        | "HBAN.US" | "HIG.US" | "IBKR.US" | "IVZ.US" | "KEY.US" | "KKR.US" | "L.US"
+        | "MRSH.US" | "MTB.US" | "NTRS.US" | "PFG.US" | "PRU.US" | "RF.US" | "RJF.US"
+        | "STT.US" | "SYF.US" | "WRB.US" => Some("finance"),
+        // ── Healthcare / Pharma / Biotech ──
         "UNH.US" | "JNJ.US" | "LLY.US" | "ABBV.US" | "PFE.US" | "MRK.US" | "TMO.US" | "ABT.US"
         | "DHR.US" | "BMY.US" | "AMGN.US" | "GILD.US" | "VRTX.US" | "REGN.US" | "ISRG.US"
         | "SYK.US" | "BSX.US" | "MDT.US" | "ZTS.US" | "EW.US" | "A.US" | "DXCM.US" | "IDXX.US"
         | "MRNA.US" | "BIIB.US" | "ALNY.US" | "ILMN.US" | "CVS.US" | "CI.US" | "ELV.US"
-        | "HCA.US" | "HUM.US" | "MCK.US" | "BDX.US" | "RMD.US" | "WST.US" | "ZBH.US" => {
-            Some("healthcare")
-        }
+        | "HCA.US" | "HUM.US" | "MCK.US" | "BDX.US" | "RMD.US" | "WST.US" | "ZBH.US"
+        | "BAX.US" | "CAH.US" | "CNC.US" | "COR.US" | "CRL.US" | "DGX.US" | "DOC.US"
+        | "DVA.US" | "GEHC.US" | "HOLX.US" | "HSIC.US" | "IEX.US" | "INCY.US" | "IQV.US"
+        | "LH.US" | "MTD.US" | "PODD.US" | "RVTY.US" | "SOLV.US" | "STE.US" | "UHS.US"
+        | "VTRS.US" => Some("healthcare"),
+        // ── Consumer (Discretionary + Staples) ──
         "WMT.US" | "COST.US" | "TGT.US" | "HD.US" | "LOW.US" | "TJX.US" | "ROST.US" | "DG.US"
         | "DLTR.US" | "NKE.US" | "LULU.US" | "SBUX.US" | "MCD.US" | "CMG.US" | "YUM.US"
         | "DPZ.US" | "BKNG.US" | "MAR.US" | "HLT.US" | "RCL.US" | "LVS.US" | "WYNN.US"
         | "PG.US" | "KO.US" | "PEP.US" | "PM.US" | "MO.US" | "MDLZ.US" | "CL.US" | "KMB.US"
         | "GIS.US" | "K.US" | "HSY.US" | "STZ.US" | "KHC.US" | "SYY.US" | "KDP.US" | "AZO.US"
-        | "DECK.US" | "EBAY.US" | "ORLY.US" | "POOL.US" | "TSCO.US" | "KR.US" => Some("consumer"),
+        | "DECK.US" | "EBAY.US" | "ORLY.US" | "POOL.US" | "TSCO.US" | "KR.US"
+        | "BBY.US" | "CAG.US" | "CCL.US" | "CHD.US" | "CLX.US" | "CPB.US" | "DRI.US"
+        | "EL.US" | "EXPE.US" | "GPC.US" | "HAS.US" | "HRL.US" | "HST.US" | "KVUE.US"
+        | "LEN.US" | "DHI.US" | "LII.US" | "MGM.US" | "MKC.US" | "MNST.US" | "NCLH.US"
+        | "PHM.US" | "RL.US" | "SJM.US" | "SNA.US" | "TAP.US" | "TPR.US" | "TSN.US"
+        | "ULTA.US" | "VFC.US" | "WBA.US" => Some("consumer"),
+        // ── Energy ──
         "XOM.US" | "CVX.US" | "COP.US" | "SLB.US" | "EOG.US" | "MPC.US" | "PSX.US" | "VLO.US"
         | "OXY.US" | "HAL.US" | "DVN.US" | "FANG.US" | "KMI.US" | "WMB.US" | "OKE.US"
-        | "LNG.US" | "ENPH.US" | "FSLR.US" | "TRGP.US" => Some("energy"),
+        | "LNG.US" | "ENPH.US" | "FSLR.US" | "TRGP.US"
+        | "APA.US" | "BKR.US" | "CF.US" | "CTRA.US" | "EQT.US" | "EXE.US" => Some("energy"),
+        // ── Industrial ──
         "CAT.US" | "DE.US" | "BA.US" | "RTX.US" | "LMT.US" | "GE.US" | "HON.US" | "UNP.US"
         | "UPS.US" | "FDX.US" | "MMM.US" | "GD.US" | "NOC.US" | "LHX.US" | "EMR.US" | "ETN.US"
         | "ITW.US" | "ROK.US" | "CARR.US" | "WM.US" | "RSG.US" | "CSX.US" | "NSC.US" | "DAL.US"
         | "UAL.US" | "AAL.US" | "LUV.US" | "FAST.US" | "GEV.US" | "GWW.US" | "HUBB.US"
-        | "LDOS.US" | "ODFL.US" | "OTIS.US" | "PCAR.US" | "TT.US" => Some("industrial"),
+        | "LDOS.US" | "ODFL.US" | "OTIS.US" | "PCAR.US" | "TT.US"
+        | "AXON.US" | "BLDR.US" | "CHRW.US" | "CMI.US" | "DOV.US" | "EME.US" | "EXPD.US"
+        | "FIX.US" | "GNRC.US" | "HII.US" | "HWM.US" | "IR.US" | "J.US" | "JBHT.US"
+        | "JBL.US" | "JCI.US" | "NDSN.US" | "PH.US" | "PNR.US" | "PWR.US" | "ROP.US"
+        | "ROL.US" | "SWK.US" | "TDG.US" | "TDY.US" | "TEL.US" | "TFX.US" | "TXT.US"
+        | "URI.US" | "WAB.US" | "XYL.US" => Some("industrial"),
+        // ── Utility ──
         "NEE.US" | "DUK.US" | "SO.US" | "D.US" | "AEP.US" | "SRE.US" | "EXC.US" | "XEL.US"
-        | "PCG.US" | "ED.US" | "CEG.US" | "VST.US" | "CPRT.US" => Some("utility"),
+        | "PCG.US" | "ED.US" | "CEG.US" | "VST.US" | "CPRT.US"
+        | "AEE.US" | "AES.US" | "ATO.US" | "AWK.US" | "CMS.US" | "CNP.US" | "DTE.US"
+        | "EIX.US" | "ES.US" | "ETR.US" | "EVRG.US" | "FE.US" | "LNT.US" | "NI.US"
+        | "NRG.US" | "PEG.US" | "PNW.US" | "PPL.US" | "WEC.US" => Some("utility"),
+        // ── Real Estate ──
         "PLD.US" | "AMT.US" | "CCI.US" | "EQIX.US" | "SPG.US" | "PSA.US" | "O.US" | "DLR.US"
-        | "WELL.US" | "AVB.US" | "CBRE.US" | "EQR.US" | "IRM.US" | "SBAC.US" => Some("real_estate"),
+        | "WELL.US" | "AVB.US" | "CBRE.US" | "EQR.US" | "IRM.US" | "SBAC.US"
+        | "ARE.US" | "BXP.US" | "CPT.US" | "ESS.US" | "EXR.US" | "FRT.US" | "INVH.US"
+        | "KIM.US" | "MAA.US" | "REG.US" | "UDR.US" | "VICI.US" => Some("real_estate"),
+        // ── Materials ──
         "LIN.US" | "SHW.US" | "APD.US" | "ECL.US" | "FCX.US" | "NEM.US" | "NUE.US" | "DOW.US"
-        | "DD.US" | "VMC.US" | "MLM.US" | "PHM.US" | "PKG.US" => Some("materials"),
+        | "DD.US" | "VMC.US" | "MLM.US" | "PKG.US"
+        | "ALB.US" | "AVY.US" | "BALL.US" | "BG.US" | "CRH.US" | "CTVA.US"
+        | "IP.US" | "MAS.US" | "MOS.US" | "PPG.US" | "STLD.US" | "SW.US" | "WRK.US"
+        | "WY.US" | "ADM.US" | "AME.US" | "GLW.US" | "IFF.US" => Some("materials"),
+        // ── Telecom / Media ──
         "T.US" | "VZ.US" | "TMUS.US" | "CMCSA.US" | "DIS.US" | "WBD.US" | "CHTR.US" | "EA.US"
-        | "TTWO.US" => Some("telecom_media"),
+        | "TTWO.US" | "FOX.US" | "FOXA.US" | "NWSA.US" | "NWS.US" | "OMC.US" | "CIEN.US"
+        | "LYV.US" => Some("telecom_media"),
         "MSTR.US" | "MARA.US" | "RIOT.US" | "BITF.US" | "CLSK.US" => Some("crypto"),
-        "GME.US" | "AMC.US" | "BB.US" | "CLOV.US" | "IONQ.US" | "SMCI.US" | "AI.US" | "SOUN.US" => {
-            Some("momentum")
-        }
+        "SNDK.US" => Some("semiconductor"),
+        "RKLB.US" | "ASTS.US" | "LUNR.US" => Some("industrial"),
+        "RDDT.US" | "DUOL.US" | "SE.US" | "GRAB.US" => Some("tech"),
+        "HIMS.US" => Some("healthcare"),
+        "CELH.US" | "BIRK.US" => Some("consumer"),
+        "AFRM.US" | "UPST.US" | "NU.US" => Some("finance"),
+        "MELI.US" => Some("consumer"),
+        "RGTI.US" | "QUBT.US" => Some("tech"),
+        "GME.US" | "AMC.US" | "BB.US" | "CLOV.US" | "IONQ.US" | "SMCI.US" | "AI.US" | "SOUN.US"
+        | "VRT.US" => Some("momentum"),
+        // ── Misc S&P 500 (conglomerates, insurance, misc) ──
+        "AIZ.US" | "ALLE.US" | "AMCR.US" | "AMP.US" | "AOS.US" | "CTAS.US"
+        | "NTAP.US" | "NVR.US" | "RHI.US" | "SATS.US" | "TROW.US" | "WAT.US"
+        | "APH.US" | "FTV.US" | "MSI.US" => Some("industrial"),
+        "COO.US" | "EFX.US" | "ALGN.US" => Some("healthcare"),
+        "LYB.US" => Some("materials"),
         "SPY.US" | "QQQ.US" | "IWM.US" | "DIA.US" | "TLT.US" | "GLD.US" | "SLV.US" | "USO.US"
         | "UNG.US" | "VXX.US" | "HYG.US" | "LQD.US" | "EEM.US" | "FXI.US" | "EWJ.US" | "EFA.US"
         | "XLF.US" | "XLK.US" | "XLE.US" | "XLV.US" | "XLI.US" | "XLP.US" | "XLU.US" | "XLY.US"

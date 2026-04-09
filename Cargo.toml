@@ -9,15 +9,18 @@ edition = "2021"
 [features]
 default = []
 persistence = ["dep:surrealdb"]
+tool-registry = []
+context-layers = []
+coordinator = []
 
 [dependencies]
 longport = "3.0"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["arbitrary_precision"] }
 dotenvy = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
-rust_decimal = { version = "1", features = ["serde"] }
+rust_decimal = { version = "1", features = ["serde", "serde-with-arbitrary-precision"] }
 rust_decimal_macros = "1"
 time = { version = "0.3", features = ["serde", "serde-well-known"] }
 futures = "0.3"
@@ -32,3 +35,8 @@ aes-gcm = "0.10"
 rand = "0.8"
 
 [dev-dependencies]
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+codegen-units = 8

@@ -208,6 +208,7 @@ pub async fn run() {
     let mut hidden_force_state = eden::pipeline::residual::HiddenForceVerificationState::default();
     let mut absence_memory = eden::pipeline::reasoning::AbsenceMemory::default();
     let mut edge_ledger = eden::graph::edge_learning::EdgeLearningLedger::default();
+    let mut seen_hk_edge_learning_setups = HashSet::new();
     let mut energy_momentum = eden::graph::energy::EnergyMomentum::default();
 
     loop {
@@ -422,6 +423,23 @@ pub async fn run() {
                 .and_then(|r| r.microstructure_deltas.as_ref()),
             rolling_composites,
         };
+        if edge_ledger.is_empty() && !history.is_empty() {
+            let credited = eden::graph::edge_learning::ingest_hk_topology_outcomes(
+                &mut edge_ledger,
+                &mut seen_hk_edge_learning_setups,
+                &history,
+                &brain,
+                LINEAGE_WINDOW as u64,
+                now,
+            );
+            if credited > 0 {
+                eprintln!(
+                    "[hk] seeded edge ledger from restored history (credited_setups={}, learned_edges={})",
+                    credited,
+                    edge_ledger.len()
+                );
+            }
+        }
         let mut decision =
             DecisionSnapshot::compute(&brain, &links, &active_fps, &store, Some(&temporal_ctx), Some(&edge_ledger));
 
@@ -829,6 +847,14 @@ pub async fn run() {
             &graph_node_delta.transitions,
         );
         history.push(tick_record);
+        eden::graph::edge_learning::ingest_hk_topology_outcomes(
+            &mut edge_ledger,
+            &mut seen_hk_edge_learning_setups,
+            &history,
+            &brain,
+            LINEAGE_WINDOW as u64,
+            now,
+        );
         let next_vortex_success_patterns =
             compute_vortex_success_patterns(&history, LINEAGE_WINDOW);
         integration.refresh_vortex_attention_with_patterns(
@@ -1081,20 +1107,20 @@ pub async fn run() {
 
         // ── Persist to SurrealDB (non-blocking, fire-and-forget) ──
         #[cfg(feature = "persistence")]
-        run_hk_persistence_stage(
-            &runtime,
-            tick,
-            now,
-            &raw,
-            &links,
-            history
-                .latest()
-                .expect("tick history contains latest record after push"),
-            &action_stage.workflow_records,
-            &action_stage.workflow_events,
-            &reasoning_snapshot,
-        )
-        .await;
+        if let Some(latest_record) = history.latest() {
+            run_hk_persistence_stage(
+                &runtime,
+                tick,
+                now,
+                &raw,
+                &links,
+                latest_record,
+                &action_stage.workflow_records,
+                &action_stage.workflow_events,
+                &reasoning_snapshot,
+            )
+            .await;
+        }
 
         // ── Compute temporal dynamics ──
         let dynamics = compute_dynamics(&history);
@@ -1241,6 +1267,7 @@ pub async fn run() {
                 "received_update": tick_advance.received_update,
                 "tick_ms": tick_started_at.elapsed().as_millis(),
                 "history_len": history.len(),
+                "learned_edges": edge_ledger.len(),
                 "ready_symbols": readiness.ready_symbols.len(),
                 "quote_symbols": readiness.quote_symbols,
                 "order_book_symbols": readiness.order_book_symbols,
