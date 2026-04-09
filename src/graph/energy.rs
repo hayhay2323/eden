@@ -88,6 +88,19 @@ impl EnergyMomentum {
         // Remove negligible entries
         self.state
             .retain(|_, value| value.abs() >= Decimal::new(1, 3));
+
+        // Hard cap: keep only the largest-magnitude entries
+        const MAX_MOMENTUM_ENTRIES: usize = 1_000;
+        if self.state.len() > MAX_MOMENTUM_ENTRIES {
+            let mut entries: Vec<_> = self.state.drain().collect();
+            entries.sort_by(|a, b| {
+                b.1.abs()
+                    .partial_cmp(&a.1.abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            entries.truncate(MAX_MOMENTUM_ENTRIES);
+            self.state = entries.into_iter().collect();
+        }
     }
 
     /// Get accumulated momentum for a symbol.

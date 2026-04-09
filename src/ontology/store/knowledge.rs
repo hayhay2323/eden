@@ -60,6 +60,13 @@ impl AccumulatedKnowledge {
         self.calibrated_weights.conditioned_adjustments = feedback.conditioned_adjustments.clone();
     }
 
+    /// Maximum institutional memory entries before eviction.
+    /// With 526 institutions × 494 symbols, theoretical max is ~260k.
+    /// In practice, only active institution-stock pairs are tracked.
+    const INSTITUTIONAL_MEMORY_CAP: usize = 50_000;
+    /// Evict profiles not seen in the last N ticks.
+    const INSTITUTIONAL_MEMORY_STALE_TICKS: u64 = 300;
+
     pub fn accumulate_institutional_memory(
         &mut self,
         tick_number: u64,
@@ -92,6 +99,19 @@ impl AccumulatedKnowledge {
                     }
                 }
             }
+        }
+
+        // Evict stale entries not seen in the last N ticks
+        let cutoff = tick_number.saturating_sub(Self::INSTITUTIONAL_MEMORY_STALE_TICKS);
+        self.institutional_memory
+            .retain(|_, profile| profile.last_seen_tick >= cutoff);
+
+        // Hard cap: if still too large, keep most recently seen
+        if self.institutional_memory.len() > Self::INSTITUTIONAL_MEMORY_CAP {
+            let mut entries: Vec<_> = self.institutional_memory.drain().collect();
+            entries.sort_by(|a, b| b.1.last_seen_tick.cmp(&a.1.last_seen_tick));
+            entries.truncate(Self::INSTITUTIONAL_MEMORY_CAP);
+            self.institutional_memory = entries.into_iter().collect();
         }
     }
 

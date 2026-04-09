@@ -345,7 +345,7 @@ pub(super) async fn fetch_tick_archives_in_range(
     from: time::OffsetDateTime,
     to: time::OffsetDateTime,
 ) -> Result<Vec<crate::ontology::microstructure::TickArchive>, StoreError> {
-    fetch_records_in_time_range(db, "tick_archive", "timestamp", from, to, usize::MAX).await
+    fetch_records_in_time_range(db, "tick_archive", "timestamp", from, to, 10_000).await
 }
 
 pub(super) async fn exec_query_checked(db: &Surreal<Db>, query: String) -> Result<(), StoreError> {
