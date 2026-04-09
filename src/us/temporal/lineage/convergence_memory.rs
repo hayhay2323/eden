@@ -7,6 +7,9 @@ use crate::ontology::reasoning::{Hypothesis, TacticalSetup};
 
 use super::super::buffer::UsTickHistory;
 
+const CONVERGENCE_HYPOTHESIS_KEY: &str = "convergence_hypothesis";
+const LATENT_VORTEX_KEY: &str = "latent_vortex";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsConvergenceOutcomeFingerprint {
     pub setup_id: String,
@@ -66,7 +69,7 @@ pub fn compute_us_successful_convergence_fingerprints(
         .filter_map(|(entry_record, setup)| {
             let hypothesis = entry_record.hypotheses.iter().find(|hypothesis| {
                 hypothesis.hypothesis_id == setup.hypothesis_id
-                    && hypothesis.family_key == "convergence_hypothesis"
+                    && is_us_topology_hypothesis(hypothesis)
             })?;
             let symbol = match &setup.scope {
                 crate::ontology::reasoning::ReasoningScope::Symbol(symbol) => symbol.clone(),
@@ -219,7 +222,17 @@ pub fn us_convergence_hypothesis_matches_pattern(
     hypothesis: &Hypothesis,
     pattern: &UsConvergenceSuccessPattern,
 ) -> bool {
-    if hypothesis.family_key != "convergence_hypothesis" {
+    if hypothesis.family_key != CONVERGENCE_HYPOTHESIS_KEY {
+        return false;
+    }
+    us_topology_hypothesis_matches_pattern(hypothesis, pattern)
+}
+
+pub fn us_topology_hypothesis_matches_pattern(
+    hypothesis: &Hypothesis,
+    pattern: &UsConvergenceSuccessPattern,
+) -> bool {
+    if !is_us_topology_hypothesis(hypothesis) {
         return false;
     }
     let channels = hypothesis_vortex_metadata(hypothesis)
@@ -239,6 +252,13 @@ pub fn us_convergence_hypothesis_matches_pattern(
         .min(2)
         .max(1);
     overlap >= required_overlap
+}
+
+fn is_us_topology_hypothesis(hypothesis: &Hypothesis) -> bool {
+    matches!(
+        hypothesis.family_key.as_str(),
+        CONVERGENCE_HYPOTHESIS_KEY | LATENT_VORTEX_KEY
+    )
 }
 
 #[derive(Default)]
@@ -626,6 +646,44 @@ mod tests {
         };
 
         assert!(us_convergence_hypothesis_matches_pattern(
+            &hypothesis,
+            &pattern
+        ));
+    }
+
+    #[test]
+    fn matches_latent_vortex_to_topology_pattern() {
+        let hypothesis = Hypothesis {
+            hypothesis_id: "hyp:BABA.US:latent_vortex".into(),
+            family_key: "latent_vortex".into(),
+            family_label: "Latent Vortex".into(),
+            provenance: prov("hyp:BABA.US").with_note(
+                "family=Latent Vortex; vortex_strength=0.34; channel_diversity=2; coherence=0.64; dominant_channels=cross-market|structure",
+            ),
+            scope: ReasoningScope::Symbol(Symbol("BABA.US".into())),
+            statement: "BABA.US is forming a topology-first vortex".into(),
+            confidence: dec!(0.46),
+            local_support_weight: dec!(0.35),
+            local_contradict_weight: Decimal::ZERO,
+            propagated_support_weight: dec!(0.18),
+            propagated_contradict_weight: Decimal::ZERO,
+            evidence: vec![],
+            invalidation_conditions: vec![],
+            propagation_path_ids: vec![],
+            expected_observations: vec![],
+        };
+        let pattern = UsConvergenceSuccessPattern {
+            channel_signature: "cross-market|structure".into(),
+            dominant_channels: vec!["cross-market".into(), "structure".into()],
+            top_family: "Latent Vortex".into(),
+            samples: 3,
+            mean_net_return: dec!(0.04),
+            mean_strength: dec!(0.36),
+            mean_coherence: dec!(0.65),
+            mean_channel_diversity: dec!(2),
+        };
+
+        assert!(us_topology_hypothesis_matches_pattern(
             &hypothesis,
             &pattern
         ));

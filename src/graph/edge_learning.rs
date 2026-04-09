@@ -9,9 +9,18 @@ use crate::pipeline::reasoning::ConvergenceDetail;
 /// Typed edge key — avoids per-tick format!() string allocation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EdgeKey {
-    InstitutionToStock { institution_id: InstitutionId, symbol: Symbol },
-    StockToStock { a: Symbol, b: Symbol }, // a < b (sorted)
-    StockToSector { symbol: Symbol, sector_id: SectorId },
+    InstitutionToStock {
+        institution_id: InstitutionId,
+        symbol: Symbol,
+    },
+    StockToStock {
+        a: Symbol,
+        b: Symbol,
+    }, // a < b (sorted)
+    StockToSector {
+        symbol: Symbol,
+        sector_id: SectorId,
+    },
 }
 
 /// Per-edge accumulated learning signal from historical outcomes.
@@ -36,7 +45,10 @@ impl EdgeLearningLedger {
         self.entries
             .get(key)
             .map(|credit| {
-                Decimal::ONE + credit.mean_credit.clamp(Decimal::new(-5, 1), Decimal::new(5, 1))
+                Decimal::ONE
+                    + credit
+                        .mean_credit
+                        .clamp(Decimal::new(-5, 1), Decimal::new(5, 1))
             })
             .unwrap_or(Decimal::ONE)
     }
@@ -201,10 +213,127 @@ pub fn edge_keys_for_symbol(
     (inst_keys, stock_keys, sector_key)
 }
 
+/// Build edge keys for a symbol's edges in the US graph.
+/// US currently learns only stock↔stock and stock→sector topology.
+pub fn us_edge_keys_for_symbol(
+    symbol: &Symbol,
+    graph: &crate::us::graph::graph::UsGraph,
+) -> (Vec<EdgeKey>, Option<EdgeKey>) {
+    use crate::us::graph::graph::{UsEdgeKind, UsNodeKind};
+    use petgraph::visit::EdgeRef;
+    use petgraph::Direction as GraphDirection;
+
+    let Some(&stock_idx) = graph.stock_nodes.get(symbol) else {
+        return (vec![], None);
+    };
+
+    let mut stock_keys = std::collections::HashSet::new();
+    let mut sector_key = None;
+
+    for edge in graph
+        .graph
+        .edges_directed(stock_idx, GraphDirection::Outgoing)
+    {
+        match edge.weight() {
+            UsEdgeKind::StockToStock(_) => {
+                let target = edge.target();
+                if let UsNodeKind::Stock(neighbor) = &graph.graph[target] {
+                    let (a, b) = if symbol.0 < neighbor.symbol.0 {
+                        (symbol.clone(), neighbor.symbol.clone())
+                    } else {
+                        (neighbor.symbol.clone(), symbol.clone())
+                    };
+                    stock_keys.insert(EdgeKey::StockToStock { a, b });
+                }
+            }
+            UsEdgeKind::StockToSector(_) => {
+                let target = edge.target();
+                if let UsNodeKind::Sector(sector) = &graph.graph[target] {
+                    sector_key = Some(EdgeKey::StockToSector {
+                        symbol: symbol.clone(),
+                        sector_id: sector.sector_id.clone(),
+                    });
+                }
+            }
+            UsEdgeKind::CrossMarket(_) => {}
+        }
+    }
+
+    (stock_keys.into_iter().collect(), sector_key)
+}
+
+/// Replay resolved US topology outcomes from tick history into the edge ledger.
+/// Returns the number of newly credited setups.
+pub fn ingest_us_topology_outcomes(
+    ledger: &mut EdgeLearningLedger,
+    seen_setup_ids: &mut std::collections::HashSet<String>,
+    history: &crate::us::temporal::buffer::UsTickHistory,
+    graph: &crate::us::graph::graph::UsGraph,
+    resolution_lag: u64,
+    now: OffsetDateTime,
+) -> usize {
+    let mut credited = 0usize;
+    for outcome in
+        crate::us::temporal::lineage::compute_us_resolved_topology_outcomes(history, resolution_lag)
+    {
+        if !seen_setup_ids.insert(outcome.setup_id.clone()) {
+            continue;
+        }
+        let (stock_edge_keys, sector_edge_key) = us_edge_keys_for_symbol(&outcome.symbol, graph);
+        let mut learning_detail = outcome.convergence_detail.clone();
+        // US currently learns stock/sector topology only; there is no institution-edge analogue.
+        learning_detail.institutional_alignment = Decimal::ZERO;
+        ledger.credit_from_outcome(
+            &outcome.symbol,
+            outcome.net_return,
+            &learning_detail,
+            now,
+            &[],
+            &stock_edge_keys,
+            sector_edge_key.as_ref(),
+        );
+        credited += 1;
+    }
+    credited
+}
+
+/// Replay resolved HK topology outcomes from tick history into the edge ledger.
+/// Returns the number of newly credited setups.
+pub fn ingest_hk_topology_outcomes(
+    ledger: &mut EdgeLearningLedger,
+    seen_setup_ids: &mut std::collections::HashSet<String>,
+    history: &crate::temporal::buffer::TickHistory,
+    brain: &crate::graph::graph::BrainGraph,
+    resolution_lag: u64,
+    now: OffsetDateTime,
+) -> usize {
+    let mut credited = 0usize;
+    for outcome in crate::temporal::lineage::compute_resolved_topology_outcomes(history, resolution_lag)
+    {
+        if !seen_setup_ids.insert(outcome.setup_id.clone()) {
+            continue;
+        }
+        let (inst_edge_keys, stock_edge_keys, sector_edge_key) =
+            edge_keys_for_symbol(&outcome.symbol, brain);
+        ledger.credit_from_outcome(
+            &outcome.symbol,
+            outcome.net_return,
+            &outcome.convergence_detail,
+            now,
+            &inst_edge_keys,
+            &stock_edge_keys,
+            sector_edge_key.as_ref(),
+        );
+        credited += 1;
+    }
+    credited
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rust_decimal_macros::dec;
+    use std::collections::HashMap;
     use time::OffsetDateTime;
 
     fn make_detail(inst: Decimal, sector: Decimal, cross: Decimal) -> ConvergenceDetail {
@@ -254,14 +383,8 @@ mod tests {
             Some(&test_sector_key()),
         );
         assert!(ledger.weight_multiplier(&test_inst_key()) > Decimal::ONE);
-        assert_eq!(
-            ledger.weight_multiplier(&test_stock_key()),
-            Decimal::ONE
-        );
-        assert_eq!(
-            ledger.weight_multiplier(&test_sector_key()),
-            Decimal::ONE
-        );
+        assert_eq!(ledger.weight_multiplier(&test_stock_key()), Decimal::ONE);
+        assert_eq!(ledger.weight_multiplier(&test_sector_key()), Decimal::ONE);
     }
 
     #[test]
@@ -332,4 +455,129 @@ mod tests {
         let ledger = EdgeLearningLedger::default();
         assert_eq!(ledger.weight_multiplier(&test_inst_key()), Decimal::ONE);
     }
+
+    #[test]
+    fn ingest_us_topology_outcomes_credits_sector_edge() {
+        use crate::ontology::domain::{ProvenanceMetadata, ProvenanceSource};
+        use crate::ontology::reasoning::{DecisionLineage, ReasoningScope, TacticalSetup};
+        use crate::us::graph::decision::UsMarketRegimeBias;
+        use crate::us::graph::graph::UsGraph;
+        use crate::us::pipeline::dimensions::{UsDimensionSnapshot, UsSymbolDimensions};
+        use crate::us::temporal::buffer::UsTickHistory;
+        use crate::us::temporal::record::{UsSymbolSignals, UsTickRecord};
+
+        fn make_dims(
+            flow: Decimal,
+            momentum: Decimal,
+            volume: Decimal,
+            prepost: Decimal,
+            val: Decimal,
+        ) -> UsSymbolDimensions {
+            UsSymbolDimensions {
+                capital_flow_direction: flow,
+                price_momentum: momentum,
+                volume_profile: volume,
+                pre_post_market_anomaly: prepost,
+                valuation: val,
+                multi_horizon_momentum: Decimal::ZERO,
+            }
+        }
+
+        fn make_signal(mark_price: Decimal) -> UsSymbolSignals {
+            UsSymbolSignals {
+                mark_price: Some(mark_price),
+                composite: dec!(0.3),
+                composite_delta: Decimal::ZERO,
+                composite_acceleration: Decimal::ZERO,
+                capital_flow_direction: Decimal::ZERO,
+                capital_flow_delta: Decimal::ZERO,
+                flow_persistence: 0,
+                flow_reversal: false,
+                price_momentum: Decimal::ZERO,
+                volume_profile: Decimal::ZERO,
+                pre_post_market_anomaly: Decimal::ZERO,
+                valuation: Decimal::ZERO,
+                pre_market_delta: Decimal::ZERO,
+            }
+        }
+
+        let timestamp = OffsetDateTime::UNIX_EPOCH;
+        let dims = UsDimensionSnapshot {
+            timestamp,
+            dimensions: HashMap::from([(
+                Symbol("AAPL.US".into()),
+                make_dims(dec!(0.2), dec!(0.3), dec!(0.1), dec!(0.0), dec!(0.1)),
+            )]),
+        };
+        let sector_map = HashMap::from([(
+            Symbol("AAPL.US".into()),
+            crate::ontology::objects::SectorId("tech".into()),
+        )]);
+        let graph = UsGraph::compute(&dims, &sector_map, &HashMap::new());
+
+        let setup = TacticalSetup {
+            setup_id: "setup:AAPL.US:review".into(),
+            hypothesis_id: "hyp:AAPL.US:latent_vortex".into(),
+            runner_up_hypothesis_id: None,
+            provenance: ProvenanceMetadata::new(ProvenanceSource::Computed, timestamp),
+            lineage: DecisionLineage::default(),
+            scope: ReasoningScope::Symbol(Symbol("AAPL.US".into())),
+            title: "Long AAPL.US".into(),
+            action: "review".into(),
+            time_horizon: "intraday".into(),
+            confidence: dec!(0.5),
+            confidence_gap: dec!(0.1),
+            heuristic_edge: dec!(0.2),
+            convergence_score: Some(dec!(0.3)),
+            convergence_detail: Some(ConvergenceDetail {
+                institutional_alignment: dec!(0.3),
+                sector_coherence: Some(dec!(0.4)),
+                cross_stock_correlation: dec!(0.1),
+                component_spread: None,
+                edge_stability: None,
+            }),
+            workflow_id: None,
+            entry_rationale: "test".into(),
+            causal_narrative: None,
+            risk_notes: vec![],
+            review_reason_code: None,
+            policy_verdict: None,
+        };
+
+        let mut history = UsTickHistory::new(10);
+        history.push(UsTickRecord {
+            tick_number: 1,
+            timestamp,
+            signals: HashMap::from([(Symbol("AAPL.US".into()), make_signal(dec!(100)))]),
+            cross_market_signals: vec![],
+            events: vec![],
+            derived_signals: vec![],
+            hypotheses: vec![],
+            tactical_setups: vec![setup],
+            market_regime: UsMarketRegimeBias::Neutral,
+        });
+        history.push(UsTickRecord {
+            tick_number: 6,
+            timestamp,
+            signals: HashMap::from([(Symbol("AAPL.US".into()), make_signal(dec!(110)))]),
+            cross_market_signals: vec![],
+            events: vec![],
+            derived_signals: vec![],
+            hypotheses: vec![],
+            tactical_setups: vec![],
+            market_regime: UsMarketRegimeBias::Neutral,
+        });
+
+        let mut ledger = EdgeLearningLedger::default();
+        let mut seen = std::collections::HashSet::new();
+        let credited =
+            ingest_us_topology_outcomes(&mut ledger, &mut seen, &history, &graph, 5, timestamp);
+        assert_eq!(credited, 1);
+        let sector_key = EdgeKey::StockToSector {
+            symbol: Symbol("AAPL.US".into()),
+            sector_id: crate::ontology::objects::SectorId("tech".into()),
+        };
+        assert!(ledger.weight_multiplier(&sector_key) > Decimal::ONE);
+    }
+
 }

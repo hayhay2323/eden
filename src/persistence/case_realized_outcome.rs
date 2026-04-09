@@ -63,6 +63,53 @@ impl CaseRealizedOutcomeRecord {
         }
     }
 
+    /// Build a record from a US resolved topology outcome.
+    /// Uses the topology outcome's basic fields and fills structural fields with defaults.
+    pub fn from_us_topology_outcome(
+        outcome: &crate::us::temporal::lineage::UsResolvedTopologyOutcome,
+        entry_tick: u64,
+        entry_timestamp: OffsetDateTime,
+        resolved_at: OffsetDateTime,
+        family: &str,
+    ) -> Self {
+        let followed_through = outcome.net_return > Decimal::ZERO;
+        Self {
+            setup_id: outcome.setup_id.clone(),
+            workflow_id: None,
+            market: "us".to_string(),
+            symbol: Some(outcome.symbol.0.clone()),
+            primary_lens: None,
+            family: family.to_string(),
+            session: "live".to_string(),
+            market_regime: "neutral".to_string(),
+            entry_tick,
+            entry_timestamp,
+            resolved_tick: outcome.resolved_tick,
+            resolved_at,
+            direction: if outcome.net_return >= Decimal::ZERO {
+                1
+            } else {
+                -1
+            },
+            return_pct: outcome.net_return * Decimal::from(100),
+            net_return: outcome.net_return,
+            max_favorable_excursion: if outcome.net_return > Decimal::ZERO {
+                outcome.net_return
+            } else {
+                Decimal::ZERO
+            },
+            max_adverse_excursion: if outcome.net_return < Decimal::ZERO {
+                outcome.net_return.abs()
+            } else {
+                Decimal::ZERO
+            },
+            followed_through,
+            invalidated: !followed_through && outcome.net_return < Decimal::new(-5, 3),
+            structure_retained: followed_through,
+            convergence_score: outcome.convergence_detail.institutional_alignment,
+        }
+    }
+
     pub fn record_id(&self) -> &str {
         &self.setup_id
     }

@@ -51,4 +51,31 @@ pub const CROSS_MARKET_PAIRS: &[CrossMarketPair] = &[
         hk_symbol: "9626.HK",
         name: "Bilibili",
     },
+    // Added 2026-04-07: more dual-listed China ADRs
+    CrossMarketPair {
+        us_symbol: "NTES.US",
+        hk_symbol: "9999.HK",
+        name: "NetEase",
+    },
+    // PDD not yet dual-listed in HK as of 2026-04, skipped
+    CrossMarketPair {
+        us_symbol: "BGNE.US",
+        hk_symbol: "6160.HK",
+        name: "BeiGene",
+    },
+    CrossMarketPair {
+        us_symbol: "TME.US",
+        hk_symbol: "1698.HK",
+        name: "Tencent Music", // 1698.HK is the correct HK listing
+    },
+    CrossMarketPair {
+        us_symbol: "EDU.US",
+        hk_symbol: "9901.HK",
+        name: "New Oriental",
+    },
+    CrossMarketPair {
+        us_symbol: "MNSO.US",
+        hk_symbol: "9896.HK",
+        name: "MINISO",
+    },
 ];

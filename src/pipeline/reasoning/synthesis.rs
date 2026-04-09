@@ -26,7 +26,8 @@ pub(super) struct SetupSupportContext<'a> {
     pub events: &'a EventSnapshot,
     pub insights: &'a GraphInsights,
     pub symbol_dimensions: Option<&'a HashMap<crate::ontology::objects::Symbol, SymbolDimensions>>,
-    pub convergence_components: &'a HashMap<crate::ontology::objects::Symbol, crate::graph::convergence::ConvergenceScore>,
+    pub convergence_components:
+        &'a HashMap<crate::ontology::objects::Symbol, crate::graph::convergence::ConvergenceScore>,
 }
 
 #[derive(Default)]
@@ -46,11 +47,16 @@ struct OrderSupportContract {
 const MAX_SYMBOL_HYPOTHESES_PER_SCOPE: usize = 3;
 const CONVERGENCE_HYPOTHESIS_KEY: &str = "convergence_hypothesis";
 const CONVERGENCE_HYPOTHESIS_LABEL: &str = "Convergence Hypothesis";
+const LATENT_VORTEX_KEY: &str = "latent_vortex";
+const LATENT_VORTEX_LABEL: &str = "Latent Vortex";
 
 fn shared_template_priority(template_key: &str) -> i32 {
     // convergence_hypothesis is synthesis-only; not in the shared registry.
     if template_key == CONVERGENCE_HYPOTHESIS_KEY {
         return 118;
+    }
+    if template_key == LATENT_VORTEX_KEY {
+        return 112;
     }
     super::support::template_priority(template_key)
 }
@@ -147,6 +153,14 @@ pub(super) fn derive_hypotheses(
             .map(|h| h.confidence >= Decimal::new(45, 2))
             .unwrap_or(false);
         if let Some(hypothesis) = convergence_hypothesis {
+            scope_hypotheses.push(hypothesis);
+        } else if let Some(hypothesis) = derive_latent_vortex_hypothesis(
+            &scope,
+            events.timestamp,
+            &relevant_events,
+            &relevant_signals,
+            &relevant_paths,
+        ) {
             scope_hypotheses.push(hypothesis);
         }
         if convergence_supersedes {
@@ -324,6 +338,80 @@ fn derive_convergence_hypothesis(
             "independent channels should keep reinforcing the same scope".into(),
             "propagation topology should continue feeding the same center".into(),
             "vortex strength should stay above 0.40".into(),
+        ],
+    })
+}
+
+fn derive_latent_vortex_hypothesis(
+    scope: &ReasoningScope,
+    observed_at: time::OffsetDateTime,
+    relevant_events: &[&crate::ontology::domain::Event<
+        crate::pipeline::signals::MarketEventRecord,
+    >],
+    relevant_signals: &[&crate::ontology::domain::DerivedSignal<
+        crate::pipeline::signals::DerivedSignalRecord,
+    >],
+    relevant_paths: &[&PropagationPath],
+) -> Option<Hypothesis> {
+    let signature = derive_vortex_signature(
+        scope,
+        observed_at,
+        relevant_events,
+        relevant_signals,
+        relevant_paths,
+    )?;
+    if signature.channel_diversity < 2 || signature.strength < Decimal::new(30, 2) {
+        return None;
+    }
+
+    let evidence_summary = summarize_evidence_weights(&signature.evidence);
+    let confidence = (signature.strength * Decimal::new(7, 1)
+        + signature.coherence * Decimal::new(3, 1))
+    .clamp(Decimal::ZERO, Decimal::ONE)
+    .round_dp(4);
+    let hypothesis_id = format!("hyp:{}:{}", scope_id(scope), LATENT_VORTEX_KEY);
+
+    Some(Hypothesis {
+        hypothesis_id: hypothesis_id.clone(),
+        family_key: LATENT_VORTEX_KEY.into(),
+        family_label: LATENT_VORTEX_LABEL.into(),
+        provenance: hypothesis_provenance(
+            observed_at,
+            &hypothesis_id,
+            LATENT_VORTEX_LABEL,
+            &signature.evidence,
+            &signature.path_ids,
+        )
+        .with_note(format!(
+            "family={}; vortex_strength={}; channel_diversity={}; coherence={}",
+            LATENT_VORTEX_LABEL,
+            signature.strength.round_dp(4),
+            signature.channel_diversity,
+            signature.coherence.round_dp(4),
+        )),
+        scope: scope.clone(),
+        statement: format!(
+            "{} is forming a topology-first vortex across {}, but it does not yet map cleanly to a named family",
+            scope_title(scope),
+            human_join(&signature.dominant_channels),
+        ),
+        confidence,
+        local_support_weight: evidence_summary.local_support,
+        local_contradict_weight: evidence_summary.local_contradict,
+        propagated_support_weight: evidence_summary.propagated_support,
+        propagated_contradict_weight: evidence_summary.propagated_contradict,
+        evidence: signature.evidence,
+        invalidation_conditions: vec![crate::ontology::reasoning::InvalidationCondition {
+            description:
+                "named family evidence overtakes the vortex or vortex strength falls below 0.30"
+                    .into(),
+            references: vec![],
+        }],
+        propagation_path_ids: signature.path_ids,
+        expected_observations: vec![
+            "channel diversity should expand or get sharper".into(),
+            "propagation topology should keep feeding the same center".into(),
+            "a named family should emerge if the vortex matures".into(),
         ],
     })
 }

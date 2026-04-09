@@ -128,22 +128,24 @@ pub(super) fn derive_investigation_selections(
             .unwrap_or(Decimal::ZERO);
         let doctrine_active = doctrine_pressure > Decimal::ZERO;
         let alpha_boost = prior.map(compute_us_alpha_boost).unwrap_or(Decimal::ZERO);
+        // Positive feedback: alpha_boost now ranges 0.3–1.5, multiplied by 5–8%
+        // so elite families can have thresholds lowered by up to 12%.
         let enter_confidence_threshold = Decimal::new(72, 2)
             + doctrine_pressure * Decimal::new(6, 2)
-            - alpha_boost * Decimal::new(3, 2);
+            - alpha_boost * Decimal::new(5, 2);
         let enter_gap_threshold = Decimal::new(20, 2) + doctrine_pressure * Decimal::new(4, 2)
-            - alpha_boost * Decimal::new(3, 2);
+            - alpha_boost * Decimal::new(5, 2);
         let review_confidence_threshold = Decimal::new(66, 2)
             + doctrine_pressure * Decimal::new(4, 2)
-            - alpha_boost * Decimal::new(2, 2);
+            - alpha_boost * Decimal::new(4, 2);
         let review_gap_threshold = Decimal::new(15, 2) + doctrine_pressure * Decimal::new(4, 2)
-            - alpha_boost * Decimal::new(2, 2);
+            - alpha_boost * Decimal::new(4, 2);
         let positive_prior_review_confidence = Decimal::new(74, 2)
             + doctrine_pressure * Decimal::new(4, 2)
-            - alpha_boost * Decimal::new(3, 2);
+            - alpha_boost * Decimal::new(5, 2);
         let positive_prior_review_gap = Decimal::new(18, 2)
             + doctrine_pressure * Decimal::new(3, 2)
-            - alpha_boost * Decimal::new(2, 2);
+            - alpha_boost * Decimal::new(4, 2);
 
         let attention_hint = if previous_action == Some("enter")
             && previous_same_hypothesis.is_some()
@@ -292,6 +294,7 @@ pub(super) fn derive_tactical_setups(
     investigation_selections: &[InvestigationSelection],
     previous_setups: &[TacticalSetup],
     lineage_stats: Option<&UsLineageStats>,
+    convergence_scores: Option<&HashMap<Symbol, crate::us::graph::decision::UsConvergenceScore>>,
 ) -> Vec<TacticalSetup> {
     let hypothesis_map = hypotheses
         .iter()
@@ -307,6 +310,12 @@ pub(super) fn derive_tactical_setups(
             let hypothesis = hypothesis_map
                 .get(selection.hypothesis_id.as_str())
                 .copied()?;
+            let convergence = match &selection.scope {
+                ReasoningScope::Symbol(symbol) => {
+                    convergence_scores.and_then(|scores| scores.get(symbol))
+                }
+                _ => None,
+            };
             Some(TacticalSetup {
                 setup_id: format!(
                     "setup:{}:{}",
@@ -337,8 +346,9 @@ pub(super) fn derive_tactical_setups(
                 confidence: selection.confidence,
                 confidence_gap: selection.confidence_gap,
                 heuristic_edge: selection.priority_score.clamp(Decimal::ZERO, Decimal::ONE),
-                convergence_score: None,
-                convergence_detail: None,
+                convergence_score: convergence.map(|score| score.composite.round_dp(4)),
+                convergence_detail: convergence
+                    .map(crate::pipeline::reasoning::ConvergenceDetail::from_us_convergence_score),
                 workflow_id: None,
                 entry_rationale: selection.rationale.clone(),
                 causal_narrative: Some(super::support::build_causal_narrative_us(
@@ -604,6 +614,11 @@ fn lineage_confidence_adjustment(
 fn classify_us_lineage_prior(
     prior: &crate::us::temporal::lineage::UsLineageContextStats,
 ) -> UsPriorSignal {
+    // Families with zero resolved cases have no evidence of working —
+    // block them from review/enter to reduce operator noise.
+    if prior.resolved == 0 {
+        return UsPriorSignal::Negative;
+    }
     if prior.resolved < 5 {
         return UsPriorSignal::Neutral;
     }
@@ -634,29 +649,42 @@ fn classify_us_lineage_prior(
 }
 
 fn compute_us_alpha_boost(prior: &crate::us::temporal::lineage::UsLineageContextStats) -> Decimal {
-    if prior.resolved < 15 {
+    // Early boost for small-sample but high-conviction families (e.g. peer_relay 1/1 = 100%).
+    // Previously required 15 resolved, which starved good-but-rare families of positive feedback.
+    if prior.resolved >= 1
+        && prior.resolved < 5
+        && prior.hit_rate >= Decimal::new(80, 2)
+        && prior.mean_return > Decimal::ZERO
+    {
+        return Decimal::new(4, 1); // 0.4 — cautious early boost
+    }
+    if prior.resolved < 5 {
         return Decimal::ZERO;
     }
-    let has_positive_return = prior.mean_return > Decimal::new(5, 3);
+    let has_positive_return = prior.mean_return > Decimal::ZERO;
     let has_good_hit_rate = prior.hit_rate >= Decimal::new(50, 2);
     if !has_positive_return || !has_good_hit_rate {
         return Decimal::ZERO;
     }
-    let mut boost = Decimal::new(2, 1);
-    if prior.resolved >= 30 {
-        boost = Decimal::new(5, 1);
+    // Tiered boost: more data + better performance = stronger boost
+    let mut boost = Decimal::new(3, 1); // 0.3 base (was 0.2)
+    if prior.resolved >= 10 && prior.hit_rate >= Decimal::new(60, 2) {
+        boost = Decimal::new(6, 1); // 0.6
+    }
+    if prior.resolved >= 30 && prior.hit_rate >= Decimal::new(55, 2) {
+        boost = Decimal::new(8, 1); // 0.8
     }
     if prior.resolved >= 60
-        && prior.mean_return > Decimal::new(1, 2)
+        && prior.mean_return > Decimal::new(5, 3)
         && prior.hit_rate >= Decimal::new(55, 2)
     {
-        boost = Decimal::new(8, 1);
+        boost = Decimal::ONE; // 1.0
     }
     if prior.resolved >= 100
-        && prior.mean_return > Decimal::new(15, 3)
+        && prior.mean_return > Decimal::new(1, 2)
         && prior.hit_rate >= Decimal::new(60, 2)
     {
-        boost = Decimal::ONE;
+        boost = Decimal::new(15, 1); // 1.5 — elite family
     }
     boost
 }

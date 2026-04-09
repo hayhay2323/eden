@@ -546,4 +546,5 @@ pub const WATCHLIST: &[&str] = &[
     "148.HK",  // 建滔集團
     "1866.HK", // 中國心連心化肥
     "656.HK",  // 復星國際
+    "1698.HK", // 騰訊音樂 (cross-market: TME.US)
 ];

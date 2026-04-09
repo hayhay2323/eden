@@ -30,6 +30,8 @@ pub(crate) mod family_gate;
 mod policy;
 #[path = "reasoning/propagation.rs"]
 mod propagation;
+#[path = "reasoning/signal_aggregator.rs"]
+pub mod signal_aggregator;
 #[path = "reasoning/support.rs"]
 mod support;
 #[path = "reasoning/synthesis.rs"]
@@ -37,6 +39,7 @@ mod synthesis;
 pub(crate) use clustering::derive_case_clusters;
 pub use context::{AbsenceMemory, ConvergenceDetail, FamilyBoostLedger, ReasoningContext};
 pub use family_gate::templates_from_candidate_mechanisms;
+use family_gate::FamilyAlphaGate;
 pub(crate) use policy::apply_convergence_policy;
 pub(crate) use policy::apply_midflight_health_check;
 pub use policy::derive_hypothesis_tracks;
@@ -45,9 +48,9 @@ use policy::{apply_case_budget, apply_track_action_policy, prune_stale_tactical_
 pub(crate) use propagation::derive_diffusion_propagation_paths;
 use propagation::derive_propagation_paths;
 pub use propagation::{mechanism_family, path_has_family, path_is_mixed_multi_hop};
-pub use support::HypothesisTemplate;
+pub use signal_aggregator::SignalAggregator;
 pub(crate) use support::hk_session_label;
-use family_gate::FamilyAlphaGate;
+pub use support::HypothesisTemplate;
 use synthesis::{derive_hypotheses, derive_investigation_selections, derive_tactical_setups};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -305,7 +308,9 @@ pub(crate) fn cap_observe_budget(mut setups: Vec<TacticalSetup>) -> Vec<Tactical
     non_observe
 }
 
-pub(crate) fn propagation_absence_sectors(events: &EventSnapshot) -> Vec<crate::ontology::objects::SectorId> {
+pub(crate) fn propagation_absence_sectors(
+    events: &EventSnapshot,
+) -> Vec<crate::ontology::objects::SectorId> {
     use crate::pipeline::signals::{MarketEventKind, SignalScope};
 
     events
@@ -408,7 +413,10 @@ pub fn apply_vortex_success_pattern_feedback(
         .filter_map(|vortex| {
             let best_pattern = patterns
                 .iter()
-                .filter(|pattern| pattern.top_family == "Convergence Hypothesis")
+                .filter(|pattern| {
+                    pattern.top_family == "Convergence Hypothesis"
+                        || pattern.top_family == "Latent Vortex"
+                })
                 .filter(|pattern| {
                     crate::temporal::lineage::vortex_matches_success_pattern(vortex, pattern)
                 })
@@ -436,7 +444,10 @@ pub fn apply_vortex_success_pattern_feedback(
         .filter_map(|vortex| {
             patterns
                 .iter()
-                .filter(|pattern| pattern.top_family == "Convergence Hypothesis")
+                .filter(|pattern| {
+                    pattern.top_family == "Convergence Hypothesis"
+                        || pattern.top_family == "Latent Vortex"
+                })
                 .filter(|pattern| {
                     crate::temporal::lineage::vortex_matches_success_pattern(vortex, pattern)
                 })
@@ -446,7 +457,12 @@ pub fn apply_vortex_success_pattern_feedback(
                         .then_with(|| left.samples.cmp(&right.samples))
                         .then_with(|| left.mean_strength.cmp(&right.mean_strength))
                 })
-                .map(|pattern| (vortex.center_scope.clone(), pattern.channel_signature.clone()))
+                .map(|pattern| {
+                    (
+                        vortex.center_scope.clone(),
+                        pattern.channel_signature.clone(),
+                    )
+                })
         })
         .collect::<HashMap<_, _>>();
 
@@ -455,7 +471,10 @@ pub fn apply_vortex_success_pattern_feedback(
         let Some(boost) = boost_by_scope.get(&hypothesis.scope).copied() else {
             continue;
         };
-        if hypothesis.family_key != "convergence_hypothesis" {
+        if !matches!(
+            hypothesis.family_key.as_str(),
+            "convergence_hypothesis" | "latent_vortex"
+        ) {
             continue;
         }
         let matched_signature = matched_signature_by_scope

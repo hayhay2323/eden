@@ -176,20 +176,23 @@ pub(crate) fn prune_us_signal_records(records: &mut Vec<UsSignalRecord>, current
         return;
     }
 
-    let mut overflow = records.len() - US_SIGNAL_RECORD_CAP;
-    let mut index = 0usize;
-    while overflow > 0 && index < records.len() {
-        if records[index].resolved {
-            records.remove(index);
-            overflow -= 1;
-        } else {
-            index += 1;
-        }
+    let unresolved_count = records.iter().filter(|record| !record.resolved).count();
+    let resolved_count = records.len().saturating_sub(unresolved_count);
+    let resolved_keep_cap = US_SIGNAL_RECORD_CAP.saturating_sub(unresolved_count);
+
+    if resolved_count <= resolved_keep_cap {
+        return;
     }
 
-    if records.len() > US_SIGNAL_RECORD_CAP {
-        records.drain(..records.len() - US_SIGNAL_RECORD_CAP);
-    }
+    let mut resolved_to_drop = resolved_count - resolved_keep_cap;
+    records.retain(|record| {
+        if record.resolved && resolved_to_drop > 0 {
+            resolved_to_drop -= 1;
+            false
+        } else {
+            true
+        }
+    });
 }
 
 pub(crate) fn prune_us_workflows(workflows: &mut Vec<UsActionWorkflow>) {
@@ -210,5 +213,54 @@ pub(crate) fn prune_us_workflows(workflows: &mut Vec<UsActionWorkflow>) {
 
     if workflows.len() > US_WORKFLOW_CAP {
         workflows.drain(..workflows.len() - US_WORKFLOW_CAP);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::us::graph::decision::UsOrderDirection;
+    use rust_decimal::Decimal;
+
+    fn record(tick_emitted: u64, resolved: bool) -> UsSignalRecord {
+        UsSignalRecord {
+            symbol: Symbol("TEST.US".into()),
+            tick_emitted,
+            direction: UsOrderDirection::Buy,
+            composite_at_emission: Decimal::ZERO,
+            price_at_emission: None,
+            resolved,
+            price_at_resolution: None,
+            hit: None,
+            realized_return: None,
+        }
+    }
+
+    #[test]
+    fn prune_keeps_unresolved_signals_even_when_over_capacity() {
+        let mut records = (0..(US_SIGNAL_RECORD_CAP + 25))
+            .map(|tick| record(tick as u64, false))
+            .collect::<Vec<_>>();
+
+        prune_us_signal_records(&mut records, US_SIGNAL_RECORD_RETENTION_TICKS + 1);
+
+        assert_eq!(records.len(), US_SIGNAL_RECORD_CAP + 25);
+        assert!(records.iter().all(|record| !record.resolved));
+    }
+
+    #[test]
+    fn prune_discards_oldest_resolved_records_first() {
+        let mut records = (0..US_SIGNAL_RECORD_CAP)
+            .map(|tick| record(tick as u64, false))
+            .collect::<Vec<_>>();
+        records.extend((0..10).map(|tick| record((tick + 10_000) as u64, true)));
+
+        prune_us_signal_records(&mut records, 10_001);
+
+        assert_eq!(
+            records.iter().filter(|record| !record.resolved).count(),
+            US_SIGNAL_RECORD_CAP
+        );
+        assert_eq!(records.iter().filter(|record| record.resolved).count(), 0);
     }
 }

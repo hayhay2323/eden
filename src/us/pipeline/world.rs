@@ -576,7 +576,8 @@ mod tests {
             sym("NVDA.US"),
             make_dims(dec!(0.5), dec!(0.8), dec!(0.3), dec!(0.2), dec!(0.0)),
         )]);
-        let decision = crate::us::graph::decision::UsDecisionSnapshot::compute(&graph, &[], 1);
+        let decision =
+            crate::us::graph::decision::UsDecisionSnapshot::compute(&graph, &[], 1, None);
         let snapshot = derive_backward_snapshot(&decision, &graph, &[], &[], &HashMap::new());
 
         assert_eq!(snapshot.chains.len(), 1);
@@ -594,7 +595,8 @@ mod tests {
             sym("AAPL.US"),
             make_dims(dec!(0.01), dec!(0.01), dec!(0.0), dec!(0.0), dec!(0.0)),
         )]);
-        let decision = crate::us::graph::decision::UsDecisionSnapshot::compute(&graph, &[], 1);
+        let decision =
+            crate::us::graph::decision::UsDecisionSnapshot::compute(&graph, &[], 1, None);
         let snapshot = derive_backward_snapshot(&decision, &graph, &[], &[], &HashMap::new());
         // Composite = 0.004, below MIN_COMPOSITE_FOR_BACKWARD = 0.10
         assert!(snapshot.chains.is_empty());
@@ -616,7 +618,7 @@ mod tests {
             propagation_confidence: dec!(0.7),
         }];
         let decision =
-            crate::us::graph::decision::UsDecisionSnapshot::compute(&graph, &cm_signals, 1);
+            crate::us::graph::decision::UsDecisionSnapshot::compute(&graph, &cm_signals, 1, None);
         let snapshot =
             derive_backward_snapshot(&decision, &graph, &cm_signals, &[], &HashMap::new());
 
@@ -637,7 +639,8 @@ mod tests {
                 make_dims(dec!(0.7), dec!(0.9), dec!(0.5), dec!(0.4), dec!(0.3)),
             ),
         ]);
-        let decision = crate::us::graph::decision::UsDecisionSnapshot::compute(&graph, &[], 1);
+        let decision =
+            crate::us::graph::decision::UsDecisionSnapshot::compute(&graph, &[], 1, None);
         let snapshot = derive_backward_snapshot(&decision, &graph, &[], &[], &HashMap::new());
 
         // At least one chain should be present.
@@ -655,7 +658,8 @@ mod tests {
             // momentum dominates
             make_dims(dec!(0.1), dec!(0.9), dec!(0.2), dec!(0.05), dec!(0.0)),
         )]);
-        let decision = crate::us::graph::decision::UsDecisionSnapshot::compute(&graph, &[], 1);
+        let decision =
+            crate::us::graph::decision::UsDecisionSnapshot::compute(&graph, &[], 1, None);
         let snapshot = derive_backward_snapshot(&decision, &graph, &[], &[], &HashMap::new());
 
         let chain = snapshot
@@ -672,7 +676,8 @@ mod tests {
             sym("AAPL.US"),
             make_dims(dec!(0.01), dec!(0.01), dec!(0.0), dec!(0.0), dec!(0.0)),
         )]);
-        let decision = crate::us::graph::decision::UsDecisionSnapshot::compute(&graph, &[], 1);
+        let decision =
+            crate::us::graph::decision::UsDecisionSnapshot::compute(&graph, &[], 1, None);
         let investigations = vec![crate::ontology::reasoning::InvestigationSelection {
             investigation_id: "investigation:aapl".into(),
             hypothesis_id: "hyp:aapl".into(),

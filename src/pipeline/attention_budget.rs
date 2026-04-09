@@ -49,10 +49,11 @@ pub struct AttentionBudgetAllocator {
 
 impl AttentionBudgetAllocator {
     /// Create with slot counts derived from total symbol count.
-    /// Deep: top ~5% of symbols, Standard: next ~20%, Scan: rest
+    /// Deep: top ~7% of symbols, Standard: next ~25%, Scan: rest.
+    /// Expanded from 5%/20% to support 654-stock universe with thematic diversity.
     pub fn from_universe_size(total_symbols: usize) -> Self {
-        let deep_slots = (total_symbols / 20).max(5); // ~5%, min 5
-        let standard_slots = (total_symbols / 5).max(20); // ~20%, min 20
+        let deep_slots = (total_symbols / 14).max(10); // ~7%, min 10
+        let standard_slots = (total_symbols / 4).max(30); // ~25%, min 30
         Self {
             activity: HashMap::new(),
             deep_slots,

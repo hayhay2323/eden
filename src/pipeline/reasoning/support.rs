@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
 
+pub(super) use super::family_gate::FamilyAlphaGate;
 use crate::ontology::reasoning::{
     EvidencePolarity, InvalidationCondition, PropagationPath, ReasoningEvidence,
     ReasoningEvidenceKind, ReasoningScope,
@@ -11,7 +12,6 @@ use crate::pipeline::signals::{
     event_driver_kind, event_propagation_scope, DerivedSignalKind, EventDriverKind,
     EventPropagationScope, MarketEventKind, SignalScope,
 };
-pub(super) use super::family_gate::FamilyAlphaGate;
 
 use super::propagation::{path_has_family, path_is_mixed_multi_hop};
 
@@ -73,13 +73,14 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::SharedHolderAnomaly,
             MarketEventKind::StressRegimeShift,
         ],
-        supporting_signals: &[DerivedSignalKind::CandlestickConviction, DerivedSignalKind::StructuralComposite],
+        supporting_signals: &[
+            DerivedSignalKind::CandlestickConviction,
+            DerivedSignalKind::StructuralComposite,
+        ],
         contradicting_signals: &[DerivedSignalKind::MarketStress],
         path_supports: false,
         invalidation: "depth asymmetry and candle stress normalize",
-        expected_observations: &[
-            "local imbalance should remain visible in depth or candles",
-        ],
+        expected_observations: &["local imbalance should remain visible in depth or candles"],
         priority: 115,
     },
     TemplateMetadata {
@@ -92,13 +93,14 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::OrderBookDislocation,
             MarketEventKind::PropagationAbsence,
         ],
-        supporting_signals: &[DerivedSignalKind::MarketStress, DerivedSignalKind::Convergence],
+        supporting_signals: &[
+            DerivedSignalKind::MarketStress,
+            DerivedSignalKind::Convergence,
+        ],
         contradicting_signals: &[DerivedSignalKind::CandlestickConviction],
         path_supports: true,
         invalidation: "connected scopes stop co-moving or the path breaks",
-        expected_observations: &[
-            "linked scopes should start repricing in sequence",
-        ],
+        expected_observations: &["linked scopes should start repricing in sequence"],
         priority: 100,
     },
     TemplateMetadata {
@@ -113,9 +115,7 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
         contradicting_signals: &[DerivedSignalKind::ActivityMomentum],
         path_supports: true,
         invalidation: "market stress and risk-sensitive events revert",
-        expected_observations: &[
-            "stress-sensitive assets should move coherently",
-        ],
+        expected_observations: &["stress-sensitive assets should move coherently"],
         priority: 88,
     },
     TemplateMetadata {
@@ -136,13 +136,14 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
         key: "shared_holder_spillover",
         supporting_events: &[MarketEventKind::SharedHolderAnomaly],
         contradicting_events: &[MarketEventKind::InstitutionalFlip],
-        supporting_signals: &[DerivedSignalKind::Convergence, DerivedSignalKind::SmartMoneyPressure],
+        supporting_signals: &[
+            DerivedSignalKind::Convergence,
+            DerivedSignalKind::SmartMoneyPressure,
+        ],
         contradicting_signals: &[DerivedSignalKind::MarketStress],
         path_supports: true,
         invalidation: "shared-holder crowding link weakens or peers decouple",
-        expected_observations: &[
-            "peer names should move with shared-holder pressure",
-        ],
+        expected_observations: &["peer names should move with shared-holder pressure"],
         priority: 96,
     },
     TemplateMetadata {
@@ -152,13 +153,14 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::SharedHolderAnomaly,
         ],
         contradicting_events: &[MarketEventKind::ManualReviewRequired],
-        supporting_signals: &[DerivedSignalKind::SmartMoneyPressure, DerivedSignalKind::Convergence],
+        supporting_signals: &[
+            DerivedSignalKind::SmartMoneyPressure,
+            DerivedSignalKind::Convergence,
+        ],
         contradicting_signals: &[DerivedSignalKind::MarketStress],
         path_supports: true,
         invalidation: "institution relay loses synchronization or affinity breaks",
-        expected_observations: &[
-            "institution-linked scopes should relay the move in sequence",
-        ],
+        expected_observations: &["institution-linked scopes should relay the move in sequence"],
         priority: 96,
     },
     TemplateMetadata {
@@ -171,13 +173,14 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::ManualReviewRequired,
             MarketEventKind::PropagationAbsence,
         ],
-        supporting_signals: &[DerivedSignalKind::Convergence, DerivedSignalKind::StructuralComposite],
+        supporting_signals: &[
+            DerivedSignalKind::Convergence,
+            DerivedSignalKind::StructuralComposite,
+        ],
         contradicting_signals: &[DerivedSignalKind::MarketStress],
         path_supports: true,
         invalidation: "sector rotation stalls or reverses",
-        expected_observations: &[
-            "sector beneficiaries and victims should diverge further",
-        ],
+        expected_observations: &["sector beneficiaries and victims should diverge further"],
         priority: 92,
     },
     TemplateMetadata {
@@ -187,13 +190,14 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::StressRegimeShift,
         ],
         contradicting_events: &[MarketEventKind::CandlestickBreakout],
-        supporting_signals: &[DerivedSignalKind::MarketStress, DerivedSignalKind::StructuralComposite],
+        supporting_signals: &[
+            DerivedSignalKind::MarketStress,
+            DerivedSignalKind::StructuralComposite,
+        ],
         contradicting_signals: &[DerivedSignalKind::CandlestickConviction],
         path_supports: true,
         invalidation: "stress stops feeding back through the rotation complex",
-        expected_observations: &[
-            "stress and rotation should keep reinforcing each other",
-        ],
+        expected_observations: &["stress and rotation should keep reinforcing each other"],
         priority: 88,
     },
     TemplateMetadata {
@@ -207,9 +211,7 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
         contradicting_signals: &[DerivedSignalKind::ActivityMomentum],
         path_supports: true,
         invalidation: "market stress diffuses and sectors decouple",
-        expected_observations: &[
-            "market stress should cluster into the same vulnerable sectors",
-        ],
+        expected_observations: &["market stress should cluster into the same vulnerable sectors"],
         priority: 88,
     },
     TemplateMetadata {
@@ -222,7 +224,10 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::ManualReviewRequired,
             MarketEventKind::PropagationAbsence,
         ],
-        supporting_signals: &[DerivedSignalKind::StructuralComposite, DerivedSignalKind::Convergence],
+        supporting_signals: &[
+            DerivedSignalKind::StructuralComposite,
+            DerivedSignalKind::Convergence,
+        ],
         contradicting_signals: &[DerivedSignalKind::MarketStress],
         path_supports: true,
         invalidation: "sector-symbol spillover stops transmitting",
@@ -240,13 +245,14 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::ManualReviewRequired,
             MarketEventKind::PropagationAbsence,
         ],
-        supporting_signals: &[DerivedSignalKind::Convergence, DerivedSignalKind::MarketStress],
+        supporting_signals: &[
+            DerivedSignalKind::Convergence,
+            DerivedSignalKind::MarketStress,
+        ],
         contradicting_signals: &[DerivedSignalKind::CandlestickConviction],
         path_supports: true,
         invalidation: "one leg of the cross-mechanism chain breaks",
-        expected_observations: &[
-            "multiple mechanisms should reinforce the same direction",
-        ],
+        expected_observations: &["multiple mechanisms should reinforce the same direction"],
         priority: 84,
     },
     TemplateMetadata {
@@ -256,13 +262,14 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::ManualReviewRequired,
         ],
         contradicting_events: &[MarketEventKind::CandlestickBreakout],
-        supporting_signals: &[DerivedSignalKind::SmartMoneyPressure, DerivedSignalKind::Convergence],
+        supporting_signals: &[
+            DerivedSignalKind::SmartMoneyPressure,
+            DerivedSignalKind::Convergence,
+        ],
         contradicting_signals: &[DerivedSignalKind::MarketStress],
         path_supports: true,
         invalidation: "institutional reversal no longer persists",
-        expected_observations: &[
-            "institutional flow should continue flipping the same way",
-        ],
+        expected_observations: &["institutional flow should continue flipping the same way"],
         priority: 104,
     },
     TemplateMetadata {
@@ -272,13 +279,14 @@ static TEMPLATE_REGISTRY: &[TemplateMetadata] = &[
             MarketEventKind::SharedHolderAnomaly,
         ],
         contradicting_events: &[MarketEventKind::MarketStressElevated],
-        supporting_signals: &[DerivedSignalKind::CandlestickConviction, DerivedSignalKind::ActivityMomentum],
+        supporting_signals: &[
+            DerivedSignalKind::CandlestickConviction,
+            DerivedSignalKind::ActivityMomentum,
+        ],
         contradicting_signals: &[DerivedSignalKind::MarketStress],
         path_supports: true,
         invalidation: "breakout loses follow-through or contagion stops",
-        expected_observations: &[
-            "breakout leaders should drag peers along",
-        ],
+        expected_observations: &["breakout leaders should drag peers along"],
         priority: 110,
     },
 ];
@@ -383,7 +391,6 @@ pub struct HypothesisTemplate {
     pub family_label: String,
     pub thesis: String,
 }
-
 
 pub(super) fn hypothesis_templates(
     relevant_events: &[&crate::ontology::Event<crate::pipeline::signals::MarketEventRecord>],
@@ -560,9 +567,10 @@ pub(super) fn hypothesis_templates(
 
     // Block stress_feedback_loop in stabilizing regime
     if let Some(ws) = world_state {
-        let is_stabilizing = ws.entities.iter().any(|e| {
-            matches!(e.scope, ReasoningScope::Market(_)) && e.regime == "stabilizing"
-        });
+        let is_stabilizing = ws
+            .entities
+            .iter()
+            .any(|e| matches!(e.scope, ReasoningScope::Market(_)) && e.regime == "stabilizing");
         if is_stabilizing {
             templates.retain(|t| t.key != "stress_feedback_loop");
         }
@@ -572,7 +580,6 @@ pub(super) fn hypothesis_templates(
     templates.retain(|template| seen.insert(template.key.clone()));
     templates
 }
-
 
 fn attribution_allows_template(
     relevant_events: &[&crate::ontology::Event<crate::pipeline::signals::MarketEventRecord>],
@@ -949,4 +956,3 @@ pub(crate) fn hk_session_label(timestamp: OffsetDateTime) -> &'static str {
         _ => "offhours",
     }
 }
-

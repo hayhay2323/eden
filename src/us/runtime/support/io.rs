@@ -4,14 +4,17 @@ pub(crate) async fn initialize_us_store(
     ctx: &QuoteContext,
     watchlist: &[Symbol],
 ) -> Arc<ObjectStore> {
-    let symbols_vec: Vec<String> = watchlist.iter().map(|s| s.0.clone()).collect();
-    let static_infos = match ctx.static_info(symbols_vec).await {
-        Ok(infos) => infos,
-        Err(e) => {
-            eprintln!("Warning: static_info failed: {}", e);
-            vec![]
+    // Longport limits static_info to ~500 symbols per request, so chunk.
+    let mut static_infos = Vec::new();
+    for chunk in watchlist.chunks(400) {
+        let symbols_vec: Vec<String> = chunk.iter().map(|s| s.0.clone()).collect();
+        match ctx.static_info(symbols_vec).await {
+            Ok(infos) => static_infos.extend(infos),
+            Err(e) => {
+                eprintln!("Warning: static_info failed for chunk: {}", e);
+            }
         }
-    };
+    }
 
     let stocks: Vec<Stock> = static_infos
         .into_iter()
@@ -66,9 +69,99 @@ pub(crate) async fn fetch_us_rest_data(ctx: &QuoteContext, watchlist: &[Symbol])
         return UsRestSnapshot::empty();
     }
 
-    const BATCH_CONCURRENCY: usize = 8;
+    // Longport rate limit: 10 req/s, max 5 concurrent.
+    // capital_flow and intraday are per-symbol (no batch support).
+    // With 414+ symbols we must limit what we fetch per cycle.
+    const API_CONCURRENCY: usize = 4;
+    // Only fetch detailed per-symbol data for top N by turnover.
+    // calc_indexes (batch) already provides CapitalFlow for all symbols.
+    const CAPITAL_FLOW_TOP_N: usize = 80;
+    const INTRADAY_TOP_N: usize = 80;
 
-    let flow_future = stream::iter(watchlist.iter().cloned())
+    // Step 1: Batch endpoints first (quote + calc_indexes).
+    // Longport batch limit is 500 symbols per request, so chunk if needed.
+    const BATCH_CHUNK: usize = 500;
+
+    let calc_future = async {
+        let mut all_indexes = HashMap::new();
+        for chunk in watchlist.chunks(BATCH_CHUNK) {
+            match ctx
+                .calc_indexes(
+                    chunk.iter().map(|s| s.0.clone()).collect::<Vec<_>>(),
+                    [
+                        CalcIndex::TurnoverRate,
+                        CalcIndex::VolumeRatio,
+                        CalcIndex::PeTtmRatio,
+                        CalcIndex::PbRatio,
+                        CalcIndex::Amplitude,
+                        CalcIndex::FiveMinutesChangeRate,
+                        CalcIndex::DividendRatioTtm,
+                        CalcIndex::YtdChangeRate,
+                        CalcIndex::FiveDayChangeRate,
+                        CalcIndex::TenDayChangeRate,
+                        CalcIndex::HalfYearChangeRate,
+                        CalcIndex::TotalMarketValue,
+                        CalcIndex::CapitalFlow,
+                        CalcIndex::ChangeRate,
+                    ],
+                )
+                .await
+            {
+                Ok(indexes) => {
+                    for idx in indexes {
+                        all_indexes.insert(Symbol(idx.symbol.clone()), idx);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: calc_indexes failed for chunk: {}", e);
+                }
+            }
+        }
+        all_indexes
+    };
+
+    let quote_future = async {
+        let mut all_quotes = HashMap::new();
+        for chunk in watchlist.chunks(BATCH_CHUNK) {
+            match ctx
+                .quote(chunk.iter().map(|s| s.0.clone()).collect::<Vec<_>>())
+                .await
+            {
+                Ok(quotes) => {
+                    for quote in quotes {
+                        all_quotes.insert(Symbol(quote.symbol.clone()), quote);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: US quote batch failed for chunk: {}", e);
+                }
+            }
+        }
+        all_quotes
+    };
+
+    let (calc_indexes, quotes) = tokio::join!(calc_future, quote_future);
+
+    // Step 2: Determine top symbols by turnover for per-symbol endpoints
+    let mut ranked_symbols: Vec<_> = quotes
+        .iter()
+        .filter(|(_, q)| q.turnover > rust_decimal::Decimal::ZERO)
+        .collect::<Vec<_>>();
+    ranked_symbols.sort_by(|a, b| b.1.turnover.cmp(&a.1.turnover));
+
+    let flow_watchlist: Vec<Symbol> = ranked_symbols
+        .iter()
+        .take(CAPITAL_FLOW_TOP_N)
+        .map(|(sym, _)| (*sym).clone())
+        .collect();
+    let intraday_watchlist: Vec<Symbol> = ranked_symbols
+        .iter()
+        .take(INTRADAY_TOP_N)
+        .map(|(sym, _)| (*sym).clone())
+        .collect();
+
+    // Step 3: Per-symbol endpoints sequentially to respect rate limit
+    let flow_results: Vec<_> = stream::iter(flow_watchlist.into_iter())
         .map(|sym| {
             let ctx = ctx.clone();
             async move {
@@ -81,59 +174,11 @@ pub(crate) async fn fetch_us_rest_data(ctx: &QuoteContext, watchlist: &[Symbol])
                 }
             }
         })
-        .buffer_unordered(BATCH_CONCURRENCY)
-        .collect::<Vec<_>>();
+        .buffer_unordered(API_CONCURRENCY)
+        .collect()
+        .await;
 
-    let calc_future = async {
-        match ctx
-            .calc_indexes(
-                watchlist.iter().map(|s| s.0.clone()).collect::<Vec<_>>(),
-                [
-                    CalcIndex::TurnoverRate,
-                    CalcIndex::VolumeRatio,
-                    CalcIndex::PeTtmRatio,
-                    CalcIndex::PbRatio,
-                    CalcIndex::Amplitude,
-                    CalcIndex::FiveMinutesChangeRate,
-                    CalcIndex::DividendRatioTtm,
-                    CalcIndex::YtdChangeRate,
-                    CalcIndex::FiveDayChangeRate,
-                    CalcIndex::TenDayChangeRate,
-                    CalcIndex::HalfYearChangeRate,
-                    CalcIndex::TotalMarketValue,
-                    CalcIndex::CapitalFlow,
-                    CalcIndex::ChangeRate,
-                ],
-            )
-            .await
-        {
-            Ok(indexes) => indexes
-                .into_iter()
-                .map(|idx| (Symbol(idx.symbol.clone()), idx))
-                .collect(),
-            Err(e) => {
-                eprintln!("Warning: calc_indexes failed: {}", e);
-                HashMap::new()
-            }
-        }
-    };
-
-    let quote_future = async {
-        match ctx
-            .quote(watchlist.iter().map(|s| s.0.clone()).collect::<Vec<_>>())
-            .await
-        {
-            Ok(quotes) => quotes
-                .into_iter()
-                .map(|quote| (Symbol(quote.symbol.clone()), quote))
-                .collect(),
-            Err(e) => {
-                eprintln!("Warning: US quote batch failed: {}", e);
-                HashMap::new()
-            }
-        }
-    };
-    let intraday_future = stream::iter(watchlist.iter().cloned())
+    let intraday_results: Vec<_> = stream::iter(intraday_watchlist.into_iter())
         .map(|sym| {
             let ctx = ctx.clone();
             async move {
@@ -146,22 +191,15 @@ pub(crate) async fn fetch_us_rest_data(ctx: &QuoteContext, watchlist: &[Symbol])
                 }
             }
         })
-        .buffer_unordered(BATCH_CONCURRENCY)
-        .collect::<Vec<_>>();
+        .buffer_unordered(API_CONCURRENCY)
+        .collect()
+        .await;
 
-    let (flow_results, calc_indexes, quotes, intraday_results) =
-        tokio::join!(flow_future, calc_future, quote_future, intraday_future);
-
-    // Fetch option surfaces for top symbols by turnover (limit to 20 to avoid API rate limits)
-    let mut top_symbols: Vec<_> = quotes
+    // Step 4: Option surfaces for top 50 (expanded from 20 for better IV coverage)
+    let option_watchlist: Vec<Symbol> = ranked_symbols
         .iter()
-        .filter(|(_, q)| q.turnover > rust_decimal::Decimal::ZERO)
-        .collect::<Vec<_>>();
-    top_symbols.sort_by(|a, b| b.1.turnover.cmp(&a.1.turnover));
-    let option_watchlist: Vec<Symbol> = top_symbols
-        .into_iter()
-        .take(20)
-        .map(|(sym, _)| sym.clone())
+        .take(50)
+        .map(|(sym, _)| (*sym).clone())
         .collect();
     let option_surfaces = if !option_watchlist.is_empty() {
         fetch_us_option_surfaces(ctx, &option_watchlist, &quotes).await

@@ -23,12 +23,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match ctx.quote([hk_sym, us_sym]).await {
         Ok(quotes) => {
             for q in &quotes {
-                println!("  {}: last={} vol={} turnover={}", q.symbol, q.last_done, q.volume, q.turnover);
+                println!(
+                    "  {}: last={} vol={} turnover={}",
+                    q.symbol, q.last_done, q.volume, q.turnover
+                );
                 if let Some(pre) = &q.pre_market_quote {
                     println!("    pre_market: last={} vol={}", pre.last_done, pre.volume);
                 }
                 if let Some(post) = &q.post_market_quote {
-                    println!("    post_market: last={} vol={}", post.last_done, post.volume);
+                    println!(
+                        "    post_market: last={} vol={}",
+                        post.last_done, post.volume
+                    );
                 }
             }
         }
@@ -43,13 +49,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let ask_levels = depth.asks.len();
                 let bid_levels = depth.bids.len();
                 let has_data = depth.asks.iter().any(|a| a.volume > 0);
-                println!("  {}: asks={} bids={} has_data={}", sym, ask_levels, bid_levels, has_data);
+                println!(
+                    "  {}: asks={} bids={} has_data={}",
+                    sym, ask_levels, bid_levels, has_data
+                );
                 if has_data {
                     if let Some(a) = depth.asks.first() {
-                        println!("    best_ask: price={:?} vol={} orders={}", a.price, a.volume, a.order_num);
+                        println!(
+                            "    best_ask: price={:?} vol={} orders={}",
+                            a.price, a.volume, a.order_num
+                        );
                     }
                     if let Some(b) = depth.bids.first() {
-                        println!("    best_bid: price={:?} vol={} orders={}", b.price, b.volume, b.order_num);
+                        println!(
+                            "    best_bid: price={:?} vol={} orders={}",
+                            b.price, b.volume, b.order_num
+                        );
                     }
                 }
             }
@@ -61,7 +76,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     print_section("3. Broker Queue");
     match ctx.brokers(hk_sym).await {
         Ok(brokers) => {
-            println!("  {}: ask_levels={} bid_levels={}", hk_sym, brokers.ask_brokers.len(), brokers.bid_brokers.len());
+            println!(
+                "  {}: ask_levels={} bid_levels={}",
+                hk_sym,
+                brokers.ask_brokers.len(),
+                brokers.bid_brokers.len()
+            );
         }
         Err(e) => println!("  ERROR: {e}"),
     }
@@ -87,7 +107,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     print_section("5. History Candlesticks");
     for sym in [hk_sym, us_sym] {
         match ctx
-            .history_candlesticks_by_offset(sym, Period::Day, AdjustType::ForwardAdjust, true, None, 5, TradeSessions::Intraday)
+            .history_candlesticks_by_offset(
+                sym,
+                Period::Day,
+                AdjustType::ForwardAdjust,
+                true,
+                None,
+                5,
+                TradeSessions::Intraday,
+            )
             .await
         {
             Ok(candles) => {
@@ -102,7 +130,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => println!("  {} daily ERROR: {e}", sym),
         }
         match ctx
-            .history_candlesticks_by_offset(sym, Period::Week, AdjustType::ForwardAdjust, true, None, 3, TradeSessions::Intraday)
+            .history_candlesticks_by_offset(
+                sym,
+                Period::Week,
+                AdjustType::ForwardAdjust,
+                true,
+                None,
+                3,
+                TradeSessions::Intraday,
+            )
             .await
         {
             Ok(candles) => println!("  {} weekly: {} candles", sym, candles.len()),
@@ -197,7 +233,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     println!(
                         "    amplitude={:?} 5min_change={:?} div_yield={:?} change_rate={:?}",
-                        r.amplitude, r.five_minutes_change_rate, r.dividend_ratio_ttm, r.change_rate
+                        r.amplitude,
+                        r.five_minutes_change_rate,
+                        r.dividend_ratio_ttm,
+                        r.change_rate
                     );
                     println!(
                         "    ytd={:?} 5d={:?} 10d={:?} half_yr={:?}",
@@ -258,8 +297,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match ctx.option_chain_info_by_date(us_sym, expiry).await {
         Ok(chain) => {
             println!("  {} 2026-04-17 chain: {} strikes", us_sym, chain.len());
-            if let Some(atm) = chain.iter().find(|c| c.price.to_string().starts_with("255")) {
-                println!("    ATM price={} call={} put={}", atm.price, atm.call_symbol, atm.put_symbol);
+            if let Some(atm) = chain
+                .iter()
+                .find(|c| c.price.to_string().starts_with("255"))
+            {
+                println!(
+                    "    ATM price={} call={} put={}",
+                    atm.price, atm.call_symbol, atm.put_symbol
+                );
             }
         }
         Err(e) => println!("  {} chain ERROR: {e}", us_sym),
@@ -285,8 +330,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             for w in warrants.iter().take(3) {
                 println!(
                     "    {} name={} type={:?} strike={:?} expiry={} iv={:?} outstanding={:?}",
-                    w.symbol, w.name, w.warrant_type, w.strike_price, w.expiry_date,
-                    w.implied_volatility, w.outstanding_ratio
+                    w.symbol,
+                    w.name,
+                    w.warrant_type,
+                    w.strike_price,
+                    w.expiry_date,
+                    w.implied_volatility,
+                    w.outstanding_ratio
                 );
             }
         }

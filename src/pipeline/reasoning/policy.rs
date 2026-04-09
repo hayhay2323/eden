@@ -931,17 +931,16 @@ fn decide_track_action(
     let alpha_boost = lineage_prior
         .map(|p| compute_alpha_boost(p))
         .unwrap_or(Decimal::ZERO);
-    let boost_factor = family_boost.boost_for_family(
-        setup_family_key(setup).unwrap_or("unknown"),
-    );
+    let boost_factor = family_boost.boost_for_family(setup_family_key(setup).unwrap_or("unknown"));
     let boost_edge_reduction = (boost_factor - Decimal::ONE) * Decimal::new(2, 2);
+    // Positive feedback: alpha_boost (0.3–1.5) × multiplier lowers thresholds for proven families.
     let min_enter_edge = Decimal::new(3, 2) + doctrine_pressure * Decimal::new(2, 2)
-        - alpha_boost * Decimal::new(1, 2)
+        - alpha_boost * Decimal::new(2, 2)
         - boost_edge_reduction;
     let min_enter_gap = Decimal::new(15, 2) + doctrine_pressure * Decimal::new(5, 2)
-        - alpha_boost * Decimal::new(3, 2);
-    let min_enter_local_support = Decimal::new(30, 2) + doctrine_pressure * Decimal::new(10, 2)
         - alpha_boost * Decimal::new(5, 2);
+    let min_enter_local_support = Decimal::new(30, 2) + doctrine_pressure * Decimal::new(10, 2)
+        - alpha_boost * Decimal::new(7, 2);
     let min_hold_edge = Decimal::new(15, 3);
     let min_strengthening_streak = if doctrine_pressure >= Decimal::new(35, 2) {
         3
@@ -1566,6 +1565,11 @@ fn best_lineage_prior<'a>(
 }
 
 fn classify_lineage_prior(prior: &FamilyContextLineageOutcome) -> PriorSignal {
+    // Families with zero resolved cases have no evidence of working —
+    // block them from review/enter to reduce operator noise.
+    if prior.resolved == 0 {
+        return PriorSignal::Negative;
+    }
     if prior.resolved < 5 {
         return PriorSignal::Neutral;
     }
@@ -1605,30 +1609,41 @@ fn classify_lineage_prior(prior: &FamilyContextLineageOutcome) -> PriorSignal {
 /// Returns 0.0 (no boost) to 1.0 (maximum boost).
 /// Mirror of `should_block_family_alpha` — that kills losers, this amplifies winners.
 fn compute_alpha_boost(prior: &FamilyContextLineageOutcome) -> Decimal {
-    if prior.resolved < 15 {
+    // Early boost for small-sample but high-conviction families.
+    if prior.resolved >= 1
+        && prior.resolved < 5
+        && prior.follow_through_rate >= Decimal::new(80, 2)
+        && prior.mean_net_return > Decimal::ZERO
+    {
+        return Decimal::new(4, 1); // 0.4 — cautious early boost
+    }
+    if prior.resolved < 5 {
         return Decimal::ZERO;
     }
-    let has_positive_return = prior.mean_net_return > Decimal::new(5, 3);
+    let has_positive_return = prior.mean_net_return > Decimal::ZERO;
     let has_good_follow = prior.follow_through_rate >= Decimal::new(40, 2);
-    let has_low_invalidation = prior.invalidation_rate < Decimal::new(30, 2);
     if !has_positive_return || !has_good_follow {
         return Decimal::ZERO;
     }
-    let mut boost = Decimal::new(2, 1);
+    let has_low_invalidation = prior.invalidation_rate < Decimal::new(30, 2);
+    let mut boost = Decimal::new(3, 1); // 0.3 base
+    if prior.resolved >= 10 && prior.follow_through_rate >= Decimal::new(50, 2) {
+        boost = Decimal::new(6, 1); // 0.6
+    }
     if prior.resolved >= 30 && has_low_invalidation {
-        boost = Decimal::new(5, 1);
+        boost = Decimal::new(8, 1); // 0.8
     }
     if prior.resolved >= 60
-        && prior.mean_net_return > Decimal::new(1, 2)
+        && prior.mean_net_return > Decimal::new(5, 3)
         && prior.follow_through_rate >= Decimal::new(50, 2)
     {
-        boost = Decimal::new(8, 1);
+        boost = Decimal::ONE; // 1.0
     }
     if prior.resolved >= 100
-        && prior.mean_net_return > Decimal::new(15, 3)
+        && prior.mean_net_return > Decimal::new(1, 2)
         && prior.follow_through_rate >= Decimal::new(55, 2)
     {
-        boost = Decimal::ONE;
+        boost = Decimal::new(15, 1); // 1.5 — elite family
     }
     boost
 }

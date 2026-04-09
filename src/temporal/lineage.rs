@@ -5,6 +5,8 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use crate::pipeline::reasoning::ConvergenceDetail;
+
 use super::buffer::TickHistory;
 #[path = "lineage/evolution.rs"]
 mod evolution;
@@ -234,6 +236,15 @@ pub struct CaseRealizedOutcome {
     pub invalidated: bool,
     pub structure_retained: bool,
     pub convergence_score: Decimal,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedTopologyOutcome {
+    pub setup_id: String,
+    pub symbol: crate::ontology::objects::Symbol,
+    pub resolved_tick: u64,
+    pub net_return: Decimal,
+    pub convergence_detail: ConvergenceDetail,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -573,6 +584,81 @@ pub fn compute_lineage_stats(history: &TickHistory, limit: usize) -> LineageStat
         falsified_contexts: top_context_outcomes(falsified_context_acc),
         family_contexts: top_family_context_outcomes(family_context_acc),
     }
+}
+
+pub fn compute_resolved_topology_outcomes(
+    history: &TickHistory,
+    resolution_lag: u64,
+) -> Vec<ResolvedTopologyOutcome> {
+    let window = history.latest_n(history.len());
+    if window.is_empty() {
+        return Vec::new();
+    }
+
+    let current_tick = window
+        .last()
+        .map(|record| record.tick_number)
+        .unwrap_or_default();
+    let window_by_tick = window
+        .iter()
+        .copied()
+        .map(|record| (record.tick_number, record))
+        .collect::<HashMap<_, _>>();
+    let mut seen_setup_ids = HashSet::new();
+
+    let mut outcomes = window
+        .iter()
+        .flat_map(|record| {
+            record
+                .tactical_setups
+                .iter()
+                .map(move |setup| (*record, setup))
+        })
+        .filter(|(_, setup)| seen_setup_ids.insert(setup.setup_id.clone()))
+        .filter_map(|(entry_record, setup)| {
+            let symbol = match &setup.scope {
+                crate::ontology::reasoning::ReasoningScope::Symbol(symbol) => symbol.clone(),
+                _ => return None,
+            };
+            let detail = setup.convergence_detail.clone()?;
+            let entry_price = entry_record
+                .signals
+                .get(&symbol)
+                .and_then(|signal| signal.mark_price)
+                .filter(|price| *price > Decimal::ZERO)?;
+            let resolution_tick = entry_record.tick_number + resolution_lag;
+            if current_tick < resolution_tick {
+                return None;
+            }
+            let exit_record = window_by_tick.get(&resolution_tick)?;
+            let exit_price = exit_record
+                .signals
+                .get(&symbol)
+                .and_then(|signal| signal.mark_price)
+                .filter(|price| *price > Decimal::ZERO)?;
+            let raw_return = (exit_price - entry_price) / entry_price;
+            let net_return = if setup.title.starts_with("Short ") {
+                -raw_return
+            } else {
+                raw_return
+            };
+
+            Some(ResolvedTopologyOutcome {
+                setup_id: setup.setup_id.clone(),
+                symbol,
+                resolved_tick: resolution_tick,
+                net_return,
+                convergence_detail: detail,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    outcomes.sort_by(|left, right| {
+        left.resolved_tick
+            .cmp(&right.resolved_tick)
+            .then_with(|| left.setup_id.cmp(&right.setup_id))
+    });
+    outcomes
 }
 
 fn estimate_tick_lag_for_minutes(history: &TickHistory, minutes: i64) -> Option<u64> {

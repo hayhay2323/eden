@@ -14,10 +14,13 @@ impl UsDecisionSnapshot {
         graph: &UsGraph,
         cross_market_signals: &[CrossMarketSignal],
         tick_number: u64,
+        edge_ledger: Option<&crate::graph::edge_learning::EdgeLearningLedger>,
     ) -> Self {
         let mut convergence_scores = HashMap::new();
         for symbol in graph.stock_nodes.keys() {
-            if let Some(score) = UsConvergenceScore::compute(symbol, graph, cross_market_signals) {
+            if let Some(score) =
+                UsConvergenceScore::compute(symbol, graph, cross_market_signals, edge_ledger)
+            {
                 convergence_scores.insert(symbol.clone(), score);
             }
         }

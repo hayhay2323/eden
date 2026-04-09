@@ -13,7 +13,7 @@ use crate::us::graph::decision::UsMarketRegimeBias;
 use crate::us::graph::graph::UsGraph;
 use crate::us::graph::propagation::CrossMarketSignal;
 use crate::us::temporal::lineage::{
-    us_convergence_hypothesis_matches_pattern, UsConvergenceSuccessPattern, UsLineageStats,
+    us_topology_hypothesis_matches_pattern, UsConvergenceSuccessPattern, UsLineageStats,
 };
 
 use super::signals::{UsDerivedSignalSnapshot, UsEventSnapshot, UsSignalScope};
@@ -26,6 +26,8 @@ mod propagation;
 mod support;
 #[path = "reasoning/synthesis.rs"]
 mod synthesis;
+#[path = "reasoning/vortex.rs"]
+mod vortex;
 use policy::{derive_investigation_selections, derive_tactical_setups, prune_us_stale_cases};
 use propagation::derive_diffusion_propagation_paths;
 use synthesis::derive_hypotheses;
@@ -195,6 +197,7 @@ impl UsReasoningSnapshot {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -208,15 +211,17 @@ impl UsReasoningSnapshot {
         lineage_stats: Option<&UsLineageStats>,
         multi_horizon_gate: Option<&crate::temporal::lineage::MultiHorizonGate>,
         structural_metrics: Option<&HashMap<Symbol, UsStructuralRankMetrics>>,
+        convergence_scores: Option<
+            &HashMap<Symbol, crate::us::graph::decision::UsConvergenceScore>,
+        >,
         reviewer_doctrine: Option<&ReviewerDoctrinePressure>,
     ) -> Self {
         let propagation_paths = Vec::new();
-        let family_gate = lineage_stats
-            .map(|stats| {
-                crate::pipeline::reasoning::family_gate::FamilyAlphaGate::from_us_lineage_stats(
-                    &stats.by_template,
-                )
-            });
+        let family_gate = lineage_stats.map(|stats| {
+            crate::pipeline::reasoning::family_gate::FamilyAlphaGate::from_us_lineage_stats(
+                &stats.by_template,
+            )
+        });
         let hypotheses = derive_hypotheses(
             events,
             derived_signals,
@@ -239,11 +244,11 @@ impl UsReasoningSnapshot {
             &investigation_selections,
             previous_setups,
             lineage_stats,
+            convergence_scores,
         );
         let tactical_setups =
             prune_us_stale_cases(tactical_setups, previous_setups, previous_tracks);
-        let tactical_setups =
-            crate::pipeline::reasoning::apply_convergence_policy(tactical_setups);
+        let tactical_setups = crate::pipeline::reasoning::apply_convergence_policy(tactical_setups);
         let tactical_setups = crate::pipeline::reasoning::cap_observe_budget(tactical_setups);
         let tactical_setups = crate::pipeline::reasoning::apply_midflight_health_check(
             tactical_setups,
@@ -276,18 +281,20 @@ impl UsReasoningSnapshot {
         lineage_stats: Option<&UsLineageStats>,
         multi_horizon_gate: Option<&crate::temporal::lineage::MultiHorizonGate>,
         structural_metrics: Option<&HashMap<Symbol, UsStructuralRankMetrics>>,
+        convergence_scores: Option<
+            &HashMap<Symbol, crate::us::graph::decision::UsConvergenceScore>,
+        >,
         graph: &UsGraph,
         cross_market_signals: &[CrossMarketSignal],
         reviewer_doctrine: Option<&ReviewerDoctrinePressure>,
     ) -> Self {
         let propagation_paths =
             derive_diffusion_propagation_paths(graph, structural_metrics, cross_market_signals);
-        let family_gate = lineage_stats
-            .map(|stats| {
-                crate::pipeline::reasoning::family_gate::FamilyAlphaGate::from_us_lineage_stats(
-                    &stats.by_template,
-                )
-            });
+        let family_gate = lineage_stats.map(|stats| {
+            crate::pipeline::reasoning::family_gate::FamilyAlphaGate::from_us_lineage_stats(
+                &stats.by_template,
+            )
+        });
         let hypotheses = derive_hypotheses(
             events,
             derived_signals,
@@ -310,11 +317,11 @@ impl UsReasoningSnapshot {
             &investigation_selections,
             previous_setups,
             lineage_stats,
+            convergence_scores,
         );
         let tactical_setups =
             prune_us_stale_cases(tactical_setups, previous_setups, previous_tracks);
-        let tactical_setups =
-            crate::pipeline::reasoning::apply_convergence_policy(tactical_setups);
+        let tactical_setups = crate::pipeline::reasoning::apply_convergence_policy(tactical_setups);
         let tactical_setups = crate::pipeline::reasoning::cap_observe_budget(tactical_setups);
         let tactical_setups = crate::pipeline::reasoning::apply_midflight_health_check(
             tactical_setups,
@@ -442,14 +449,18 @@ pub fn apply_us_convergence_success_pattern_feedback(
     structural_metrics: Option<&HashMap<Symbol, UsStructuralRankMetrics>>,
     reviewer_doctrine: Option<&ReviewerDoctrinePressure>,
     patterns: &[UsConvergenceSuccessPattern],
+    convergence_scores: Option<&HashMap<Symbol, crate::us::graph::decision::UsConvergenceScore>>,
 ) -> bool {
     let mut boosted = HashMap::<String, (Decimal, String)>::new();
 
     for hypothesis in &mut snapshot.hypotheses {
         let Some(pattern) = patterns
             .iter()
-            .filter(|pattern| pattern.top_family == "Convergence Hypothesis")
-            .filter(|pattern| us_convergence_hypothesis_matches_pattern(hypothesis, pattern))
+            .filter(|pattern| {
+                pattern.top_family == "Convergence Hypothesis"
+                    || pattern.top_family == "Latent Vortex"
+            })
+            .filter(|pattern| us_topology_hypothesis_matches_pattern(hypothesis, pattern))
             .max_by(|left, right| {
                 left.mean_net_return
                     .cmp(&right.mean_net_return)
@@ -517,6 +528,7 @@ pub fn apply_us_convergence_success_pattern_feedback(
         &investigation_selections,
         previous_setups,
         lineage_stats,
+        convergence_scores,
     );
     let tactical_setups = prune_us_stale_cases(tactical_setups, previous_setups, previous_tracks);
     let tactical_setups = crate::pipeline::reasoning::cap_observe_budget(tactical_setups);

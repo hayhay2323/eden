@@ -51,6 +51,7 @@ pub(crate) async fn run_us_projection_stage<S: AnalystService>(
     reasoning: &UsReasoningSnapshot,
     artifact_projection: &crate::core::projection::ProjectionBundle,
     object_store: &Arc<ObjectStore>,
+    tick_history: &crate::us::temporal::buffer::UsTickHistory,
 ) {
     if let Some(ref store) = runtime.store {
         maybe_refresh_us_learning_feedback(
@@ -68,6 +69,46 @@ pub(crate) async fn run_us_projection_stage<S: AnalystService>(
     let agent_recommendations = &artifact_projection.agent_recommendations;
     let case_list_for_graph =
         build_case_list_with_feedback(live_snapshot, cached_feedback.as_ref());
+
+    // Compute realized outcomes from US tick history (mirrors HK persistence.rs:170-206)
+    let topology_outcomes = crate::us::temporal::lineage::compute_us_resolved_topology_outcomes(
+        tick_history,
+        super::SIGNAL_RESOLUTION_LAG,
+    );
+    let setup_families: std::collections::HashMap<String, String> = reasoning
+        .tactical_setups
+        .iter()
+        .map(|s| (s.setup_id.clone(), s.lineage.family_label.clone()))
+        .collect();
+    let realized_outcomes: Vec<crate::persistence::case_realized_outcome::CaseRealizedOutcomeRecord> =
+        topology_outcomes
+            .iter()
+            .filter_map(|outcome| {
+                // Find the entry tick's timestamp from history
+                let entry_record = tick_history
+                    .latest_n(tick_history.len())
+                    .iter()
+                    .find(|r| {
+                        r.tactical_setups
+                            .iter()
+                            .any(|s| s.setup_id == outcome.setup_id)
+                    })
+                    .map(|r| (r.tick_number, r.timestamp))?;
+                let family = setup_families
+                    .get(&outcome.setup_id)
+                    .map(|s| s.as_str())
+                    .unwrap_or("unknown");
+                Some(
+                    crate::persistence::case_realized_outcome::CaseRealizedOutcomeRecord::from_us_topology_outcome(
+                        outcome,
+                        entry_record.0,
+                        entry_record.1,
+                        now,
+                        family,
+                    ),
+                )
+            })
+            .collect();
 
     runtime
         .publish_projection_with_followups_from_inputs(
@@ -93,7 +134,7 @@ pub(crate) async fn run_us_projection_stage<S: AnalystService>(
             agent_snapshot.world_state.as_ref(),
             agent_snapshot.backward_reasoning.as_ref(),
             &live_snapshot.active_position_nodes,
-            None,
+            (!realized_outcomes.is_empty()).then_some(realized_outcomes),
         )
         .await;
 }

@@ -659,7 +659,13 @@ pub(super) fn display_us_runtime_summary(
     briefing: &crate::agent::AgentBriefing,
     session: &crate::agent::AgentSession,
     previous_session: Option<&crate::agent::AgentSession>,
+    learned_edge_count: usize,
 ) {
+    let latent_vortex_count = reasoning
+        .hypotheses
+        .iter()
+        .filter(|hypothesis| hypothesis.family_key == "latent_vortex")
+        .count();
     println!(
         "\n[US tick {}] {} | {} stocks | {} edges | regime={} | {} events | {} hyps | {} setups | scorecard {}/{} ({:.0}%) | {} push",
         tick,
@@ -675,6 +681,12 @@ pub(super) fn display_us_runtime_summary(
         scorecard.hit_rate * Decimal::from(100),
         live_push_count,
     );
+    if latent_vortex_count > 0 || learned_edge_count > 0 {
+        println!(
+            "  Topology: latent_vortex={} learned_edges={}",
+            latent_vortex_count, learned_edge_count
+        );
+    }
     if let Some(focus) = session_focus_summary(session)
         .or_else(|| briefing.headline.as_deref().map(str::to_string))
         .or_else(|| operator_focus_summary(&reasoning.investigation_selections, workflows))

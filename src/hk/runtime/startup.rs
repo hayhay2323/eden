@@ -17,12 +17,15 @@ pub(super) struct HkRuntimeBootstrap {
     pub(super) analyst_service: DefaultAnalystService,
     pub(super) bridge_snapshot_path: String,
     pub(super) runtime: PreparedRuntimeContext,
-    pub(super) push_rx: tokio::sync::mpsc::Receiver<PushEvent>,
+    pub(super) push_rx: tokio::sync::mpsc::Receiver<Vec<PushEvent>>,
     pub(super) rest_rx: tokio::sync::mpsc::Receiver<RestSnapshot>,
     pub(super) tick: u64,
     pub(super) debounce: std::time::Duration,
     pub(super) bootstrap_pending: bool,
 }
+
+const HK_PUSH_BATCH_CHANNEL_CAP: usize = 8_192;
+const HK_PUSH_BATCH_SIZE: usize = 2_048;
 
 pub(super) async fn initialize_hk_runtime() -> HkRuntimeBootstrap {
     let config = match Config::from_env() {
@@ -133,10 +136,28 @@ pub(super) async fn initialize_hk_runtime() -> HkRuntimeBootstrap {
     .await;
     prepare_runtime_artifact_path(&bridge_snapshot_path).await;
 
+    let restored_tick_count = 0usize;
+    let restored_previous_tracks = 0usize;
     #[cfg(feature = "persistence")]
     if let Some(ref db) = runtime.store {
         let restored = eden::ontology::store::AccumulatedKnowledge::restore_from(db, "hk").await;
         *store.knowledge_write() = restored;
+        if let Ok(records) = db.recent_tick_window(300).await {
+            restored_tick_count = records.len();
+            for record in records {
+                history.push(record);
+            }
+            restored_previous_tracks = history
+                .latest()
+                .map(|tick| tick.hypothesis_tracks.len())
+                .unwrap_or(0);
+            if let Some(latest) = history.latest() {
+                eprintln!(
+                    "[hk] restored {} persisted ticks (latest tick={}, previous_tracks={})",
+                    restored_tick_count, latest.tick_number, restored_previous_tracks
+                );
+            }
+        }
     }
 
     runtime.log_monitoring_active("Real-time event-driven monitoring active");
@@ -148,11 +169,20 @@ pub(super) async fn initialize_hk_runtime() -> HkRuntimeBootstrap {
             "quotes": live.quotes.len(),
             "watchlist_symbols": WATCHLIST.len(),
             "bootstrap_pending": bootstrap_pending,
+            "restored_tick_history_len": restored_tick_count,
+            "restored_previous_tracks": restored_previous_tracks,
         }),
     );
 
-    let push_rx = runtime.spawn_push_forwarder(receiver, 10_000);
-    let tick = 0;
+    let push_rx = runtime.spawn_batched_push_forwarder(
+        receiver,
+        HK_PUSH_BATCH_CHANNEL_CAP,
+        HK_PUSH_BATCH_SIZE,
+    );
+    let tick = history
+        .latest()
+        .map(|record| record.tick_number)
+        .unwrap_or(0);
     let debounce = runtime.debounce_duration();
 
     let rest_ctx = ctx.clone();

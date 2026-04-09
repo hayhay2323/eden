@@ -66,9 +66,7 @@ fn should_block_us_family(stats: &crate::us::temporal::lineage::UsLineageContext
         return false;
     }
     // Zero hit rate + non-positive return → block
-    if stats.hit_rate == Decimal::ZERO
-        && stats.mean_return <= Decimal::ZERO
-        && stats.resolved >= 15
+    if stats.hit_rate == Decimal::ZERO && stats.mean_return <= Decimal::ZERO && stats.resolved >= 15
     {
         return true;
     }

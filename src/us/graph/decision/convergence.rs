@@ -20,6 +20,7 @@ impl UsConvergenceScore {
         symbol: &Symbol,
         graph: &UsGraph,
         cross_market_signals: &[CrossMarketSignal],
+        edge_ledger: Option<&crate::graph::edge_learning::EdgeLearningLedger>,
     ) -> Option<Self> {
         let &stock_idx = graph.stock_nodes.get(symbol)?;
         let dims = match &graph.graph[stock_idx] {
@@ -37,7 +38,19 @@ impl UsConvergenceScore {
         {
             if let UsEdgeKind::StockToStock(e) = edge.weight() {
                 if let UsNodeKind::Stock(neighbor) = &graph.graph[edge.target()] {
-                    corr_sum += e.similarity * neighbor.mean_direction;
+                    let learned = edge_ledger
+                        .map(|ledger| {
+                            let (a, b) = if symbol.0 < neighbor.symbol.0 {
+                                (symbol.clone(), neighbor.symbol.clone())
+                            } else {
+                                (neighbor.symbol.clone(), symbol.clone())
+                            };
+                            ledger.weight_multiplier(
+                                &crate::graph::edge_learning::EdgeKey::StockToStock { a, b },
+                            )
+                        })
+                        .unwrap_or(Decimal::ONE);
+                    corr_sum += e.similarity * neighbor.mean_direction * learned;
                     corr_count += 1;
                 }
             }
@@ -55,7 +68,17 @@ impl UsConvergenceScore {
         {
             if let UsEdgeKind::StockToSector(_) = edge.weight() {
                 if let UsNodeKind::Sector(s) = &graph.graph[edge.target()] {
-                    sector_coherence = Some(s.mean_direction);
+                    let learned = edge_ledger
+                        .map(|ledger| {
+                            ledger.weight_multiplier(
+                                &crate::graph::edge_learning::EdgeKey::StockToSector {
+                                    symbol: symbol.clone(),
+                                    sector_id: s.sector_id.clone(),
+                                },
+                            )
+                        })
+                        .unwrap_or(Decimal::ONE);
+                    sector_coherence = Some(s.mean_direction * learned);
                 }
             }
         }

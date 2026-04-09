@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use time::UtcOffset;
 
 use crate::ontology::reasoning::ReasoningScope;
+use crate::pipeline::reasoning::ConvergenceDetail;
 use crate::temporal::lineage::HorizonLineageMetric;
 
 use super::buffer::UsTickHistory;
@@ -16,7 +17,8 @@ mod convergence_memory;
 pub use convergence_memory::{
     compute_us_convergence_success_patterns, compute_us_successful_convergence_fingerprints,
     evaluate_us_candidate_mechanisms, us_convergence_hypothesis_matches_pattern,
-    UsConvergenceOutcomeFingerprint, UsConvergenceSuccessPattern,
+    us_topology_hypothesis_matches_pattern, UsConvergenceOutcomeFingerprint,
+    UsConvergenceSuccessPattern,
 };
 
 /// US trading session classification.
@@ -123,6 +125,15 @@ struct SetupOutcome {
     fade_return: Decimal,
 }
 
+#[derive(Debug, Clone)]
+pub struct UsResolvedTopologyOutcome {
+    pub setup_id: String,
+    pub symbol: crate::ontology::objects::Symbol,
+    pub resolved_tick: u64,
+    pub net_return: Decimal,
+    pub convergence_detail: ConvergenceDetail,
+}
+
 /// Per-context lineage statistics.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UsLineageContextStats {
@@ -154,6 +165,129 @@ pub struct UsLineageStats {
 impl UsLineageStats {
     pub fn is_empty(&self) -> bool {
         self.by_template.is_empty() && self.by_context.is_empty()
+    }
+
+    /// Enrich windowed stats with cumulative data. For families where the
+    /// windowed sample is small (< 10 resolved), blend in cumulative stats
+    /// so gate decisions are more stable. Also adds families that exist in
+    /// cumulative but not in the current window.
+    pub fn enrich_with_cumulative(&mut self, accumulator: &UsLineageFamilyAccumulator) {
+        for entry in &mut self.by_template {
+            if let Some(cumulative) = accumulator.families.get(&entry.template) {
+                if entry.resolved < 10 && cumulative.resolved >= 5 {
+                    // Blend: use cumulative hit_rate/mean_return for stability
+                    entry.hit_rate = cumulative.hit_rate();
+                    entry.mean_return = cumulative.mean_return();
+                    entry.resolved = cumulative.resolved;
+                    entry.hits = cumulative.hits;
+                }
+            }
+        }
+        // Add families that only exist in cumulative (e.g. rotated out of window)
+        let existing: std::collections::HashSet<String> = self
+            .by_template
+            .iter()
+            .map(|e| e.template.clone())
+            .collect();
+        for (template, cumulative) in &accumulator.families {
+            if !existing.contains(template) && cumulative.resolved >= 5 {
+                self.by_template.push(UsLineageContextStats {
+                    template: template.clone(),
+                    session: "cumulative".into(),
+                    market_regime: "all".into(),
+                    total: cumulative.resolved,
+                    resolved: cumulative.resolved,
+                    hits: cumulative.hits,
+                    hit_rate: cumulative.hit_rate(),
+                    mean_return: cumulative.mean_return(),
+                    follow_expectancy: Decimal::ZERO,
+                    fade_expectancy: Decimal::ZERO,
+                    wait_expectancy: Decimal::ZERO,
+                });
+            }
+        }
+    }
+}
+
+/// Cumulative lineage accumulator per family — survives tick_history window rotation.
+/// Gate decisions should prefer cumulative stats over windowed stats for stability.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UsLineageFamilyAccumulator {
+    pub families: HashMap<String, UsLineageFamilyCumulative>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UsLineageFamilyCumulative {
+    pub resolved: usize,
+    pub hits: usize,
+    pub total_return: Decimal,
+}
+
+impl UsLineageFamilyCumulative {
+    pub fn hit_rate(&self) -> Decimal {
+        if self.resolved == 0 {
+            return Decimal::ZERO;
+        }
+        Decimal::from(self.hits as i64) / Decimal::from(self.resolved as i64)
+    }
+
+    pub fn mean_return(&self) -> Decimal {
+        if self.resolved == 0 {
+            return Decimal::ZERO;
+        }
+        self.total_return / Decimal::from(self.resolved as i64)
+    }
+}
+
+impl UsLineageFamilyAccumulator {
+    /// Merge newly resolved setups from the current windowed stats.
+    /// Call this each time lineage_stats are recomputed. Only new resolutions
+    /// (delta between previous and current resolved counts) are accumulated.
+    pub fn ingest(
+        &mut self,
+        windowed: &UsLineageStats,
+        previous_resolved: &HashMap<String, usize>,
+    ) {
+        for entry in &windowed.by_template {
+            let prev = previous_resolved.get(&entry.template).copied().unwrap_or(0);
+            if entry.resolved > prev {
+                let delta_resolved = entry.resolved - prev;
+                let delta_hits = if entry.hit_rate > Decimal::ZERO {
+                    // Approximate: new hits ≈ delta_resolved × current hit_rate
+                    // This is imprecise but accumulates correctly over time.
+                    let approx = Decimal::from(delta_resolved as i64) * entry.hit_rate;
+                    approx.to_u64().unwrap_or(0) as usize
+                } else {
+                    0
+                };
+                let delta_return = Decimal::from(delta_resolved as i64) * entry.mean_return;
+
+                let cumulative = self.families.entry(entry.template.clone()).or_default();
+                cumulative.resolved += delta_resolved;
+                cumulative.hits += delta_hits;
+                cumulative.total_return += delta_return;
+            }
+        }
+    }
+
+    pub fn to_context_stats(&self) -> Vec<UsLineageContextStats> {
+        self.families
+            .iter()
+            .filter(|(_, c)| c.resolved > 0)
+            .map(|(template, c)| UsLineageContextStats {
+                template: template.clone(),
+                session: "cumulative".into(),
+                market_regime: "all".into(),
+                total: c.resolved,
+                resolved: c.resolved,
+                hits: c.hits,
+                hit_rate: c.hit_rate(),
+                mean_return: c.mean_return(),
+                follow_expectancy: Decimal::ZERO,
+                fade_expectancy: Decimal::ZERO,
+                wait_expectancy: Decimal::ZERO,
+            })
+            .collect()
     }
 }
 
@@ -299,6 +433,80 @@ pub fn compute_us_lineage_stats(history: &UsTickHistory, resolution_lag: u64) ->
         by_template,
         by_context,
     }
+}
+
+pub fn compute_us_resolved_topology_outcomes(
+    history: &UsTickHistory,
+    resolution_lag: u64,
+) -> Vec<UsResolvedTopologyOutcome> {
+    let records = history.latest_n(history.len());
+    if records.is_empty() {
+        return Vec::new();
+    }
+
+    let current_tick = records
+        .last()
+        .map(|record| record.tick_number)
+        .unwrap_or_default();
+    let records_by_tick: HashMap<u64, &UsTickRecord> = records
+        .iter()
+        .map(|record| (record.tick_number, *record))
+        .collect();
+    let mut seen_setup_ids = std::collections::HashSet::new();
+
+    let mut outcomes = records
+        .iter()
+        .flat_map(|record| {
+            record
+                .tactical_setups
+                .iter()
+                .map(move |setup| (*record, setup))
+        })
+        .filter(|(_, setup)| seen_setup_ids.insert(setup.setup_id.clone()))
+        .filter_map(|(entry_record, setup)| {
+            let symbol = match &setup.scope {
+                ReasoningScope::Symbol(symbol) => symbol.clone(),
+                _ => return None,
+            };
+            let detail = setup.convergence_detail.clone()?;
+            let entry_price = entry_record
+                .signals
+                .get(&symbol)
+                .and_then(effective_price)
+                .filter(|price| *price > Decimal::ZERO)?;
+            let resolution_tick = entry_record.tick_number + resolution_lag;
+            if current_tick < resolution_tick {
+                return None;
+            }
+            let exit_record = records_by_tick.get(&resolution_tick)?;
+            let exit_price = exit_record
+                .signals
+                .get(&symbol)
+                .and_then(effective_price)
+                .filter(|price| *price > Decimal::ZERO)?;
+            let raw_return = (exit_price - entry_price) / entry_price;
+            let net_return = if setup.title.starts_with("Short ") {
+                -raw_return
+            } else {
+                raw_return
+            };
+
+            Some(UsResolvedTopologyOutcome {
+                setup_id: setup.setup_id.clone(),
+                symbol,
+                resolved_tick: resolution_tick,
+                net_return,
+                convergence_detail: detail,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    outcomes.sort_by(|left, right| {
+        left.resolved_tick
+            .cmp(&right.resolved_tick)
+            .then_with(|| left.setup_id.cmp(&right.setup_id))
+    });
+    outcomes
 }
 
 fn estimate_us_tick_lag_for_minutes(history: &UsTickHistory, minutes: i64) -> Option<u64> {
@@ -449,6 +657,161 @@ fn fade_return(
     } else {
         -realized_return
     }
+}
+
+// ── Signal Momentum Tracker ──
+// Tracks per-symbol signal strength over time to compute velocity (first derivative)
+// and acceleration (second derivative). When acceleration turns negative while
+// strength is still positive, the signal is "peaking" — Palantir's insight that
+// "the wind is dying" matters more than "the wind is still blowing."
+
+use crate::ontology::objects::Symbol;
+
+const MOMENTUM_HISTORY_LEN: usize = 10;
+
+#[derive(Debug, Clone, Default)]
+pub struct SignalMomentumEntry {
+    pub values: Vec<Decimal>, // last N signal strengths (newest last)
+}
+
+impl SignalMomentumEntry {
+    pub fn push(&mut self, value: Decimal) {
+        self.values.push(value);
+        if self.values.len() > MOMENTUM_HISTORY_LEN {
+            self.values.remove(0);
+        }
+    }
+
+    /// First derivative: is the signal getting stronger or weaker?
+    pub fn velocity(&self) -> Decimal {
+        if self.values.len() < 2 {
+            return Decimal::ZERO;
+        }
+        let n = self.values.len();
+        self.values[n - 1] - self.values[n - 2]
+    }
+
+    /// Second derivative: is the change accelerating or decelerating?
+    pub fn acceleration(&self) -> Decimal {
+        if self.values.len() < 3 {
+            return Decimal::ZERO;
+        }
+        let n = self.values.len();
+        let v1 = self.values[n - 1] - self.values[n - 2];
+        let v0 = self.values[n - 2] - self.values[n - 3];
+        v1 - v0
+    }
+
+    /// Signal is "peaking" when current value is positive but acceleration is negative.
+    /// This is the moment to tighten exit thresholds.
+    pub fn is_peaking(&self) -> bool {
+        if self.values.len() < 3 {
+            return false;
+        }
+        let current = *self.values.last().unwrap();
+        current > Decimal::ZERO && self.acceleration() < Decimal::ZERO
+    }
+
+    /// Signal is "collapsing" when both velocity and acceleration are negative.
+    pub fn is_collapsing(&self) -> bool {
+        self.velocity() < Decimal::ZERO && self.acceleration() < Decimal::ZERO
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SignalMomentumTracker {
+    pub convergence: HashMap<Symbol, SignalMomentumEntry>,
+    pub volume_spike: HashMap<Symbol, SignalMomentumEntry>,
+}
+
+impl SignalMomentumTracker {
+    pub fn record_convergence(&mut self, symbol: Symbol, composite: Decimal) {
+        self.convergence.entry(symbol).or_default().push(composite);
+    }
+
+    pub fn record_volume_spike(&mut self, symbol: Symbol, ratio: Decimal) {
+        self.volume_spike.entry(symbol).or_default().push(ratio);
+    }
+
+    /// Best-effort restore from persisted US tick history.
+    ///
+    /// We prefer setup-level convergence_score when it exists because it is closer
+    /// to the live decision composite. Otherwise we fall back to the stored per-symbol
+    /// composite so the tracker does not cold-start after restart.
+    pub fn restore_from_us_history(&mut self, history: &UsTickHistory) {
+        self.convergence.clear();
+        self.volume_spike.clear();
+
+        for record in history.latest_n(history.len()) {
+            let mut setup_scores = HashMap::<Symbol, Decimal>::new();
+            for setup in &record.tactical_setups {
+                let ReasoningScope::Symbol(symbol) = &setup.scope else {
+                    continue;
+                };
+                let Some(score) = setup.convergence_score else {
+                    continue;
+                };
+                setup_scores
+                    .entry(symbol.clone())
+                    .and_modify(|current| {
+                        if score.abs() > current.abs() {
+                            *current = score;
+                        }
+                    })
+                    .or_insert(score);
+            }
+
+            for (symbol, signal) in &record.signals {
+                let restored = setup_scores
+                    .get(symbol)
+                    .copied()
+                    .unwrap_or(signal.composite);
+                self.record_convergence(symbol.clone(), restored);
+            }
+
+            for event in &record.events {
+                if matches!(
+                    event.value.kind,
+                    crate::us::pipeline::signals::UsEventKind::VolumeSpike
+                ) {
+                    if let crate::us::pipeline::signals::UsSignalScope::Symbol(symbol) =
+                        &event.value.scope
+                    {
+                        self.record_volume_spike(symbol.clone(), event.value.magnitude);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Check if any tracked signal for this symbol is peaking or collapsing.
+    pub fn signal_health(&self, symbol: &Symbol) -> SignalHealth {
+        let conv = self.convergence.get(symbol);
+        let vol = self.volume_spike.get(symbol);
+
+        let conv_peaking = conv.map(|e| e.is_peaking()).unwrap_or(false);
+        let conv_collapsing = conv.map(|e| e.is_collapsing()).unwrap_or(false);
+        let vol_peaking = vol.map(|e| e.is_peaking()).unwrap_or(false);
+        let vol_collapsing = vol.map(|e| e.is_collapsing()).unwrap_or(false);
+
+        if conv_collapsing || vol_collapsing {
+            SignalHealth::Collapsing
+        } else if conv_peaking && vol_peaking {
+            SignalHealth::Peaking
+        } else if conv_peaking || vol_peaking {
+            SignalHealth::Weakening
+        } else {
+            SignalHealth::Healthy
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignalHealth {
+    Healthy,    // signals still accelerating or stable
+    Weakening,  // one signal peaking (acceleration < 0)
+    Peaking,    // multiple signals peaking — consider tightening exits
+    Collapsing, // signals actively declining — consider immediate exit
 }
 
 #[cfg(test)]
@@ -661,6 +1024,81 @@ mod tests {
         assert_eq!(
             stats.by_template[0].follow_expectancy,
             stats.by_template[0].mean_return
+        );
+    }
+
+    #[test]
+    fn signal_momentum_restore_prefers_setup_convergence_score() {
+        let mut h = UsTickHistory::new(10);
+        let mut setup1 = make_setup("setup1", "hyp1", "AAPL.US");
+        setup1.convergence_score = Some(dec!(0.40));
+        let mut setup2 = make_setup("setup2", "hyp2", "AAPL.US");
+        setup2.convergence_score = Some(dec!(0.60));
+        h.push(make_record(
+            1,
+            "AAPL.US",
+            dec!(100),
+            vec![],
+            vec![setup1],
+            UsMarketRegimeBias::Neutral,
+        ));
+        h.push(make_record(
+            2,
+            "AAPL.US",
+            dec!(101),
+            vec![],
+            vec![setup2],
+            UsMarketRegimeBias::Neutral,
+        ));
+
+        let mut tracker = SignalMomentumTracker::default();
+        tracker.restore_from_us_history(&h);
+
+        let entry = tracker
+            .convergence
+            .get(&sym("AAPL.US"))
+            .expect("restored convergence history");
+        assert_eq!(entry.values, vec![dec!(0.40), dec!(0.60)]);
+    }
+
+    #[test]
+    fn resolved_topology_outcomes_extract_convergence_detail() {
+        let mut h = UsTickHistory::new(20);
+        let hyp = make_hypothesis("hyp1", "latent_vortex");
+        let mut setup = make_setup("setup1", "hyp1", "AAPL.US");
+        setup.convergence_detail = Some(ConvergenceDetail {
+            institutional_alignment: dec!(0.32),
+            sector_coherence: Some(dec!(0.28)),
+            cross_stock_correlation: dec!(0.36),
+            component_spread: None,
+            edge_stability: None,
+        });
+
+        h.push(make_record(
+            1,
+            "AAPL.US",
+            dec!(180),
+            vec![hyp],
+            vec![setup],
+            UsMarketRegimeBias::Neutral,
+        ));
+        h.push(make_record(
+            6,
+            "AAPL.US",
+            dec!(190),
+            vec![],
+            vec![],
+            UsMarketRegimeBias::Neutral,
+        ));
+
+        let outcomes = compute_us_resolved_topology_outcomes(&h, 5);
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].setup_id, "setup1");
+        assert_eq!(outcomes[0].symbol, sym("AAPL.US"));
+        assert!(outcomes[0].net_return > Decimal::ZERO);
+        assert_eq!(
+            outcomes[0].convergence_detail.cross_stock_correlation,
+            dec!(0.36)
         );
     }
 

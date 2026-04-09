@@ -31,6 +31,10 @@ impl UsTickHistory {
         self.records.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
     pub fn latest(&self) -> Option<&UsTickRecord> {
         self.records.back()
     }
