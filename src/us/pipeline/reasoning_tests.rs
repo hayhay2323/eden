@@ -431,6 +431,7 @@ fn convergence_hypothesis_emerges_from_us_diffusion_topology() {
                 to: ReasoningScope::Symbol(sym("BABA.US")),
                 mechanism: "cross-market diffusion".into(),
                 confidence: dec!(0.55),
+                polarity: 1,
                 references: vec![],
             }],
         },
@@ -443,6 +444,7 @@ fn convergence_hypothesis_emerges_from_us_diffusion_topology() {
                 to: ReasoningScope::Symbol(sym("BABA.US")),
                 mechanism: "sector diffusion".into(),
                 confidence: dec!(0.50),
+                polarity: 1,
                 references: vec![],
             }],
         },
@@ -495,6 +497,7 @@ fn convergence_hypothesis_requires_three_us_channels() {
             to: ReasoningScope::Symbol(sym("BABA.US")),
             mechanism: "cross-market diffusion".into(),
             confidence: dec!(0.52),
+            polarity: 1,
             references: vec![],
         }],
     }];
@@ -533,6 +536,7 @@ fn latent_vortex_emerges_before_convergence_is_strong_enough() {
             to: ReasoningScope::Symbol(sym("BABA.US")),
             mechanism: "sector diffusion".into(),
             confidence: dec!(0.50),
+            polarity: 1,
             references: vec![],
         }],
     }];

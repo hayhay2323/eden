@@ -516,6 +516,7 @@ fn backward_reasoning_demotes_leading_cause_when_contradiction_pressure_rises() 
             to: ReasoningScope::Symbol(sym("700.HK")),
             mechanism: "market stress concentration".into(),
             confidence: dec!(0.62),
+            polarity: 1,
             references: vec!["graph_stress".into()],
         }],
     };
@@ -528,6 +529,7 @@ fn backward_reasoning_demotes_leading_cause_when_contradiction_pressure_rises() 
             to: ReasoningScope::Symbol(sym("700.HK")),
             mechanism: "sector_symbol_spillover".into(),
             confidence: dec!(0.58),
+            polarity: 1,
             references: vec!["sector:tech".into()],
         }],
     };

@@ -147,6 +147,7 @@ mod tests {
                 to: ReasoningScope::Symbol(Symbol(to.into())),
                 mechanism: "diffusion".into(),
                 confidence,
+                polarity: if confidence.is_sign_negative() { -1 } else { 1 },
                 references: vec![],
             }],
         }

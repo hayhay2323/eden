@@ -339,6 +339,7 @@ mod tests {
                     to: crate::ontology::reasoning::ReasoningScope::Symbol(symbol("BABA.US")),
                     mechanism: "cross-market diffusion".into(),
                     confidence: dec!(0.55),
+                    polarity: 1,
                     references: vec![],
                 },
                 PropagationStep {
@@ -346,6 +347,7 @@ mod tests {
                     to: crate::ontology::reasoning::ReasoningScope::Symbol(symbol("PDD.US")),
                     mechanism: "stock diffusion".into(),
                     confidence: dec!(0.50),
+                    polarity: 1,
                     references: vec![],
                 },
             ],
