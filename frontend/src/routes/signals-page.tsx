@@ -1,40 +1,82 @@
-import { Card } from "@blueprintjs/core";
-
-const signalModules = [
-  {
-    title: "Depth ladder",
-    note: "L2 imbalance, spread changes, top-level concentration, and liquidity walls.",
-  },
-  {
-    title: "Flow tape",
-    note: "Trade bursts, directional flow, acceleration, and pressure persistence.",
-  },
-  {
-    title: "Sector rotation",
-    note: "Cross-symbol flow clusters, regime drift, and propagation anomalies.",
-  },
-];
+import { ObjectInspectorPanel } from "@/features/desk/object-inspector-panel";
+import { SignalsControls } from "@/features/signals/signals-controls";
+import {
+  MacroEventBoard,
+  SectorFlowBoard,
+  SymbolBoard,
+} from "@/features/signals/signals-sections";
+import { useSignalsView } from "@/features/signals/use-signals-view";
+import { SelectionHint, SurfaceKpi } from "@/features/workbench/surface-support";
+import { useOperationalSnapshot } from "@/lib/query/operational";
+import { useShellStore } from "@/state/shell-store";
 
 export function SignalsPage() {
+  const { data: snap, status } = useOperationalSnapshot();
+  const selectedObject = useShellStore((s) => s.selectedObject);
+
+  if (status === "pending") {
+    return <div className="eden-loading">Loading signals...</div>;
+  }
+
+  if (status === "error" || !snap) {
+    return <div className="eden-loading">Connection failed</div>;
+  }
+
+  const {
+    sortKey,
+    setSortKey,
+    filterSector,
+    setFilterSector,
+    symbols,
+    sectors,
+    sectorSupport,
+  } = useSignalsView(snap);
+
   return (
-    <div className="stage-grid stage-grid--single">
-      <Card className="stage-card" elevation={0}>
-        <div className="section-eyebrow">Signals</div>
-        <h1>Liquidity and signal modules</h1>
-        <p className="page-intro">
-          This route is reserved for the high-density market surfaces that actually justify the
-          shell.
-        </p>
-        <div className="module-grid">
-          {signalModules.map((module) => (
-            <article key={module.title} className="module-card module-card--signal">
-              <div className="module-card__eyebrow">Signal surface</div>
-              <h3>{module.title}</h3>
-              <p>{module.note}</p>
-            </article>
-          ))}
+    <div className="eden-surface-layout">
+      <div className="eden-surface-layout__main">
+        <div className="eden-grid eden-grid--4 eden-section-space">
+          <SurfaceKpi label="Symbols" value={String(symbols.length)} tone="var(--eden-blue)" />
+          <SurfaceKpi label="Sectors" value={String(sectors.length)} tone="var(--eden-amber)" />
+          <SurfaceKpi
+            label="Macro"
+            value={String(snap.macro_events.length)}
+            tone="var(--eden-purple)"
+          />
+          <SurfaceKpi
+            label="Flows"
+            value={String(snap.sidecars.sector_flows.length)}
+            tone="var(--eden-cyan)"
+          />
         </div>
-      </Card>
+
+        <div className="eden-grid eden-grid--2-1 eden-section-space">
+          <SectorFlowBoard flows={snap.sidecars.sector_flows} sectorSupport={sectorSupport} />
+          <MacroEventBoard events={snap.macro_events} symbolRows={symbols} />
+        </div>
+
+        <SignalsControls
+          sortKey={sortKey}
+          setSortKey={setSortKey}
+          filterSector={filterSector}
+          setFilterSector={setFilterSector}
+          sectors={sectors}
+        />
+
+        <SymbolBoard symbols={symbols} />
+      </div>
+
+      <div className="eden-surface-layout__side">
+        {selectedObject ? (
+          <ObjectInspectorPanel />
+        ) : (
+          <SelectionHint
+            eyebrow="Signals"
+            title="Select a symbol or macro event"
+            body="Signals is now anchored on sectors, macro, and symbols. Open any row to inspect navigation, history, and graph context without leaving the signal board."
+          />
+        )}
+      </div>
     </div>
   );
 }

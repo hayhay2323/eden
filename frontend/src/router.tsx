@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-router";
 
 import { AppShell } from "@/shell/app-shell";
+import { RootRouteErrorState, RouteErrorState } from "@/shell/router-error-state";
 import { DeskPage } from "@/routes/desk-page";
 import { WorkspacePage } from "@/routes/workspace-page";
 import { SignalsPage } from "@/routes/signals-page";
@@ -22,24 +23,28 @@ const rootRoute = createRootRouteWithContext<RouterContext>()({
       <Outlet />
     </AppShell>
   ),
+  errorComponent: RootRouteErrorState,
 });
 
 const deskRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: DeskPage,
+  errorComponent: RouteErrorState,
 });
 
 const workspaceRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/workspace",
   component: WorkspacePage,
+  errorComponent: RouteErrorState,
 });
 
 const signalsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/signals",
   component: SignalsPage,
+  errorComponent: RouteErrorState,
 });
 
 const routeTree = rootRoute.addChildren([deskRoute, workspaceRoute, signalsRoute]);
