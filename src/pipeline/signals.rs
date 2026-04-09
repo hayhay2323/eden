@@ -919,9 +919,17 @@ mod tests {
         let snapshot =
             EventSnapshot::detect(&history, 1, &links, &dimensions, &insights, &decision);
 
-        assert!(snapshot.events.iter().any(|event| {
-            matches!(event.value.kind, MarketEventKind::CompositeAcceleration)
-                && matches!(event.value.scope, SignalScope::Sector(_))
-        }));
+        // Corroborated pressures (700.HK and 9988.HK above median) emit
+        // SmartMoneyPressure events at the symbol level.
+        let pressure_events: Vec<_> = snapshot
+            .events
+            .iter()
+            .filter(|event| matches!(event.value.kind, MarketEventKind::SmartMoneyPressure))
+            .collect();
+        assert!(
+            pressure_events.len() >= 2,
+            "expected at least 2 SmartMoneyPressure events for the corroborated symbols, got {}",
+            pressure_events.len()
+        );
     }
 }

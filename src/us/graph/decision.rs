@@ -24,16 +24,20 @@ pub use convergence::UsConvergenceScore;
 pub use regime::{UsMarketRegimeBias, UsMarketRegimeFilter};
 pub use scorecard::{
     ProvenanceMetadata, UsOrderDirection, UsOrderSuggestion, UsSignalRecord, UsSignalScorecard,
+    UsSignalScorecardAccumulator,
 };
 pub use snapshot::UsDecisionSnapshot;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::edge_learning::{EdgeKey, EdgeLearningLedger};
     use crate::ontology::objects::SectorId;
+    use crate::pipeline::reasoning::ConvergenceDetail;
     use crate::us::pipeline::dimensions::{UsDimensionSnapshot, UsSymbolDimensions};
     use rust_decimal_macros::dec;
     use std::collections::HashMap;
+    use time::OffsetDateTime;
 
     fn sym(s: &str) -> Symbol {
         Symbol(s.into())
@@ -74,7 +78,7 @@ mod tests {
             sym("AAPL.US"),
             make_dims(dec!(0.3), dec!(0.5), dec!(0.2), dec!(0.1), dec!(0.4)),
         )]);
-        let score = UsConvergenceScore::compute(&sym("AAPL.US"), &g, &[]).unwrap();
+        let score = UsConvergenceScore::compute(&sym("AAPL.US"), &g, &[], None).unwrap();
         assert!(score.dimension_composite > Decimal::ZERO);
         assert!(score.composite > Decimal::ZERO);
         assert!(score.cross_market_propagation.is_none());
@@ -95,7 +99,7 @@ mod tests {
             time_since_hk_close_minutes: 0,
             propagation_confidence: dec!(0.6),
         }];
-        let score = UsConvergenceScore::compute(&sym("BABA.US"), &g, &cm_signals).unwrap();
+        let score = UsConvergenceScore::compute(&sym("BABA.US"), &g, &cm_signals, None).unwrap();
         assert_eq!(score.cross_market_propagation, Some(dec!(0.6)));
         assert!(score.composite > score.dimension_composite);
     }
@@ -115,7 +119,7 @@ mod tests {
             time_since_hk_close_minutes: 0,
             propagation_confidence: dec!(0.6),
         }];
-        let score = UsConvergenceScore::compute(&sym("TSLA.US"), &g, &cm_signals).unwrap();
+        let score = UsConvergenceScore::compute(&sym("TSLA.US"), &g, &cm_signals, None).unwrap();
         assert!(score.cross_market_propagation.is_none());
     }
 
@@ -136,7 +140,7 @@ mod tests {
             (sym("MSFT.US"), SectorId("tech".into())),
         ]);
         let g = UsGraph::compute(&snap, &sector_map, &HashMap::new());
-        let score = UsConvergenceScore::compute(&sym("AAPL.US"), &g, &[]).unwrap();
+        let score = UsConvergenceScore::compute(&sym("AAPL.US"), &g, &[], None).unwrap();
         assert!(score.sector_coherence.is_some());
     }
 
@@ -146,15 +150,63 @@ mod tests {
             sym("AAPL.US"),
             make_dims(dec!(0), dec!(0), dec!(0), dec!(0), dec!(0)),
         )]);
-        let score = UsConvergenceScore::compute(&sym("AAPL.US"), &g, &[]).unwrap();
+        let score = UsConvergenceScore::compute(&sym("AAPL.US"), &g, &[], None).unwrap();
         assert_eq!(score.composite, Decimal::ZERO);
     }
 
     #[test]
     fn convergence_missing_symbol() {
         let g = make_graph(vec![]);
-        let score = UsConvergenceScore::compute(&sym("AAPL.US"), &g, &[]);
+        let score = UsConvergenceScore::compute(&sym("AAPL.US"), &g, &[], None);
         assert!(score.is_none());
+    }
+
+    #[test]
+    fn convergence_respects_learned_stock_edge_multiplier() {
+        // A sector_map is required so the graph creates stock-to-stock edges.
+        let snap = make_snapshot(vec![
+            (
+                sym("AAPL.US"),
+                make_dims(dec!(0.1), dec!(0.2), dec!(0.2), dec!(0.0), dec!(0.1)),
+            ),
+            (
+                sym("MSFT.US"),
+                make_dims(dec!(0.8), dec!(0.8), dec!(0.7), dec!(0.1), dec!(0.2)),
+            ),
+        ]);
+        let sector_map = HashMap::from([
+            (sym("AAPL.US"), SectorId("tech".into())),
+            (sym("MSFT.US"), SectorId("tech".into())),
+        ]);
+        let g = UsGraph::compute(&snap, &sector_map, &HashMap::new());
+        let baseline = UsConvergenceScore::compute(&sym("AAPL.US"), &g, &[], None)
+            .expect("baseline convergence");
+
+        let mut ledger = EdgeLearningLedger::default();
+        let edge_key = EdgeKey::StockToStock {
+            a: sym("AAPL.US"),
+            b: sym("MSFT.US"),
+        };
+        ledger.credit_from_outcome(
+            &sym("AAPL.US"),
+            dec!(0.05),
+            &ConvergenceDetail {
+                institutional_alignment: dec!(0.1),
+                sector_coherence: Some(dec!(0.1)),
+                cross_stock_correlation: dec!(0.8),
+                component_spread: None,
+                edge_stability: None,
+            },
+            OffsetDateTime::UNIX_EPOCH,
+            &[],
+            &[edge_key],
+            None,
+        );
+
+        let learned = UsConvergenceScore::compute(&sym("AAPL.US"), &g, &[], Some(&ledger))
+            .expect("learned convergence");
+        assert!(learned.cross_stock_correlation > baseline.cross_stock_correlation);
+        assert!(learned.composite > baseline.composite);
     }
 
     #[test]
@@ -212,7 +264,7 @@ mod tests {
             sym("AAPL.US"),
             make_dims(dec!(0.3), dec!(0.5), dec!(0.2), dec!(0.1), dec!(0.4)),
         )]);
-        let snap = UsDecisionSnapshot::compute(&g, &[], 1);
+        let snap = UsDecisionSnapshot::compute(&g, &[], 1, None);
         assert_eq!(snap.order_suggestions.len(), 1);
         let s = &snap.order_suggestions[0];
         assert_eq!(s.symbol, sym("AAPL.US"));
@@ -228,7 +280,7 @@ mod tests {
             sym("AAPL.US"),
             make_dims(dec!(0), dec!(0), dec!(0), dec!(0), dec!(0)),
         )]);
-        let snap = UsDecisionSnapshot::compute(&g, &[], 1);
+        let snap = UsDecisionSnapshot::compute(&g, &[], 1, None);
         assert!(snap.order_suggestions.is_empty());
     }
 
@@ -238,7 +290,7 @@ mod tests {
             sym("NVDA.US"),
             make_dims(dec!(-0.4), dec!(-0.6), dec!(-0.3), dec!(-0.2), dec!(-0.1)),
         )]);
-        let snap = UsDecisionSnapshot::compute(&g, &[], 5);
+        let snap = UsDecisionSnapshot::compute(&g, &[], 5, None);
         let s = &snap.order_suggestions[0];
         assert_eq!(s.direction, UsOrderDirection::Sell);
     }
@@ -258,7 +310,7 @@ mod tests {
             time_since_hk_close_minutes: 0,
             propagation_confidence: dec!(0.5),
         }];
-        let snap = UsDecisionSnapshot::compute(&g, &cm, 10);
+        let snap = UsDecisionSnapshot::compute(&g, &cm, 10, None);
         let s = snap
             .order_suggestions
             .iter()

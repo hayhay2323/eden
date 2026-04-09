@@ -260,11 +260,10 @@ fn reasoning_snapshot_builds_open_hypothesis_and_setup() {
     assert!(!reasoning.case_clusters.is_empty());
     // With convergence superseding, strong convergence may skip template hypotheses.
     // Either a convergence hypothesis OR a template hypothesis should exist.
-    assert!(reasoning
-        .hypotheses
-        .iter()
-        .any(|hypothesis| hypothesis.statement.contains("directed flow repricing")
-            || hypothesis.family_key == "convergence_hypothesis"));
+    assert!(reasoning.hypotheses.iter().any(|hypothesis| hypothesis
+        .statement
+        .contains("directed flow repricing")
+        || hypothesis.family_key == "convergence_hypothesis"));
     let mut ranked = reasoning
         .hypotheses
         .iter()
@@ -322,7 +321,14 @@ fn family_alpha_gate_blocks_negative_risk_repricing_hypotheses() {
         "neutral",
     );
 
-    let hypotheses = derive_hypotheses(&events, &signals, &[], Some(&gate), &AbsenceMemory::default(), None);
+    let hypotheses = derive_hypotheses(
+        &events,
+        &signals,
+        &[],
+        Some(&gate),
+        &AbsenceMemory::default(),
+        None,
+    );
 
     assert!(hypotheses
         .iter()
@@ -348,7 +354,14 @@ fn catalyst_activation_emits_catalyst_repricing_hypothesis() {
         signals: vec![],
     };
 
-    let hypotheses = derive_hypotheses(&events, &signals, &[], None, &AbsenceMemory::default(), None);
+    let hypotheses = derive_hypotheses(
+        &events,
+        &signals,
+        &[],
+        None,
+        &AbsenceMemory::default(),
+        None,
+    );
 
     assert!(hypotheses
         .iter()
@@ -452,7 +465,14 @@ fn convergence_hypothesis_emerges_from_vortex_topology() {
         },
     ];
 
-    let hypotheses = derive_hypotheses(&events, &signals, &paths, None, &AbsenceMemory::default(), None);
+    let hypotheses = derive_hypotheses(
+        &events,
+        &signals,
+        &paths,
+        None,
+        &AbsenceMemory::default(),
+        None,
+    );
     let convergence = hypotheses
         .iter()
         .find(|hypothesis| {
@@ -518,8 +538,75 @@ fn convergence_hypothesis_requires_three_channels() {
         }],
     }];
 
-    let hypotheses = derive_hypotheses(&events, &signals, &paths, None, &AbsenceMemory::default(), None);
+    let hypotheses = derive_hypotheses(
+        &events,
+        &signals,
+        &paths,
+        None,
+        &AbsenceMemory::default(),
+        None,
+    );
 
+    assert!(hypotheses
+        .iter()
+        .all(|hypothesis| hypothesis.family_key != "convergence_hypothesis"));
+}
+
+#[test]
+fn latent_vortex_emerges_before_named_family_exists() {
+    let symbol_scope = sym("700.HK");
+    let events = EventSnapshot {
+        timestamp: OffsetDateTime::UNIX_EPOCH,
+        events: vec![Event::new(
+            MarketEventRecord {
+                scope: SignalScope::Symbol(symbol_scope.clone()),
+                kind: MarketEventKind::InstitutionalFlip,
+                magnitude: dec!(0.40),
+                summary: "institution flipped".into(),
+            },
+            prov("event:flip"),
+        )],
+    };
+    let signals = DerivedSignalSnapshot {
+        timestamp: OffsetDateTime::UNIX_EPOCH,
+        signals: vec![DerivedSignal::new(
+            DerivedSignalRecord {
+                scope: SignalScope::Symbol(symbol_scope.clone()),
+                kind: DerivedSignalKind::Convergence,
+                strength: dec!(0.30),
+                summary: "convergence".into(),
+            },
+            prov("signal:convergence"),
+        )],
+    };
+    let paths = vec![PropagationPath {
+        path_id: "path:sector".into(),
+        summary: "sector pressure may diffuse into 700.HK".into(),
+        confidence: dec!(0.50),
+        steps: vec![PropagationStep {
+            from: ReasoningScope::Sector(SectorId("tech".into())),
+            to: ReasoningScope::Symbol(symbol_scope.clone()),
+            mechanism: "sector spillover".into(),
+            confidence: dec!(0.50),
+            references: vec![],
+        }],
+    }];
+
+    let hypotheses = derive_hypotheses(
+        &events,
+        &signals,
+        &paths,
+        None,
+        &AbsenceMemory::default(),
+        None,
+    );
+    let latent = hypotheses
+        .iter()
+        .find(|hypothesis| hypothesis.family_key == "latent_vortex")
+        .expect("latent vortex hypothesis");
+
+    assert!(latent.statement.contains("topology-first vortex"));
+    assert_eq!(latent.propagation_path_ids, vec!["path:sector"]);
     assert!(hypotheses
         .iter()
         .all(|hypothesis| hypothesis.family_key != "convergence_hypothesis"));
@@ -733,6 +820,159 @@ fn learned_vortex_pattern_feedback_promotes_convergence_hypothesis() {
 }
 
 #[test]
+fn learned_vortex_pattern_feedback_also_promotes_latent_vortex() {
+    let symbol_scope = sym("700.HK");
+    let latent_vortex = Hypothesis {
+        hypothesis_id: "hyp:700.HK:latent_vortex".into(),
+        family_key: "latent_vortex".into(),
+        family_label: "Latent Vortex".into(),
+        provenance: prov("hyp:700.HK:latent").with_note(
+            "family=Latent Vortex; vortex_strength=0.34; channel_diversity=2; coherence=0.68",
+        ),
+        scope: ReasoningScope::Symbol(symbol_scope.clone()),
+        statement: "700.HK is forming a topology-first vortex".into(),
+        confidence: dec!(0.45),
+        local_support_weight: dec!(0.35),
+        local_contradict_weight: Decimal::ZERO,
+        propagated_support_weight: dec!(0.18),
+        propagated_contradict_weight: Decimal::ZERO,
+        evidence: vec![],
+        invalidation_conditions: vec![],
+        propagation_path_ids: vec!["path:700".into()],
+        expected_observations: vec![],
+    };
+    let decision = DecisionSnapshot {
+        timestamp: OffsetDateTime::UNIX_EPOCH,
+        convergence_scores: HashMap::from([(
+            symbol_scope.clone(),
+            ConvergenceScore {
+                symbol: symbol_scope.clone(),
+                institutional_alignment: dec!(0.32),
+                sector_coherence: Some(dec!(0.22)),
+                cross_stock_correlation: dec!(0.14),
+                composite: dec!(0.24),
+                edge_stability: None,
+                institutional_edge_age: None,
+                new_edge_fraction: None,
+                microstructure_confirmation: None,
+                component_spread: None,
+                temporal_weight: None,
+            },
+        )]),
+        market_regime: MarketRegimeFilter::neutral(),
+        order_suggestions: vec![],
+        degradations: HashMap::new(),
+    };
+    let events = EventSnapshot {
+        timestamp: OffsetDateTime::UNIX_EPOCH,
+        events: vec![],
+    };
+    let insights = GraphInsights {
+        pressures: vec![],
+        rotations: vec![],
+        clusters: vec![],
+        conflicts: vec![],
+        inst_rotations: vec![],
+        inst_exoduses: vec![],
+        shared_holders: vec![],
+        stress: MarketStressIndex {
+            sector_synchrony: Decimal::ZERO,
+            pressure_consensus: Decimal::ZERO,
+            conflict_intensity_mean: Decimal::ZERO,
+            market_temperature_stress: Decimal::ZERO,
+            composite_stress: Decimal::ZERO,
+        },
+        institution_stock_counts: HashMap::new(),
+        edge_profiles: vec![],
+    };
+    let mut reasoning = ReasoningSnapshot {
+        timestamp: OffsetDateTime::UNIX_EPOCH,
+        hypotheses: vec![latent_vortex.clone()],
+        propagation_paths: vec![PropagationPath {
+            path_id: "path:700".into(),
+            summary: "latent path".into(),
+            confidence: dec!(0.35),
+            steps: vec![],
+        }],
+        investigation_selections: vec![],
+        tactical_setups: vec![],
+        hypothesis_tracks: vec![],
+        case_clusters: vec![],
+    };
+    let world_state = crate::ontology::world::WorldStateSnapshot {
+        timestamp: OffsetDateTime::UNIX_EPOCH,
+        entities: vec![],
+        vortices: vec![crate::ontology::world::Vortex {
+            vortex_id: "vortex:700.HK".into(),
+            center_entity_id: "world:setup:700.HK".into(),
+            center_scope: ReasoningScope::Symbol(symbol_scope.clone()),
+            layer: crate::ontology::world::WorldLayer::Leaf,
+            flow_paths: vec![
+                crate::ontology::world::FlowPath {
+                    source_entity_id: "edge:1".into(),
+                    source_scope: ReasoningScope::Symbol(sym("9988.HK")),
+                    channel: "broker_flow".into(),
+                    weight: dec!(0.22),
+                    polarity: crate::ontology::world::FlowPolarity::Confirming,
+                },
+                crate::ontology::world::FlowPath {
+                    source_entity_id: "edge:2".into(),
+                    source_scope: ReasoningScope::Sector(SectorId("tech".into())),
+                    channel: "propagation".into(),
+                    weight: dec!(0.18),
+                    polarity: crate::ontology::world::FlowPolarity::Confirming,
+                },
+            ],
+            strength: dec!(0.24),
+            channel_diversity: 2,
+            coherence: dec!(0.54),
+            narrative: None,
+        }],
+    };
+    let patterns = vec![crate::temporal::lineage::VortexSuccessPattern {
+        center_kind: "symbol".into(),
+        role: "center".into(),
+        channel_signature: "broker_flow|propagation".into(),
+        dominant_channels: vec!["broker_flow".into(), "propagation".into()],
+        top_family: "Latent Vortex".into(),
+        samples: 3,
+        mean_net_return: dec!(0.03),
+        mean_strength: dec!(0.36),
+        mean_coherence: dec!(0.66),
+        mean_channel_diversity: dec!(2),
+    }];
+
+    let changed = apply_vortex_success_pattern_feedback(
+        &mut reasoning,
+        &decision,
+        &events,
+        &insights,
+        &[],
+        &[],
+        &[],
+        None,
+        None,
+        None,
+        &patterns,
+        &world_state,
+    );
+
+    assert!(changed);
+    let boosted = reasoning
+        .hypotheses
+        .iter()
+        .find(|hypothesis| hypothesis.hypothesis_id == latent_vortex.hypothesis_id)
+        .expect("boosted latent vortex");
+    assert!(boosted.confidence > latent_vortex.confidence);
+    assert!(boosted
+        .provenance
+        .note
+        .as_deref()
+        .unwrap_or_default()
+        .contains("matched_success_pattern="));
+}
+
+#[test]
 fn shared_symbol_hypotheses_are_capped_to_top_three() {
     let symbol_scope = sym("700.HK");
     let events = EventSnapshot {
@@ -874,7 +1114,14 @@ fn shared_symbol_hypotheses_are_capped_to_top_three() {
         },
     ];
 
-    let hypotheses = derive_hypotheses(&events, &signals, &paths, None, &AbsenceMemory::default(), None);
+    let hypotheses = derive_hypotheses(
+        &events,
+        &signals,
+        &paths,
+        None,
+        &AbsenceMemory::default(),
+        None,
+    );
     let symbol_hypotheses = hypotheses
         .iter()
         .filter(|hypothesis| hypothesis.scope == ReasoningScope::Symbol(symbol_scope.clone()))
@@ -2548,7 +2795,14 @@ fn sustained_underperformer_is_blocked_by_alpha_gate() {
         "neutral",
     );
 
-    let hypotheses = derive_hypotheses(&events, &signals, &[], Some(&gate), &AbsenceMemory::default(), None);
+    let hypotheses = derive_hypotheses(
+        &events,
+        &signals,
+        &[],
+        Some(&gate),
+        &AbsenceMemory::default(),
+        None,
+    );
     assert!(
         hypotheses
             .iter()
@@ -2600,12 +2854,12 @@ fn tiered_lineage_prior_classifies_sustained_underperformance() {
 fn alpha_boost_rewards_proven_families() {
     use super::policy::compute_alpha_boost_for_test;
 
-    // Cold start — not enough data
+    // Cold start — not enough data (resolved < 5)
     let cold = FamilyContextLineageOutcome {
         family: "Momentum Shift".into(),
         session: "morning".into(),
         market_regime: "neutral".into(),
-        resolved: 10,
+        resolved: 3,
         mean_net_return: dec!(0.02),
         follow_through_rate: dec!(0.60),
         invalidation_rate: dec!(0.10),
@@ -2649,8 +2903,8 @@ fn alpha_boost_rewards_proven_families() {
     let big_boost = compute_alpha_boost_for_test(&champion);
     assert_eq!(
         big_boost,
-        dec!(1.0),
-        "champion family with 120 resolved and strong stats should get maximum boost"
+        dec!(1.5),
+        "elite family with 120 resolved and strong stats should get maximum boost"
     );
 
     // Negative family — no boost
@@ -2949,17 +3203,15 @@ fn strong_convergence_supersedes_template_hypotheses() {
     };
     let signals = DerivedSignalSnapshot {
         timestamp: OffsetDateTime::UNIX_EPOCH,
-        signals: vec![
-            DerivedSignal::new(
-                DerivedSignalRecord {
-                    scope: SignalScope::Symbol(sym("700.HK")),
-                    kind: DerivedSignalKind::Convergence,
-                    strength: dec!(0.8),
-                    summary: "strong convergence".into(),
-                },
-                crate::ontology::domain::ProvenanceMetadata::default(),
-            ),
-        ],
+        signals: vec![DerivedSignal::new(
+            DerivedSignalRecord {
+                scope: SignalScope::Symbol(sym("700.HK")),
+                kind: DerivedSignalKind::Convergence,
+                strength: dec!(0.8),
+                summary: "strong convergence".into(),
+            },
+            crate::ontology::domain::ProvenanceMetadata::default(),
+        )],
     };
     let paths = vec![
         PropagationPath {

@@ -466,13 +466,15 @@ fn wake_suggested_tools_prefer_primary_surfaces_before_compat_queries() {
         .iter()
         .map(|item| item.tool.as_str())
         .collect::<Vec<_>>();
+    // After sort + truncate(6), only the top-ranked primary tools survive.
+    // symbol_contract (rank 7) and sector_flow (rank 10) are pushed out.
     assert!(names.contains(&"market_session"));
-    assert!(names.contains(&"symbol_contract"));
-    assert!(names.contains(&"sector_flow"));
-    assert!(
-        names.iter().position(|item| *item == "transitions_since")
-            < names.iter().position(|item| *item == "symbol_contract")
-    );
+    assert!(names.contains(&"investigations"));
+    assert!(names.contains(&"judgments"));
+    assert!(names.contains(&"recommendations"));
+    assert!(names.contains(&"watchlist"));
+    assert!(names.contains(&"transitions_since"));
+    assert_eq!(names.len(), 6);
 }
 
 #[test]
@@ -1204,7 +1206,7 @@ fn build_session_creates_thread_from_investigation_without_judgment() {
     assert_eq!(session.active_threads[0].status, "escalated");
     assert_eq!(
         session.active_threads[0].headline.as_deref(),
-        Some("700.HK is queued for review_desk in Peer Relay")
+        Some("700.HK is queued for review_desk (Peer Relay)")
     );
     assert_eq!(session.active_threads[0].workflow_stage, None);
     assert_eq!(
