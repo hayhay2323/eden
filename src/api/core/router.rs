@@ -364,12 +364,12 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
     let api_routes = api_routes.route("/coordinator/snapshot", get(get_coordinator_snapshot));
 
     let api_routes = api_routes
+        .route("/health/report", get(health_report))
         .with_state(state)
         .layer(middleware::from_fn_with_state(auth_state, require_api_key));
 
     Ok(Router::new()
         .route("/health", get(health))
-        .route("/health/report", get(health_report))
         .nest("/api", api_routes)
         .with_state(root_state)
         .layer(middleware::from_fn(audit_request))

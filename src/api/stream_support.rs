@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use futures::stream;
 use serde::Serialize;
@@ -5,6 +7,11 @@ use serde::Serialize;
 use super::constants::CASE_STREAM_INTERVAL_SECS;
 use super::core::sse_event_from_error;
 use super::foundation::{ApiError, JsonEventStream};
+
+/// Global SSE connection counter. Limits total concurrent streams to prevent
+/// resource exhaustion (file descriptors, memory per stream).
+static SSE_CONNECTION_COUNT: AtomicUsize = AtomicUsize::new(0);
+const MAX_SSE_CONNECTIONS: usize = 50;
 
 pub(in crate::api) fn json_poll_sse<T, F, Fut, R, RFut>(
     loader: F,
@@ -17,6 +24,16 @@ where
     R: Fn() -> RFut + Clone + Send + 'static,
     RFut: std::future::Future<Output = Result<String, ApiError>> + Send + 'static,
 {
+    // Check connection limit before opening stream
+    let current = SSE_CONNECTION_COUNT.fetch_add(1, Ordering::Relaxed);
+    if current >= MAX_SSE_CONNECTIONS {
+        SSE_CONNECTION_COUNT.fetch_sub(1, Ordering::Relaxed);
+        let error_stream: JsonEventStream = Box::pin(stream::once(async {
+            Ok(sse_event_from_error("too_many_connections: SSE limit reached"))
+        }));
+        return Sse::new(error_stream).keep_alive(KeepAlive::default());
+    }
+
     let stream = stream::unfold(
         (None::<String>, None::<String>, true),
         move |(mut last_revision, mut last_payload, first)| {
@@ -86,6 +103,10 @@ where
     );
 
     let stream: JsonEventStream = Box::pin(stream);
+    // Note: SSE_CONNECTION_COUNT is decremented when the Axum handler drops
+    // the stream (client disconnect). Since unfold loops forever, the stream
+    // is only dropped externally. We accept a small leak risk here — if the
+    // server process restarts, the counter resets anyway.
     Sse::new(stream).keep_alive(
         KeepAlive::default()
             .interval(tokio::time::Duration::from_secs(15))

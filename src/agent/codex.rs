@@ -100,6 +100,20 @@ pub async fn run_codex_cli_analysis(
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
+        // Validate api_base: only allow known provider URLs or localhost
+        let is_allowed = api_base.starts_with("http://localhost")
+            || api_base.starts_with("http://127.0.0.1")
+            || api_base.starts_with("https://api.openai.com")
+            || api_base.starts_with("https://api.anthropic.com")
+            || api_base.starts_with("https://api.together.xyz")
+            || api_base.starts_with("https://api.groq.com")
+            || api_base.starts_with("https://generativelanguage.googleapis.com");
+        if !is_allowed {
+            return Err(format!(
+                "api_base '{}' is not in the allowed provider list",
+                api_base
+            ));
+        }
         command.arg("--api-base").arg(api_base);
     }
     command.arg("--workspace").arg(workspace.as_os_str());
