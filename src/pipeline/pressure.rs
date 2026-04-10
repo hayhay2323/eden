@@ -142,6 +142,19 @@ pub struct ScaledPressure {
     pub pressures: HashMap<Symbol, NodePressure>,
 }
 
+#[derive(Debug, Clone)]
+struct EdgeAttribution {
+    edge_key: EdgeKey,
+    net_pressure: Decimal,
+    magnitude: Decimal,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PropagationResult {
+    propagated: HashMap<Symbol, HashMap<PressureChannel, Decimal>>,
+    edge_attributions: HashMap<Symbol, Vec<EdgeAttribution>>,
+}
+
 // ── The Pressure Field ──
 
 /// Anomaly at a node: how much current pressure deviates from baseline.
@@ -157,26 +170,6 @@ pub struct PressureAnomaly {
     pub channel_deviations: HashMap<PressureChannel, Decimal>,
 }
 
-/// A vortex snapshot waiting to be evaluated against future prices.
-#[derive(Debug, Clone)]
-pub struct PendingVortex {
-    pub symbol: Symbol,
-    pub direction: Decimal,
-    pub strength: Decimal,
-    pub detected_tick: u64,
-    pub entry_price: Option<Decimal>,
-}
-
-/// Resolved vortex outcome: did the predicted direction play out?
-#[derive(Debug, Clone)]
-pub struct VortexOutcome {
-    pub symbol: Symbol,
-    pub direction: Decimal,
-    pub tension: Decimal,
-    pub return_pct: Decimal,
-    pub correct: bool,
-}
-
 #[derive(Debug, Clone)]
 pub struct PressureField {
     pub timestamp: OffsetDateTime,
@@ -189,10 +182,6 @@ pub struct PressureField {
     pub anomalies: HashMap<Symbol, PressureAnomaly>,
     /// Detected vortices (multi-channel convergence points).
     pub vortices: Vec<PressureVortex>,
-    /// Vortices waiting for outcome evaluation (pending N ticks).
-    pending_vortices: Vec<PendingVortex>,
-    /// Recently resolved vortex outcomes for edge learning.
-    pub recent_outcomes: Vec<VortexOutcome>,
 }
 
 impl PressureField {
@@ -208,8 +197,6 @@ impl PressureField {
             baseline: ScaledPressure::default(),
             anomalies: HashMap::new(),
             vortices: Vec::new(),
-            pending_vortices: Vec::new(),
-            recent_outcomes: Vec::new(),
         }
     }
 
@@ -219,9 +206,10 @@ impl PressureField {
         timestamp: OffsetDateTime,
         dimensions: &HashMap<Symbol, SymbolDimensions>,
         brain: &BrainGraph,
-        edge_ledger: &EdgeLearningLedger,
+        edge_ledger: &mut EdgeLearningLedger,
     ) {
         self.timestamp = timestamp;
+        let hour_before = snapshot_layer_composites(self.layers.get(&TimeScale::Hour));
 
         // 1. Compute instant (tick-scale) pressure from raw dimensions.
         let tick_pressure = compute_local_pressure(dimensions);
@@ -230,7 +218,7 @@ impl PressureField {
         let propagated = propagate_pressure(&tick_pressure, brain, edge_ledger);
 
         // 3. Merge local + propagated into full tick snapshot.
-        let tick_snapshot = merge_pressure(tick_pressure, propagated);
+        let tick_snapshot = merge_pressure(tick_pressure, &propagated.propagated);
 
         // 4. Replace tick layer, accumulate into longer scales.
         self.layers.insert(TimeScale::Tick, tick_snapshot.clone());
@@ -251,6 +239,10 @@ impl PressureField {
         let tick_layer = self.layers.get(&TimeScale::Tick).unwrap();
         let hour_layer = self.layers.get(&TimeScale::Hour).unwrap();
         self.vortices = detect_vortices(tick_layer, hour_layer);
+
+        let hour_after = snapshot_layer_composites(Some(hour_layer));
+        let hour_deltas = compute_hour_deltas(&hour_before, &hour_after, &propagated);
+        self.learn_from_hour_deltas(hour_deltas, &propagated, edge_ledger);
     }
 
     /// US tick: same engine, different data sources and graph topology.
@@ -259,12 +251,14 @@ impl PressureField {
         timestamp: OffsetDateTime,
         dimensions: &HashMap<Symbol, UsSymbolDimensions>,
         graph: &UsGraph,
+        edge_ledger: &mut EdgeLearningLedger,
     ) {
         self.timestamp = timestamp;
+        let hour_before = snapshot_layer_composites(self.layers.get(&TimeScale::Hour));
 
         let tick_pressure = compute_us_local_pressure(dimensions);
-        let propagated = propagate_us_pressure(&tick_pressure, graph);
-        let tick_snapshot = merge_pressure(tick_pressure, propagated);
+        let propagated = propagate_us_pressure(&tick_pressure, graph, edge_ledger);
+        let tick_snapshot = merge_pressure(tick_pressure, &propagated.propagated);
 
         self.layers.insert(TimeScale::Tick, tick_snapshot.clone());
         for scale in &[TimeScale::Minute, TimeScale::Hour, TimeScale::Day] {
@@ -281,121 +275,10 @@ impl PressureField {
         let tick_layer = self.layers.get(&TimeScale::Tick).unwrap();
         let hour_layer = self.layers.get(&TimeScale::Hour).unwrap();
         self.vortices = detect_vortices(tick_layer, hour_layer);
-    }
 
-    /// Record current vortices as pending outcomes. Call after each tick.
-    /// `tick` is the current tick number, `prices` maps symbol → current price.
-    pub fn record_pending_vortices(
-        &mut self,
-        tick: u64,
-        prices: &HashMap<Symbol, Decimal>,
-    ) {
-        const RESOLUTION_LAG: u64 = 10;
-
-        // 1. Resolve pending vortices that are old enough
-        let mut resolved = Vec::new();
-        let old_count = self.pending_vortices.len();
-        self.pending_vortices.retain(|pending| {
-            if tick < pending.detected_tick + RESOLUTION_LAG {
-                return true; // keep — not old enough
-            }
-            let entry_price = match pending.entry_price {
-                Some(p) if p > Decimal::ZERO => p,
-                _ => {
-                    eprintln!("  vortex resolve: {} dropped (no entry price)", pending.symbol.0);
-                    return false;
-                }
-            };
-            let current_price = match prices.get(&pending.symbol) {
-                Some(p) if *p > Decimal::ZERO => *p,
-                _ => {
-                    eprintln!("  vortex resolve: {} dropped (no current price in {} symbols)", pending.symbol.0, prices.len());
-                    return false;
-                }
-            };
-            let return_pct = (current_price - entry_price) / entry_price;
-            let directional_return = if pending.direction >= Decimal::ZERO {
-                return_pct
-            } else {
-                -return_pct
-            };
-            let correct = directional_return > Decimal::new(1, 3); // >0.1% in predicted direction
-
-            resolved.push(VortexOutcome {
-                symbol: pending.symbol.clone(),
-                direction: pending.direction,
-                tension: pending.strength,
-                return_pct: directional_return,
-                correct,
-            });
-            false // remove from pending
-        });
-        if !resolved.is_empty() || self.pending_vortices.len() != old_count {
-            eprintln!(
-                "  vortex learning: resolved={} dropped={} still_pending={} prices={}",
-                resolved.len(),
-                old_count - self.pending_vortices.len() - resolved.len(),
-                self.pending_vortices.len(),
-                prices.len(),
-            );
-        }
-        self.recent_outcomes = resolved;
-
-        // 2. Record new vortices as pending (only strong ones, above anomaly threshold)
-        for vortex in &self.vortices {
-            if vortex.tension.abs() < Decimal::new(2, 2) {
-                continue; // skip weak vortices
-            }
-            // Avoid duplicates: don't re-record if already pending for same symbol
-            if self.pending_vortices.iter().any(|p| p.symbol == vortex.symbol) {
-                continue;
-            }
-            if let Some(&price) = prices.get(&vortex.symbol) {
-                if price > Decimal::ZERO {
-                    // The prediction: hour_direction will win over tick_direction.
-                    // If hour says bearish but tick says bullish → predict DOWN.
-                    // If hour says bullish but tick says bearish → predict UP.
-                    self.pending_vortices.push(PendingVortex {
-                        symbol: vortex.symbol.clone(),
-                        direction: vortex.hour_direction,
-                        strength: vortex.tension,
-                        detected_tick: tick,
-                        entry_price: Some(price),
-                    });
-                }
-            }
-        }
-
-        // 3. Cap pending list
-        if self.pending_vortices.len() > 200 {
-            self.pending_vortices
-                .sort_by(|a, b| b.strength.abs().cmp(&a.strength.abs()));
-            self.pending_vortices.truncate(200);
-        }
-    }
-
-    /// Apply resolved outcomes to edge learning ledger.
-    /// Call after `record_pending_vortices`.
-    pub fn apply_outcomes_to_edges(
-        &self,
-        edge_ledger: &mut EdgeLearningLedger,
-        now: OffsetDateTime,
-    ) {
-        for outcome in &self.recent_outcomes {
-            // Credit = return * strength (stronger vortex predictions carry more weight)
-            let credit = outcome.return_pct * outcome.tension;
-
-            // Credit the stock-to-stock edges involving this symbol
-            let key = EdgeKey::StockToStock {
-                a: outcome.symbol.clone(),
-                b: outcome.symbol.clone(), // self-edge for bookkeeping
-            };
-            let entry = edge_ledger.entry_mut_or_insert(&key, now);
-            entry.total_credit += credit;
-            entry.sample_count += 1;
-            entry.mean_credit = entry.total_credit / Decimal::from(entry.sample_count);
-            entry.last_updated = now;
-        }
+        let hour_after = snapshot_layer_composites(Some(hour_layer));
+        let hour_deltas = compute_hour_deltas(&hour_before, &hour_after, &propagated);
+        self.learn_from_hour_deltas(hour_deltas, &propagated, edge_ledger);
     }
 
     pub fn node_pressure(&self, symbol: &Symbol, scale: TimeScale) -> Option<&NodePressure> {
@@ -416,6 +299,49 @@ impl PressureField {
         });
         ranked.truncate(limit);
         ranked
+    }
+
+    fn learn_from_hour_deltas(
+        &self,
+        hour_deltas: HashMap<Symbol, Decimal>,
+        propagated_pressures: &PropagationResult,
+        edge_ledger: &mut EdgeLearningLedger,
+    ) {
+        let threshold = Decimal::new(1, 4);
+        let noise_debit_scale = Decimal::new(1, 1);
+
+        for (symbol, edge_attributions) in &propagated_pressures.edge_attributions {
+            if edge_attributions.is_empty() {
+                continue;
+            }
+
+            let total_magnitude: Decimal = edge_attributions.iter().map(|edge| edge.magnitude).sum();
+            if total_magnitude <= Decimal::ZERO {
+                continue;
+            }
+
+            let hour_delta = hour_deltas.get(symbol).copied().unwrap_or(Decimal::ZERO);
+            let meaningful_move = hour_delta.abs() >= threshold;
+
+            for edge in edge_attributions {
+                if edge.magnitude <= Decimal::ZERO {
+                    continue;
+                }
+
+                let share = edge.magnitude / total_magnitude;
+                let credit = if meaningful_move {
+                    let alignment = directional_alignment(hour_delta, edge.net_pressure);
+                    if alignment == Decimal::ZERO {
+                        continue;
+                    }
+                    hour_delta.abs() * share * alignment
+                } else {
+                    -(hour_delta.abs().max(threshold) * noise_debit_scale * share)
+                };
+
+                update_edge_credit(edge_ledger, &edge.edge_key, credit, self.timestamp);
+            }
+        }
     }
 }
 
@@ -467,12 +393,13 @@ fn propagate_pressure(
     local: &ScaledPressure,
     brain: &BrainGraph,
     edge_ledger: &EdgeLearningLedger,
-) -> HashMap<Symbol, HashMap<PressureChannel, Decimal>> {
-    let mut received: HashMap<Symbol, HashMap<PressureChannel, Decimal>> = HashMap::new();
+) -> PropagationResult {
+    let mut result = PropagationResult::default();
 
     // For each stock node, look at incoming edges and absorb pressure from neighbors.
     for (symbol, &node_idx) in &brain.stock_nodes {
         let mut channel_acc: HashMap<PressureChannel, (Decimal, Decimal)> = HashMap::new(); // (weighted_sum, weight_total)
+        let mut edge_acc: HashMap<EdgeKey, HashMap<PressureChannel, Decimal>> = HashMap::new();
 
         for edge in brain.graph.edges_directed(node_idx, GraphDirection::Incoming) {
             match edge.weight() {
@@ -494,6 +421,10 @@ fn propagate_pressure(
                     let acc = channel_acc.entry(PressureChannel::Institutional).or_default();
                     acc.0 += direction * weight;
                     acc.1 += weight;
+                    let edge_channel_acc = edge_acc.entry(edge_key).or_default();
+                    *edge_channel_acc
+                        .entry(PressureChannel::Institutional)
+                        .or_default() += direction * weight;
                 }
                 EdgeKind::StockToStock(e) => {
                     // Stock → Stock: propagate all channels from neighbor, weighted by similarity.
@@ -518,8 +449,11 @@ fn propagate_pressure(
                     if let Some(neighbor_pressure) = local.pressures.get(neighbor_symbol) {
                         for (channel, cp) in &neighbor_pressure.channels {
                             let acc = channel_acc.entry(*channel).or_default();
-                            acc.0 += cp.local * weight;
+                            let weighted = cp.local * weight;
+                            acc.0 += weighted;
                             acc.1 += weight;
+                            let edge_channel_acc = edge_acc.entry(edge_key.clone()).or_default();
+                            *edge_channel_acc.entry(*channel).or_default() += weighted;
                         }
                     }
                 }
@@ -540,8 +474,11 @@ fn propagate_pressure(
                     // Sector mean direction propagates as momentum channel.
                     if let NodeKind::Sector(sector) = source_node {
                         let acc = channel_acc.entry(PressureChannel::Momentum).or_default();
-                        acc.0 += sector.mean_direction * weight;
+                        let weighted = sector.mean_direction * weight;
+                        acc.0 += weighted;
                         acc.1 += weight;
+                        let edge_channel_acc = edge_acc.entry(edge_key).or_default();
+                        *edge_channel_acc.entry(PressureChannel::Momentum).or_default() += weighted;
                     }
                 }
                 _ => {}
@@ -550,30 +487,37 @@ fn propagate_pressure(
 
         // Convert weighted sums to propagated pressure values.
         let mut propagated_channels = HashMap::new();
-        for (channel, (weighted_sum, weight_total)) in channel_acc {
-            if weight_total > Decimal::ZERO {
-                propagated_channels.insert(channel, weighted_sum / weight_total);
+        for (channel, (weighted_sum, weight_total)) in &channel_acc {
+            if *weight_total > Decimal::ZERO {
+                propagated_channels.insert(*channel, *weighted_sum / *weight_total);
             }
         }
         if !propagated_channels.is_empty() {
-            received.insert(symbol.clone(), propagated_channels);
+            result.propagated.insert(symbol.clone(), propagated_channels);
+        }
+
+        let edge_attributions = normalize_edge_attributions(&channel_acc, edge_acc);
+        if !edge_attributions.is_empty() {
+            result
+                .edge_attributions
+                .insert(symbol.clone(), edge_attributions);
         }
     }
 
-    received
+    result
 }
 
 // ── Step 3: Merge local + propagated ──
 
 fn merge_pressure(
     mut local: ScaledPressure,
-    propagated: HashMap<Symbol, HashMap<PressureChannel, Decimal>>,
+    propagated: &HashMap<Symbol, HashMap<PressureChannel, Decimal>>,
 ) -> ScaledPressure {
     for (symbol, prop_channels) in propagated {
-        let node = local.pressures.entry(symbol).or_default();
+        let node = local.pressures.entry(symbol.clone()).or_default();
         for (channel, prop_value) in prop_channels {
-            let cp = node.channels.entry(channel).or_default();
-            cp.propagated = prop_value;
+            let cp = node.channels.entry(*channel).or_default();
+            cp.propagated = *prop_value;
         }
         // Recompute aggregate after adding propagated.
         let aggregate = compute_node_aggregate(&node.channels);
@@ -868,11 +812,13 @@ fn compute_us_local_pressure(
 fn propagate_us_pressure(
     local: &ScaledPressure,
     graph: &UsGraph,
-) -> HashMap<Symbol, HashMap<PressureChannel, Decimal>> {
-    let mut received: HashMap<Symbol, HashMap<PressureChannel, Decimal>> = HashMap::new();
+    edge_ledger: &EdgeLearningLedger,
+) -> PropagationResult {
+    let mut result = PropagationResult::default();
 
     for (symbol, &node_idx) in &graph.stock_nodes {
         let mut channel_acc: HashMap<PressureChannel, (Decimal, Decimal)> = HashMap::new();
+        let mut edge_acc: HashMap<EdgeKey, HashMap<PressureChannel, Decimal>> = HashMap::new();
 
         for edge in graph.graph.edges_directed(node_idx, GraphDirection::Incoming) {
             match edge.weight() {
@@ -882,50 +828,175 @@ fn propagate_us_pressure(
                         UsNodeKind::Stock(s) => &s.symbol,
                         _ => continue,
                     };
-                    let weight = e.similarity;
+                    let (a, b) = if symbol.0 <= neighbor_symbol.0 {
+                        (symbol.clone(), neighbor_symbol.clone())
+                    } else {
+                        (neighbor_symbol.clone(), symbol.clone())
+                    };
+                    let edge_key = EdgeKey::StockToStock { a, b };
+                    let weight = e.similarity * edge_ledger.weight_multiplier(&edge_key);
                     if weight <= Decimal::ZERO {
                         continue;
                     }
                     if let Some(neighbor_pressure) = local.pressures.get(neighbor_symbol) {
                         for (channel, cp) in &neighbor_pressure.channels {
                             let acc = channel_acc.entry(*channel).or_default();
-                            acc.0 += cp.local * weight;
+                            let weighted = cp.local * weight;
+                            acc.0 += weighted;
                             acc.1 += weight;
+                            let edge_channel_acc = edge_acc.entry(edge_key.clone()).or_default();
+                            *edge_channel_acc.entry(*channel).or_default() += weighted;
                         }
                     }
                 }
                 UsEdgeKind::StockToSector(_) => {
                     let source_node = &graph.graph[edge.source()];
                     if let UsNodeKind::Sector(sector) = source_node {
+                        let edge_key = EdgeKey::StockToSector {
+                            symbol: symbol.clone(),
+                            sector_id: sector.sector_id.clone(),
+                        };
+                        let weight = edge_ledger.weight_multiplier(&edge_key);
                         let acc = channel_acc.entry(PressureChannel::Momentum).or_default();
-                        acc.0 += sector.mean_direction;
-                        acc.1 += Decimal::ONE;
+                        let weighted = sector.mean_direction * weight;
+                        acc.0 += weighted;
+                        acc.1 += weight;
+                        let edge_channel_acc = edge_acc.entry(edge_key).or_default();
+                        *edge_channel_acc.entry(PressureChannel::Momentum).or_default() += weighted;
                     }
                 }
                 UsEdgeKind::CrossMarket(e) => {
                     // Cross-market edge: HK signal propagates as CapitalFlow channel.
-                    let weight = e.propagation_strength * e.confidence;
+                    let (a, b) = if e.us_symbol.0 <= e.hk_symbol.0 {
+                        (e.us_symbol.clone(), e.hk_symbol.clone())
+                    } else {
+                        (e.hk_symbol.clone(), e.us_symbol.clone())
+                    };
+                    let edge_key = EdgeKey::StockToStock { a, b };
+                    let weight =
+                        e.propagation_strength * e.confidence * edge_ledger.weight_multiplier(&edge_key);
                     if weight > Decimal::ZERO {
                         let acc = channel_acc.entry(PressureChannel::CapitalFlow).or_default();
-                        acc.0 += e.direction * weight;
+                        let weighted = e.direction * weight;
+                        acc.0 += weighted;
                         acc.1 += weight;
+                        let edge_channel_acc = edge_acc.entry(edge_key).or_default();
+                        *edge_channel_acc.entry(PressureChannel::CapitalFlow).or_default() += weighted;
                     }
                 }
             }
         }
 
         let mut propagated_channels = HashMap::new();
-        for (channel, (weighted_sum, weight_total)) in channel_acc {
-            if weight_total > Decimal::ZERO {
-                propagated_channels.insert(channel, weighted_sum / weight_total);
+        for (channel, (weighted_sum, weight_total)) in &channel_acc {
+            if *weight_total > Decimal::ZERO {
+                propagated_channels.insert(*channel, *weighted_sum / *weight_total);
             }
         }
         if !propagated_channels.is_empty() {
-            received.insert(symbol.clone(), propagated_channels);
+            result.propagated.insert(symbol.clone(), propagated_channels);
+        }
+
+        let edge_attributions = normalize_edge_attributions(&channel_acc, edge_acc);
+        if !edge_attributions.is_empty() {
+            result
+                .edge_attributions
+                .insert(symbol.clone(), edge_attributions);
         }
     }
 
-    received
+    result
+}
+
+fn snapshot_layer_composites(layer: Option<&ScaledPressure>) -> HashMap<Symbol, Decimal> {
+    layer
+        .map(|layer| {
+            layer
+                .pressures
+                .iter()
+                .map(|(symbol, node)| (symbol.clone(), node.composite))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn compute_hour_deltas(
+    hour_before: &HashMap<Symbol, Decimal>,
+    hour_after: &HashMap<Symbol, Decimal>,
+    propagated: &PropagationResult,
+) -> HashMap<Symbol, Decimal> {
+    let mut hour_deltas = HashMap::new();
+    for symbol in hour_before
+        .keys()
+        .chain(hour_after.keys())
+        .chain(propagated.propagated.keys())
+    {
+        hour_deltas.entry(symbol.clone()).or_insert_with(|| {
+            hour_after.get(symbol).copied().unwrap_or(Decimal::ZERO)
+                - hour_before.get(symbol).copied().unwrap_or(Decimal::ZERO)
+        });
+    }
+    hour_deltas
+}
+
+fn normalize_edge_attributions(
+    channel_acc: &HashMap<PressureChannel, (Decimal, Decimal)>,
+    edge_acc: HashMap<EdgeKey, HashMap<PressureChannel, Decimal>>,
+) -> Vec<EdgeAttribution> {
+    let mut attributions = Vec::new();
+
+    for (edge_key, channel_contributions) in edge_acc {
+        let mut net_pressure = Decimal::ZERO;
+        let mut magnitude = Decimal::ZERO;
+
+        for (channel, weighted_contribution) in channel_contributions {
+            let Some((_, weight_total)) = channel_acc.get(&channel) else {
+                continue;
+            };
+            if *weight_total <= Decimal::ZERO {
+                continue;
+            }
+
+            let normalized = weighted_contribution / *weight_total;
+            net_pressure += normalized;
+            magnitude += normalized.abs();
+        }
+
+        if magnitude > Decimal::ZERO {
+            attributions.push(EdgeAttribution {
+                edge_key,
+                net_pressure,
+                magnitude,
+            });
+        }
+    }
+
+    attributions
+}
+
+fn directional_alignment(hour_delta: Decimal, propagated_pressure: Decimal) -> Decimal {
+    if hour_delta > Decimal::ZERO && propagated_pressure > Decimal::ZERO {
+        Decimal::ONE
+    } else if hour_delta < Decimal::ZERO && propagated_pressure < Decimal::ZERO {
+        Decimal::ONE
+    } else if propagated_pressure == Decimal::ZERO {
+        Decimal::ZERO
+    } else {
+        -Decimal::ONE
+    }
+}
+
+fn update_edge_credit(
+    edge_ledger: &mut EdgeLearningLedger,
+    edge_key: &EdgeKey,
+    credit: Decimal,
+    now: OffsetDateTime,
+) {
+    let entry = edge_ledger.entry_mut_or_insert(edge_key, now);
+    entry.total_credit += credit;
+    entry.sample_count += 1;
+    entry.mean_credit = entry.total_credit / Decimal::from(entry.sample_count);
+    entry.last_updated = now;
 }
 
 #[cfg(test)]

@@ -578,7 +578,7 @@ pub async fn run() {
             deep_reasoning_decision.timestamp,
             &dim_snapshot.dimensions,
             &brain,
-            &edge_ledger,
+            &mut edge_ledger,
         );
         for vortex in &pressure_field.vortices {
             lifecycle_tracker.record(&vortex.symbol, tick, vortex.tension);
@@ -605,28 +605,6 @@ pub async fn run() {
                 eprintln!("[hk] {}", insight.summary);
             }
         }
-        // Vortex outcome learning: record pending vortices, resolve old ones, update edges
-        {
-            let prices: std::collections::HashMap<eden::ontology::objects::Symbol, rust_decimal::Decimal> =
-                raw.quotes.iter().filter_map(|(sym, q)| {
-                    if q.last_done > rust_decimal::Decimal::ZERO {
-                        Some((sym.clone(), q.last_done))
-                    } else {
-                        None
-                    }
-                }).collect();
-            pressure_field.record_pending_vortices(tick, &prices);
-            if !pressure_field.recent_outcomes.is_empty() {
-                let correct = pressure_field.recent_outcomes.iter().filter(|o| o.correct).count();
-                let total = pressure_field.recent_outcomes.len();
-                eprintln!(
-                    "[hk] vortex outcomes: {}/{} correct ({:.0}%)",
-                    correct, total, correct as f64 / total as f64 * 100.0,
-                );
-                pressure_field.apply_outcomes_to_edges(&mut edge_ledger, now);
-            }
-        }
-
         let mut reasoning_snapshot = ReasoningSnapshot::empty(deep_reasoning_decision.timestamp);
 
         // Inject vortex-derived tactical setups from pressure field.

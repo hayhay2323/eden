@@ -434,7 +434,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let reasoning_decision =
             filter_us_decision_for_reasoning(&decision, &reasoning_active_symbols);
         // Pressure field: inject local pressure, propagate along US graph edges, detect vortices.
-        pressure_field.tick_us(now, &dim_snapshot.dimensions, &graph);
+        pressure_field.tick_us(now, &dim_snapshot.dimensions, &graph, &mut edge_ledger);
         for vortex in &pressure_field.vortices {
             lifecycle_tracker.record(&vortex.symbol, tick, vortex.tension);
         }
@@ -460,28 +460,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("[us] {}", insight.summary);
             }
         }
-        // Vortex outcome learning
-        {
-            let prices: std::collections::HashMap<crate::ontology::objects::Symbol, Decimal> =
-                quotes.iter().filter_map(|q| {
-                    if q.last_done > Decimal::ZERO {
-                        Some((q.symbol.clone(), q.last_done))
-                    } else {
-                        None
-                    }
-                }).collect();
-            pressure_field.record_pending_vortices(tick, &prices);
-            if !pressure_field.recent_outcomes.is_empty() {
-                let correct = pressure_field.recent_outcomes.iter().filter(|o| o.correct).count();
-                let total = pressure_field.recent_outcomes.len();
-                eprintln!(
-                    "[us] vortex outcomes: {}/{} correct ({:.0}%)",
-                    correct, total, correct as f64 / total as f64 * 100.0,
-                );
-                pressure_field.apply_outcomes_to_edges(&mut edge_ledger, now);
-            }
-        }
-
         let mut reasoning = UsReasoningSnapshot::empty(now);
 
         // Pressure field → tactical setups: surface vortices as actionable items.
