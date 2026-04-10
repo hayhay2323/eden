@@ -53,6 +53,16 @@ impl EdgeLearningLedger {
             .unwrap_or(Decimal::ONE)
     }
 
+    /// Get or create a mutable reference to an edge credit entry.
+    pub fn entry_mut_or_insert(&mut self, key: &EdgeKey, now: OffsetDateTime) -> &mut EdgeCredit {
+        self.entries.entry(key.clone()).or_insert(EdgeCredit {
+            total_credit: Decimal::ZERO,
+            sample_count: 0,
+            mean_credit: Decimal::ZERO,
+            last_updated: now,
+        })
+    }
+
     /// Credit edges based on a resolved outcome's convergence detail.
     ///
     /// Identifies the dominant convergence component and distributes credit

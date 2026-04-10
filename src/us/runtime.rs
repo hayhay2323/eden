@@ -431,6 +431,27 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 pressure_field.vortices[0].direction,
             );
         }
+        // Vortex outcome learning
+        {
+            let prices: std::collections::HashMap<crate::ontology::objects::Symbol, Decimal> =
+                quotes.iter().filter_map(|q| {
+                    if q.last_done > Decimal::ZERO {
+                        Some((q.symbol.clone(), q.last_done))
+                    } else {
+                        None
+                    }
+                }).collect();
+            pressure_field.record_pending_vortices(tick, &prices);
+            if !pressure_field.recent_outcomes.is_empty() {
+                let correct = pressure_field.recent_outcomes.iter().filter(|o| o.correct).count();
+                let total = pressure_field.recent_outcomes.len();
+                eprintln!(
+                    "[us] vortex outcomes: {}/{} correct ({:.0}%)",
+                    correct, total, correct as f64 / total as f64 * 100.0,
+                );
+                pressure_field.apply_outcomes_to_edges(&mut edge_ledger, now);
+            }
+        }
 
         let mut reasoning = UsReasoningSnapshot::empty(now);
 

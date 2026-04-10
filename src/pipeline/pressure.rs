@@ -140,6 +140,26 @@ pub struct PressureAnomaly {
     pub channel_deviations: HashMap<PressureChannel, Decimal>,
 }
 
+/// A vortex snapshot waiting to be evaluated against future prices.
+#[derive(Debug, Clone)]
+pub struct PendingVortex {
+    pub symbol: Symbol,
+    pub direction: Decimal,
+    pub strength: Decimal,
+    pub detected_tick: u64,
+    pub entry_price: Option<Decimal>,
+}
+
+/// Resolved vortex outcome: did the predicted direction play out?
+#[derive(Debug, Clone)]
+pub struct VortexOutcome {
+    pub symbol: Symbol,
+    pub direction: Decimal,
+    pub strength: Decimal,
+    pub return_pct: Decimal,
+    pub correct: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct PressureField {
     pub timestamp: OffsetDateTime,
@@ -152,6 +172,10 @@ pub struct PressureField {
     pub anomalies: HashMap<Symbol, PressureAnomaly>,
     /// Detected vortices (multi-channel convergence points).
     pub vortices: Vec<PressureVortex>,
+    /// Vortices waiting for outcome evaluation (pending N ticks).
+    pending_vortices: Vec<PendingVortex>,
+    /// Recently resolved vortex outcomes for edge learning.
+    pub recent_outcomes: Vec<VortexOutcome>,
 }
 
 impl PressureField {
@@ -167,6 +191,8 @@ impl PressureField {
             baseline: ScaledPressure::default(),
             anomalies: HashMap::new(),
             vortices: Vec::new(),
+            pending_vortices: Vec::new(),
+            recent_outcomes: Vec::new(),
         }
     }
 
@@ -233,6 +259,98 @@ impl PressureField {
         let minute_layer = self.layers.get(&TimeScale::Minute).unwrap();
         self.anomalies = compute_anomalies(minute_layer, &self.baseline);
         self.vortices = detect_vortices(minute_layer);
+    }
+
+    /// Record current vortices as pending outcomes. Call after each tick.
+    /// `tick` is the current tick number, `prices` maps symbol → current price.
+    pub fn record_pending_vortices(
+        &mut self,
+        tick: u64,
+        prices: &HashMap<Symbol, Decimal>,
+    ) {
+        const RESOLUTION_LAG: u64 = 10;
+
+        // 1. Resolve pending vortices that are old enough
+        let mut resolved = Vec::new();
+        self.pending_vortices.retain(|pending| {
+            if tick < pending.detected_tick + RESOLUTION_LAG {
+                return true; // keep — not old enough
+            }
+            let entry_price = match pending.entry_price {
+                Some(p) if p > Decimal::ZERO => p,
+                _ => return false, // drop — no entry price
+            };
+            let current_price = match prices.get(&pending.symbol) {
+                Some(p) if *p > Decimal::ZERO => *p,
+                _ => return false, // drop — no current price
+            };
+            let return_pct = (current_price - entry_price) / entry_price;
+            let directional_return = if pending.direction >= Decimal::ZERO {
+                return_pct
+            } else {
+                -return_pct
+            };
+            let correct = directional_return > Decimal::new(1, 3); // >0.1% in predicted direction
+
+            resolved.push(VortexOutcome {
+                symbol: pending.symbol.clone(),
+                direction: pending.direction,
+                strength: pending.strength,
+                return_pct: directional_return,
+                correct,
+            });
+            false // remove from pending
+        });
+        self.recent_outcomes = resolved;
+
+        // 2. Record new vortices as pending (only strong ones, above anomaly threshold)
+        for vortex in &self.vortices {
+            if vortex.strength.abs() < Decimal::new(2, 2) {
+                continue; // skip weak vortices
+            }
+            // Avoid duplicates: don't re-record if already pending for same symbol
+            if self.pending_vortices.iter().any(|p| p.symbol == vortex.symbol) {
+                continue;
+            }
+            self.pending_vortices.push(PendingVortex {
+                symbol: vortex.symbol.clone(),
+                direction: vortex.direction,
+                strength: vortex.strength,
+                detected_tick: tick,
+                entry_price: prices.get(&vortex.symbol).copied(),
+            });
+        }
+
+        // 3. Cap pending list
+        if self.pending_vortices.len() > 200 {
+            self.pending_vortices
+                .sort_by(|a, b| b.strength.abs().cmp(&a.strength.abs()));
+            self.pending_vortices.truncate(200);
+        }
+    }
+
+    /// Apply resolved outcomes to edge learning ledger.
+    /// Call after `record_pending_vortices`.
+    pub fn apply_outcomes_to_edges(
+        &self,
+        edge_ledger: &mut EdgeLearningLedger,
+        now: OffsetDateTime,
+    ) {
+        for outcome in &self.recent_outcomes {
+            // Credit = return * strength (stronger vortex predictions carry more weight)
+            let credit = outcome.return_pct * outcome.strength;
+
+            // Credit the stock-to-stock edges involving this symbol
+            let key = EdgeKey::StockToStock {
+                a: outcome.symbol.clone(),
+                b: outcome.symbol.clone(), // self-edge for bookkeeping
+            };
+            let entry = edge_ledger.entry_mut_or_insert(&key, now);
+            entry.total_credit += credit;
+            entry.sample_count += 1;
+            entry.mean_credit = entry.total_credit / Decimal::from(entry.sample_count);
+            entry.last_updated = now;
+        }
     }
 
     pub fn node_pressure(&self, symbol: &Symbol, scale: TimeScale) -> Option<&NodePressure> {
