@@ -312,13 +312,17 @@ impl PressureField {
             if self.pending_vortices.iter().any(|p| p.symbol == vortex.symbol) {
                 continue;
             }
-            self.pending_vortices.push(PendingVortex {
-                symbol: vortex.symbol.clone(),
-                direction: vortex.direction,
-                strength: vortex.strength,
-                detected_tick: tick,
-                entry_price: prices.get(&vortex.symbol).copied(),
-            });
+            if let Some(&price) = prices.get(&vortex.symbol) {
+                if price > Decimal::ZERO {
+                    self.pending_vortices.push(PendingVortex {
+                        symbol: vortex.symbol.clone(),
+                        direction: vortex.direction,
+                        strength: vortex.strength,
+                        detected_tick: tick,
+                        entry_price: Some(price),
+                    });
+                }
+            }
         }
 
         // 3. Cap pending list
