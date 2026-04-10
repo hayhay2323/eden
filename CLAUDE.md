@@ -4,21 +4,31 @@
 
 Eden 是一個**市場操作系統**（不是 dashboard），目標是：在我創造的 ontology + knowledge graph 世界下，感知數據、推理出究竟發生什麼事情，然後**幫 operator 做決策**。
 
-## 我們現在在哪：一葉知林
+## 我們現在在哪：重建中
 
 Eden 的終極目標是「一葉知森羅」——看到一片葉子掉了，知道它屬於哪棵樹、為什麼掉、哪些會跟、哪些不會、以及對整片森林意味著什麼。
 
-當前進度：
+### 2026-04-10 架構重設計
 
-| 階段 | 完成度 | 含義 |
-|------|--------|------|
-| **一葉知三葉** | 100% | symbol 動了 → 知道 peer 會不會動（knowledge graph + propagation） |
-| **一葉知枝** | 90% | symbol 動了 → 知道 sector 整體狀態，有因果 narrative |
-| **一葉知樹** | 70% | 知道 **為什麼** 動（attribution）、**該不該傳**（conditional propagation）、**沒傳代表什麼**（PropagationAbsence）、自己判斷在**惡化**（mid-flight health）、哪個**解釋更好**（competition narrative） |
-| **一葉知林** | 40% | 知道歷史上這類 pattern 有沒有賺過（FamilyAlphaGate）、有初步自我修正（auto-assessment → doctrine） |
-| **一葉知森羅** | 15% | 缺：attribution→template 回饋、operator 偏好學習、catalyst 自動識別、case-level 因果敘述、adaptive attention |
+舊的 template-based hypothesis system（6 families、FamilyAlphaGate、doctrine pressure 等）已刪除（-17,000 行）。
+替換為 **壓力場引擎 + 拓撲推理**：
 
-最大缺口不是技術，是**閉環**——Eden 能「看到」和「判斷」，但還不能真正「從結果學到教訓再改變看法」。
+| 層 | 狀態 | 描述 |
+|---|------|------|
+| **感知：壓力場** | ✅ 完成 | 多時間尺度（tick/minute/hour/day），multi-channel 壓力計算，graph-based propagation，baseline + anomaly detection |
+| **推理：Attribution** | 🔄 建設中 | 從壓力場 channel 結構讀「為什麼有 tension」— trade flow / capital flow / institutional / microstructure / broad structural |
+| **推理：Absence** | 🔄 建設中 | 從鄰居壓力場讀「同 sector peers 有沒有反應」→ isolated = 個股事件 |
+| **推理：Competition** | 🔄 建設中 | 從 channel 數量 + 是否孤立 → 哪個解釋更可信 |
+| **推理：Lifecycle** | 🔄 建設中 | 追蹤 tension 的 velocity/acceleration → Growing / Peaking / Fading |
+| **學習：Edge Learning** | ✅ 基礎完成 | vortex outcome → credit/debit graph edges → topology adapts |
+
+### 設計哲學
+
+水在地形（ontology + knowledge graph）中流動，漩渦自然湧現。壓力場是眼睛，推理層是腦子 — 兩個都需要。
+
+**不再使用 template 匹配。** Attribution、Absence、Competition 從壓力場的拓撲結構中直接讀取，不需要預定義 pattern。
+
+**關鍵教訓（2026-04-10）：** 砍掉推理層只留壓力場 = 13% hit rate。壓力場能看到異常但不理解異常。需要推理層在壓力場之上做「為什麼」「會不會傳」「哪個解釋更好」的判斷。
 
 ## 技術棧
 
@@ -30,18 +40,25 @@ Eden 的終極目標是「一葉知森羅」——看到一片葉子掉了，知
 ## 核心架構
 
 ```
-Market Data (WebSocket)
+Market Data (WebSocket + REST)
   ↓
-ObjectStore (ontology: symbols, institutions, brokers, sectors, themes)
+ObjectStore (ontology: symbols, institutions, brokers, sectors)
   ↓
-Pipeline:
-  Observations → Events → Derived Signals → Hypotheses → Tactical Setups → Tracks
-  ↓                                                        ↓
-  World State (backward reasoning, causal timelines)    Policy Layer (action decisions)
-  ↓                                                        ↓
-  Operator Work Items ← ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+Dimensions (per-symbol multi-channel feature vectors)
   ↓
-  Persistence (SQLite) + API (Axum HTTP) + Console Display
+Pressure Field (multi-scale: tick/minute/hour/day)
+  ↓ propagation along graph edges
+Vortex Detection (tension = where time scales disagree)
+  ↓
+Reasoning Layer (on top of pressure field):
+  Attribution — WHY is there tension? (which channels drive it)
+  Absence — WHO should be reacting but isn't? (neighbor comparison)
+  Competition — WHICH explanation is more credible? (channel count)
+  Lifecycle — IS the anomaly growing, peaking, or dying? (acceleration)
+  ↓
+VortexInsight → Tactical Setups → Operator / Claude Code
+  ↓
+Edge Learning (outcome → update graph weights → better next time)
 ```
 
 ### 關鍵模組
@@ -49,63 +66,48 @@ Pipeline:
 | 模組 | 位置 | 職責 |
 |------|------|------|
 | Ontology | `src/ontology/` | 語義模型：objects, contracts, store, links, reasoning types |
-| Pipeline | `src/pipeline/` | 推理引擎：signals → events → reasoning → world state |
-| Graph | `src/graph/` | 知識圖譜：institutional alignment, convergence, decision |
-| HK Runtime | `src/hk/runtime/` | 港股主循環：tick loop, display, persistence, snapshot |
-| US Runtime | `src/us/` | 美股主循環：對稱結構，但有獨立的 signals/reasoning/policy |
-| Temporal | `src/temporal/` | 時間序列：lineage metrics, multi-horizon gate |
-| Persistence | `src/persistence/` | SQLite 持久化：tracks, outcomes, assessments, workflows |
-| Cases | `src/cases/` | Case 管理：reasoning story, review analytics, enrichment |
-| API | `src/api/` | HTTP API：ontology, agent, case, feed, lineage surfaces |
-| Agent | `src/agent/` | LLM 分析代理：attention, lens, recommendations |
+| Pressure Field | `src/pipeline/pressure.rs` | 壓力場引擎：multi-scale pressure, propagation, vortex detection |
+| Pressure Reasoning | `src/pipeline/pressure/reasoning.rs` | 拓撲推理：attribution, absence, competition, lifecycle |
+| Pressure Bridge | `src/pipeline/pressure/bridge.rs` | Vortex → TacticalSetup 轉換 |
+| Graph | `src/graph/` | 知識圖譜：BrainGraph (HK), UsGraph (US), edge learning |
+| Pipeline | `src/pipeline/` | 信號處理：events, dimensions, world state |
+| HK Runtime | `src/hk/runtime/` | 港股主循環：tick loop, pressure field, display |
+| US Runtime | `src/us/` | 美股主循環：對稱結構，共用壓力場引擎 |
+| Temporal | `src/temporal/` | 時間序列：lineage metrics |
+| Persistence | `src/persistence/` | SQLite 持久化 |
+| API | `src/api/` | HTTP API |
+| Agent | `src/agent/` | LLM 分析代理 |
 
-## 我們已經完成了什麼（完成度估計）
+## 完成度
 
-### 基礎設施 (80%)
+### 基礎設施 (90%)
 - ✅ Real-time tick loop (HK + US), debounce, WebSocket subscription
-- ✅ ObjectStore: 493 symbols, 526 institutions, 2725 brokers, 17 sectors
-- ✅ RuntimeTask lifecycle management
-- ✅ Persistence layer: tracks, outcomes, assessments, workflows
-- ✅ OperatorWorkItem 作為唯一對外 canonical DTO（OperatorWorkflowSurface 已降級為內部層）
-- ✅ Frontend 已收斂到 OperatorWorkItem grammar
+- ✅ ObjectStore: 494 HK symbols, 640 US symbols, 526 institutions, 2725 brokers
+- ✅ Optimized REST data acquisition (batch first, per-symbol top 20-40 only)
+- ✅ Persistence layer, API, Frontend (React + Blueprint.js)
+- ✅ Memory safety: eviction policies, hard caps, query limits
+- ✅ Security: API auth, SSE connection limits
 
-### 感知層 (75%)
-- ✅ 四通道數據: price, volume, order book (depth), broker queue
-- ✅ Temporal enrichment: broker perception, iceberg detection, regime transitions
-- ✅ Cross-stock presence (broker concordance)
-- ✅ Convergence scores: institutional alignment + sector coherence + cross-stock correlation
-- ✅ Attention budget: Deep/Standard/Scan/Skip 四層 symbol 分類
+### 壓力場感知層 (70%)
+- ✅ 6 pressure channels: OrderBook, CapitalFlow, Institutional, Momentum, Volume, Structure
+- ✅ Multi-scale accumulation: Tick/Minute/Hour/Day with different decay rates
+- ✅ Graph-based propagation along BrainGraph (HK) and UsGraph (US) edges
+- ✅ Baseline tracking (slow EMA) + anomaly detection (deviation from baseline)
+- ✅ Tension-based vortex detection (tick vs hour divergence)
+- ✅ Edge weight learning from vortex outcomes
 
-### 推理層 (60%)
-- ✅ Hypothesis template system: 6 families (Directed Flow, Stress Concentration, Institution Relay, Propagation Chain, Breakout Contagion, Catalyst Repricing)
-- ✅ FamilyAlphaGate: zero-follow-through 硬性淘汰 + tiered net penalty scoring
-- ✅ MultiHorizonGate: 區分 cold start vs attempted-but-failed
-- ✅ Event attribution: driver_kind (company_specific / sector_wide / macro_wide) + propagation_scope
-- ✅ Evidence-based attribution enrichment (broker concordance + macro event alignment)
-- ✅ PropagationAbsence detection: 預期傳導未發生 → 反證
-- ✅ Symbol hypothesis cap (max 3 per symbol)
-- ✅ Observe budget cap (max 20 observe setups)
-- ✅ Observe pruning: fast-expire low-quality + TTL
-- ✅ Mid-flight health check: enter/review case 證據惡化 → 自動降級
-- ✅ Competition narrative: 每個 case 解釋 winner 為什麼贏了 runner_up
+### 拓撲推理層 (30% — 建設中)
+- 🔄 Attribution: 從 channel 結構讀「為什麼有 tension」
+- 🔄 Absence: 從鄰居壓力場讀「該傳沒傳」
+- 🔄 Competition: 哪個解釋更可信
+- 🔄 Lifecycle: tension 的 velocity/acceleration → Growing/Peaking/Fading
+- ❌ 尚未接入 runtime tick loop
 
-### 學習閉環 (35%)
+### 學習閉環 (20%)
+- ✅ EdgeLearningLedger: vortex outcome → credit/debit edges
 - ✅ Realized outcome persistence
-- ✅ Auto-assessment: realized outcome → CaseReasoningAssessmentRecord (source="outcome_auto")
-- ✅ ReviewerDoctrinePressure: 聚合 reviewer feedback → 動態調整 promotion threshold
-- ✅ Family-aware pressure overrides
-- ✅ Family Performance Summary: 每 tick 輸出 family 級別成績單
-- ⚠️ 但 doctrine 資料目前偏少，需要更多 live cycle 累積
-- ❌ 尚未實作 operator preference layer（operator 審核偏好學習）
-
-### 因果歸因 (40%)
-- ✅ Event attribution (why this happened)
-- ✅ Conditional propagation (should this spread)
-- ✅ PropagationAbsence (who should have reacted but didn't)
-- ✅ World State narrative enrichment (sector regime 有因果描述)
-- ✅ Causal Memory / Causal Timelines (flip events, leader sequence)
-- ❌ 尚未做到 case-level 因果敘述（為什麼這個 case 被生成）
-- ❌ Attribution 尚未反饋到 hypothesis generation（知道是 company_specific 但不會因此調整 template 選擇）
+- ❌ 需要更長時間運行來驗證 edge learning 效果
+- ❌ 尚未實作 operator preference learning
 
 ## 當前 Live 運行指標
 
@@ -274,19 +276,19 @@ Propagation Chain: completely eliminated from hypothesis generation (zero-follow
 
 | 要改什麼 | 看哪裡 |
 |----------|--------|
-| Hypothesis 生成邏輯 | `src/pipeline/reasoning/synthesis.rs` |
-| Template 適用性 / 極性 | `src/pipeline/reasoning/support.rs` |
-| Action policy (promote/observe/enter) | `src/pipeline/reasoning/policy.rs` |
+| 壓力場引擎 | `src/pipeline/pressure.rs` |
+| 拓撲推理（attribution/absence/competition/lifecycle） | `src/pipeline/pressure/reasoning.rs` |
+| Vortex → TacticalSetup 轉換 | `src/pipeline/pressure/bridge.rs` |
 | HK 主循環 | `src/hk/runtime.rs` |
 | US 主循環 | `src/us/runtime.rs` |
 | Event detection | `src/pipeline/signals/events.rs` |
-| World State 推導 | `src/pipeline/world.rs` |
-| Console display | `src/hk/runtime/display/console/reasoning.rs` |
-| Reasoning types | `src/ontology/reasoning.rs` |
-| Contract DTOs | `src/ontology/contracts/types.rs` |
+| HK Dimensions | `src/pipeline/dimensions.rs` |
+| US Dimensions | `src/us/pipeline/dimensions.rs` |
+| Graph（HK） | `src/graph/graph.rs` |
+| Graph（US） | `src/us/graph/graph.rs` |
+| Edge Learning | `src/graph/edge_learning.rs` |
+| Reasoning types（data structs） | `src/ontology/reasoning.rs` |
 | Persistence | `src/persistence/store.rs` |
-| 已有 reasoning tests | `src/pipeline/reasoning/tests.rs` |
-| US reasoning tests | `src/us/pipeline/reasoning_tests.rs` |
 
 ## 核心哲學：拓撲湧現
 
@@ -294,28 +296,31 @@ Eden 的本質不是一個「信號匹配器」，而是一個**拓撲觀察者*
 
 核心比喻：ontology + knowledge graph 構成地形，數據是水。水在地形中流動、碰撞、匯聚，自然形成漩渦。漩渦就是資訊——不是人預定義的 pattern，而是數據在拓撲結構中互相作用後湧現的。
 
-| | 傳統量化 | 現在的 Eden | 終極的 Eden |
+| | 傳統量化 | 舊 Eden（已刪除） | 新 Eden（壓力場 + 推理） |
 |--|---------|-----------|------------|
-| 思路來源 | 人寫因子 | 6 個固定 template | 圖拓撲 + 數據流動自然湧現 |
-| 發現能力 | 只能找已知的 | 只能匹配已定義的 | 能觀察到未預期的 |
-| Edge 演化 | 衰減 | 衰減較慢（殺壞的） | 自我生長（好的放大，新的湧現） |
-| 上限 | 人的想像力 | template 的覆蓋度 | ontology 拓撲的豐富度 |
+| 感知 | 價格/量指標 | 6 個固定 template 匹配 | 壓力場：多時間尺度 × 多通道 × 圖譜傳播 |
+| 推理 | 統計模型 | 硬編碼 if-else 規則 | 從壓力場拓撲結構直接讀取 attribution/absence/competition |
+| 學習 | Backtest + deploy | FamilyAlphaGate（需要 15 resolved） | Edge weight 從每個 vortex outcome 即時更新 |
+| Edge 來源 | 歷史 pattern（會衰退） | Template 覆蓋度（固定） | 當下拓撲異常（每天不同，不衰退） |
 
-**質變的關鍵**：把 hypothesis generation 從 template-matching 反轉為 convergence-detection。不是問「這個事件符合哪個 template」，而是讓 event 在圖裡傳播，觀察哪裡有多條獨立路徑匯聚——那就是漩渦，那就是 hypothesis。
+**已驗證的 edge（實盤）：**
+- BKNG: VolumeSpike 15x + Convergence Hypothesis → Claude Code 進場 → +$450 浮盈
+- MRVL: 異常偵測正確 → 後漲 10%
+- 兩筆交易都確認：**entry 有 edge，exit timing 是缺口**
 
-現有的 6 個 template 不用刪，它們是人類先驗知識注入的初始漩渦形狀（cold start）。但系統不再被限制在這 6 個形狀裡。
-
-學習閉環必須雙向：
-- **負反饋**（已有）：outcome 差 → 殺掉 family / 收緊門檻
-- **正反饋**（需要建）：outcome 好 → 放大 family / 降低門檻 / 記住漩渦形狀
-- **湧現**（終極目標）：新的漩渦形狀不屬於任何現有 template → 自動提取為新 pattern
+**關鍵教訓：**
+- 壓力場是好的眼睛，但不能取代腦子（推理層）
+- 推理的 CONCEPTS（attribution, absence, competition）是正確的
+- 推理的 IMPLEMENTATION（templates, if-else）是錯的
+- 正確做法：保留概念，用壓力場的結構作為推理的輸入
 
 ## 一葉知森羅
 
 最終目標：看到一片葉子掉了，知道它屬於哪棵樹、為什麼掉、哪些其他葉子會跟著掉、哪些不會、以及這對整片森林意味著什麼。
 
-當前位置：一葉知林。差的不是更多 signal，是**正反饋閉環**和**拓撲湧現**。
+實現路徑：壓力場（感知）→ 推理（理解）→ 生命週期追蹤（時機）
 
-衡量質變的兩個指標：
-1. **operator 點開率**：operator 每天真正點開的 case 數 / 系統產生的 case 數。上升 = Eden 學會少說廢話
-2. **template 外 hypothesis 佔比**：不屬於任何固定 template 的成功 hypothesis 數量。> 0 = 湧現開始了
+衡量質變的指標：
+1. **異常偵測命中率**：壓力場標記的節點，之後 1-2 小時內是否出現超常波動
+2. **生命週期信號質量**：Growing/Peaking/Fading 的判斷是否與實際利潤 capture 相關
+3. **推理解釋力**：Attribution + Absence 的敘述是否幫助 Claude Code 做出更好的判斷
