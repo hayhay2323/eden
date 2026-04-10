@@ -6,7 +6,6 @@ use crate::ontology::reasoning::ReasoningScope;
 use crate::ontology::world::{Vortex, WorldStateSnapshot};
 use crate::pipeline::attention_budget::{AttentionBudgetAllocator, AttentionLevel, BudgetSummary};
 use crate::pipeline::tick_state_machine::{TickOutcome, TickStateMachine, TickTransition};
-use crate::temporal::lineage::{vortex_matches_success_pattern, VortexSuccessPattern};
 use rust_decimal::Decimal;
 
 /// Bundles the new infrastructure modules for the HK runtime.
@@ -145,14 +144,6 @@ impl RuntimeIntegration {
     /// Refresh attention overrides from the latest world-state vortices.
     /// These overrides apply on the next tick and sit on top of the base allocator.
     pub fn refresh_vortex_attention(&mut self, world_state: &WorldStateSnapshot) {
-        self.refresh_vortex_attention_with_patterns(world_state, &[]);
-    }
-
-    pub fn refresh_vortex_attention_with_patterns(
-        &mut self,
-        world_state: &WorldStateSnapshot,
-        patterns: &[VortexSuccessPattern],
-    ) {
         self.vortex_deep_symbols = crate::pipeline::world::vortex_boosted_scopes(world_state)
             .into_iter()
             .filter_map(|(scope, _)| match scope {
@@ -174,7 +165,7 @@ impl RuntimeIntegration {
         for vortex in world_state
             .vortices
             .iter()
-            .filter(|vortex| qualifies_for_learned_attention(vortex, patterns))
+            .filter(|vortex| qualifies_for_learned_attention(vortex))
         {
             if let ReasoningScope::Symbol(symbol) = &vortex.center_scope {
                 self.vortex_deep_symbols.insert(symbol.0.clone());
@@ -200,18 +191,8 @@ impl RuntimeIntegration {
     }
 }
 
-fn qualifies_for_learned_attention(vortex: &Vortex, patterns: &[VortexSuccessPattern]) -> bool {
-    if vortex.strength >= Decimal::new(3, 1) && vortex.coherence >= Decimal::new(6, 1) {
-        return true;
-    }
-
-    patterns.iter().any(|pattern| {
-        pattern.samples > 0
-            && pattern.mean_net_return > Decimal::ZERO
-            && vortex_matches_success_pattern(vortex, pattern)
-            && vortex.strength >= Decimal::new(20, 2)
-            && vortex.coherence >= Decimal::new(45, 2)
-    })
+fn qualifies_for_learned_attention(vortex: &Vortex) -> bool {
+    vortex.strength >= Decimal::new(3, 1) && vortex.coherence >= Decimal::new(6, 1)
 }
 
 #[cfg(test)]
@@ -226,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn learned_vortex_pattern_can_boost_weaker_vortex() {
+    fn strong_vortex_boosts_attention() {
         let mut integration = RuntimeIntegration::new(100);
         let world_state = WorldStateSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
@@ -244,40 +225,15 @@ mod tests {
                         weight: dec!(0.30),
                         polarity: FlowPolarity::Confirming,
                     },
-                    FlowPath {
-                        source_entity_id: "world:theme:ai".into(),
-                        source_scope: ReasoningScope::Custom("ai".into()),
-                        channel: "catalyst".into(),
-                        weight: dec!(0.20),
-                        polarity: FlowPolarity::Confirming,
-                    },
                 ],
-                strength: dec!(0.26),
+                strength: dec!(0.35),
                 channel_diversity: 2,
-                coherence: dec!(0.52),
+                coherence: dec!(0.65),
                 narrative: None,
             }],
         };
 
         integration.refresh_vortex_attention(&world_state);
-        assert!(!integration.is_vortex_attention_boosted("700.HK"));
-
-        integration.refresh_vortex_attention_with_patterns(
-            &world_state,
-            &[VortexSuccessPattern {
-                center_kind: "symbol".into(),
-                role: "center".into(),
-                channel_signature: "broker_flow|catalyst|propagation".into(),
-                dominant_channels: vec!["broker_flow".into(), "catalyst".into()],
-                top_family: "Convergence Hypothesis".into(),
-                samples: 1,
-                mean_net_return: dec!(0.03),
-                mean_strength: dec!(0.48),
-                mean_coherence: dec!(0.70),
-                mean_channel_diversity: dec!(3),
-            }],
-        );
-
         assert!(integration.is_vortex_attention_boosted("700.HK"));
         assert!(integration.is_vortex_attention_boosted("9988.HK"));
     }

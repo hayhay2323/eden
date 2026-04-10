@@ -71,8 +71,6 @@ use crate::pipeline::learning_loop::{
     derive_learning_feedback, derive_outcome_learning_context_from_hk_rows,
     ReasoningLearningFeedback,
 };
-#[cfg(feature = "persistence")]
-use crate::pipeline::reasoning::ReviewerDoctrinePressure;
 use crate::pipeline::reasoning::{path_has_family, path_is_mixed_multi_hop, ReasoningSnapshot};
 use crate::pipeline::signals::{
     DerivedSignalSnapshot, EventSnapshot, MarketEventKind, ObservationSnapshot, SignalScope,
@@ -88,11 +86,7 @@ use crate::temporal::causality::{CausalFlipEvent, CausalTimelinePoint};
 use crate::temporal::lineage::compute_case_realized_outcomes;
 #[cfg(feature = "persistence")]
 use crate::temporal::lineage::compute_case_realized_outcomes_adaptive;
-use crate::temporal::lineage::{
-    compute_family_context_outcomes, compute_lineage_stats, compute_vortex_success_patterns,
-    evaluate_candidate_mechanisms, extract_causal_schema, run_evolution_cycle,
-    SurfaceQualitySnapshot,
-};
+use crate::temporal::lineage::{compute_family_context_outcomes, compute_lineage_stats};
 use crate::temporal::record::TickRecord;
 
 #[cfg(feature = "persistence")]
@@ -174,42 +168,15 @@ pub async fn run() {
     let mut last_idle_log_at = Instant::now();
     let mut integration = integration::RuntimeIntegration::new(WATCHLIST.len());
     #[cfg(feature = "persistence")]
-    let mut cached_hk_reviewer_doctrine: Option<ReviewerDoctrinePressure> = None;
-    let mut cached_candidate_mechanisms: Vec<
-        crate::persistence::candidate_mechanism::CandidateMechanismRecord,
-    > = Vec::new();
-    let mut cached_causal_schemas: Vec<crate::persistence::causal_schema::CausalSchemaRecord> =
-        Vec::new();
-    let mut baseline_quality: Option<SurfaceQualitySnapshot> = None;
-    #[allow(unused_mut)]
-    let mut shadow_scores: std::collections::HashMap<
-        String,
-        crate::temporal::lineage::ShadowScore,
-    > = std::collections::HashMap::new();
-    #[cfg(feature = "persistence")]
-    if let Some(ref store) = runtime.store {
-        if let Ok(mechs) = store.load_candidate_mechanisms("hk").await {
-            eprintln!(
-                "[hk] loaded {} candidate mechanisms from store",
-                mechs.len()
-            );
-            cached_candidate_mechanisms = mechs;
-        }
-        if let Ok(schemas) = store.load_causal_schemas("hk").await {
-            eprintln!("[hk] loaded {} causal schemas from store", schemas.len());
-            cached_causal_schemas = schemas;
-        }
-    }
-    #[cfg(feature = "persistence")]
     if let Some(ref store) = runtime.store {
         eden::persistence::case_reasoning_assessment::backfill_doctrine_assessments(store, "hk").await;
     }
 
     let mut hidden_force_state = eden::pipeline::residual::HiddenForceVerificationState::default();
-    let mut absence_memory = eden::pipeline::reasoning::AbsenceMemory::default();
     let mut edge_ledger = eden::graph::edge_learning::EdgeLearningLedger::default();
     let mut seen_hk_edge_learning_setups = HashSet::new();
     let mut energy_momentum = eden::graph::energy::EnergyMomentum::default();
+    let mut pressure_field = eden::pipeline::pressure::PressureField::new(time::OffsetDateTime::now_utc());
 
     loop {
         let mut rest_updated = false;
@@ -516,11 +483,11 @@ pub async fn run() {
             previous_tracks,
         );
         let reasoning_active_symbols = attention_plan.active_symbols();
-        let deep_reasoning_event_snapshot =
+        let _deep_reasoning_event_snapshot =
             filter_event_snapshot_for_reasoning(&event_snapshot, &attention_plan.deep_symbols);
         let reasoning_event_snapshot =
             filter_event_snapshot_for_reasoning(&event_snapshot, &reasoning_active_symbols);
-        let deep_reasoning_derived_signal_snapshot = filter_derived_signal_snapshot_for_reasoning(
+        let _deep_reasoning_derived_signal_snapshot = filter_derived_signal_snapshot_for_reasoning(
             &derived_signal_snapshot,
             &attention_plan.deep_symbols,
         );
@@ -533,14 +500,13 @@ pub async fn run() {
         let reasoning_decision =
             filter_decision_for_reasoning(&decision, &reasoning_active_symbols);
         let lineage_family_priors = compute_family_context_outcomes(&history, LINEAGE_WINDOW);
-        let multi_horizon_lineage = eden::temporal::lineage::compute_multi_horizon_lineage_metrics(
+        let _multi_horizon_lineage = eden::temporal::lineage::compute_multi_horizon_lineage_metrics(
             &history,
             LINEAGE_WINDOW,
             330,
         );
-        let multi_horizon_gate =
-            eden::temporal::lineage::MultiHorizonGate::from_metrics(&multi_horizon_lineage);
-        let vortex_success_patterns = compute_vortex_success_patterns(&history, LINEAGE_WINDOW);
+        let _multi_horizon_gate =
+            eden::temporal::lineage::MultiHorizonGate::from_metrics(&_multi_horizon_lineage);
         let reasoning_stock_deltas = compute_reasoning_stock_deltas(
             &deep_reasoning_decision.convergence_scores,
             history.latest(),
@@ -577,18 +543,6 @@ pub async fn run() {
                 );
             }
         }
-        #[cfg(feature = "persistence")]
-        if let Some(ref store) = runtime.store {
-            if cached_hk_reviewer_doctrine.is_none() || tick % 30 == 0 {
-                if let Ok(assessments) = store
-                    .recent_case_reasoning_assessments_by_market("hk", 240)
-                    .await
-                {
-                    cached_hk_reviewer_doctrine =
-                        Some(ReviewerDoctrinePressure::from_assessments(&assessments));
-                }
-            }
-        }
         // Energy propagation: build energy map from diffusion paths, blend into momentum,
         // then apply momentum-based energy to convergence scores (mutated in place,
         // avoiding a full DecisionSnapshot clone).
@@ -607,43 +561,44 @@ pub async fn run() {
                 &energy_momentum,
             );
         }
-        let family_boost = eden::pipeline::reasoning::FamilyBoostLedger::from_lineage_priors(
-            &lineage_family_priors,
-            eden::pipeline::reasoning::hk_session_label(deep_reasoning_event_snapshot.timestamp),
-            deep_reasoning_decision.market_regime.bias.as_str(),
-        );
-        let reasoning_ctx = eden::pipeline::reasoning::ReasoningContext {
-            lineage_priors: &lineage_family_priors,
-            multi_horizon_gate: Some(&multi_horizon_gate),
-            symbol_dimensions: Some(&dim_snapshot.dimensions),
-            reviewer_doctrine: {
-                #[cfg(feature = "persistence")]
-                {
-                    cached_hk_reviewer_doctrine.as_ref()
-                }
-                #[cfg(not(feature = "persistence"))]
-                {
-                    None
-                }
-            },
-            convergence_components: &deep_reasoning_decision.convergence_scores,
-            market_regime: &deep_reasoning_decision.market_regime,
-            world_state: None,
-            absence_memory: &absence_memory,
-            family_boost: &family_boost,
-        };
-
-        let mut reasoning_snapshot = ReasoningSnapshot::derive_with_diffusion(
-            &deep_reasoning_event_snapshot,
-            &deep_reasoning_derived_signal_snapshot,
-            &graph_insights,
-            &deep_reasoning_decision,
-            previous_setups,
-            previous_tracks,
-            &reasoning_ctx,
+        // Pressure field: inject local pressure, propagate along graph edges, detect vortices.
+        pressure_field.tick(
+            deep_reasoning_decision.timestamp,
+            &dim_snapshot.dimensions,
             &brain,
-            &reasoning_stock_deltas,
+            &edge_ledger,
         );
+        if !pressure_field.vortices.is_empty() {
+            eprintln!(
+                "[hk] pressure field: {} vortices detected (top: {} strength={} channels={} dir={})",
+                pressure_field.vortices.len(),
+                pressure_field.vortices[0].symbol.0,
+                pressure_field.vortices[0].strength,
+                pressure_field.vortices[0].channel_count,
+                pressure_field.vortices[0].direction,
+            );
+        }
+
+        let mut reasoning_snapshot = ReasoningSnapshot::empty(deep_reasoning_decision.timestamp);
+
+        // Inject vortex-derived tactical setups from pressure field.
+        let vortex_setups = eden::pipeline::pressure::bridge::vortices_to_tactical_setups(
+            &pressure_field.vortices,
+            deep_reasoning_decision.timestamp,
+            tick,
+            10,
+        );
+        if !vortex_setups.is_empty() {
+            eprintln!(
+                "[hk] pressure→action: {} vortex setups (top: {} action={} conf={})",
+                vortex_setups.len(),
+                vortex_setups[0].scope.label(),
+                vortex_setups[0].action,
+                vortex_setups[0].confidence,
+            );
+            reasoning_snapshot.tactical_setups.extend(vortex_setups);
+        }
+
         // Inject hidden force hypotheses from residual field
         let hidden_force_hypotheses =
             eden::pipeline::residual::infer_hidden_forces(&residual_field, decision.timestamp);
@@ -692,42 +647,7 @@ pub async fn run() {
             }
         }
 
-        // Update absence memory for next tick
-        {
-            // Clear suppression for sectors where propagation actually fired
-            {
-                let mut propagated_sectors = std::collections::HashSet::new();
-                for path in &diffusion_paths {
-                    for step in &path.steps {
-                        if let eden::ontology::reasoning::ReasoningScope::Sector(ref sid) = step.to
-                        {
-                            propagated_sectors.insert(sid.clone());
-                        }
-                        if let eden::ontology::reasoning::ReasoningScope::Sector(ref sid) =
-                            step.from
-                        {
-                            propagated_sectors.insert(sid.clone());
-                        }
-                    }
-                }
-                for sector in &propagated_sectors {
-                    absence_memory.record_propagation(sector);
-                }
-            }
-            let absence_sectors = eden::pipeline::reasoning::propagation_absence_sectors(
-                &deep_reasoning_event_snapshot,
-            );
-            for sector in &absence_sectors {
-                absence_memory.record_absence(
-                    sector,
-                    "propagation",
-                    tick,
-                    deep_reasoning_decision.timestamp,
-                );
-            }
-            absence_memory.decay(deep_reasoning_decision.timestamp);
-            edge_ledger.decay(deep_reasoning_decision.timestamp);
-        }
+        edge_ledger.decay(deep_reasoning_decision.timestamp);
 
         // Crystallize confirmed forces → attention boosts + emergent paths + graph edges
         let crystallization =
@@ -786,41 +706,6 @@ pub async fn run() {
             (!external_priors.is_empty()).then_some(&external_priors),
             history.latest().map(|tick| &tick.backward_reasoning),
         );
-        if eden::pipeline::reasoning::apply_vortex_success_pattern_feedback(
-            &mut reasoning_snapshot,
-            &reasoning_decision,
-            &reasoning_event_snapshot,
-            &graph_insights,
-            previous_setups,
-            previous_tracks,
-            &lineage_family_priors,
-            Some(&multi_horizon_gate),
-            Some(&dim_snapshot.dimensions),
-            {
-                #[cfg(feature = "persistence")]
-                {
-                    cached_hk_reviewer_doctrine.as_ref()
-                }
-                #[cfg(not(feature = "persistence"))]
-                {
-                    None
-                }
-            },
-            &vortex_success_patterns,
-            &world_snapshots.world_state,
-        ) {
-            world_snapshots = derive_with_backward_confirmation(
-                &reasoning_event_snapshot,
-                &reasoning_derived_signal_snapshot,
-                &graph_insights,
-                &reasoning_decision,
-                &mut reasoning_snapshot,
-                previous_setups,
-                previous_tracks,
-                (!external_priors.is_empty()).then_some(&external_priors),
-                history.latest().map(|tick| &tick.backward_reasoning),
-            );
-        }
         let action_stage = build_hk_action_stage(
             now,
             &brain,
@@ -875,188 +760,7 @@ pub async fn run() {
             LINEAGE_WINDOW as u64,
             now,
         );
-        let next_vortex_success_patterns =
-            compute_vortex_success_patterns(&history, LINEAGE_WINDOW);
-        integration.refresh_vortex_attention_with_patterns(
-            &world_snapshots.world_state,
-            &next_vortex_success_patterns,
-        );
-
-        // Evaluate and persist candidate mechanisms
-        {
-            let now_str = now
-                .format(&time::format_description::well_known::Rfc3339)
-                .unwrap_or_default();
-            cached_candidate_mechanisms = evaluate_candidate_mechanisms(
-                &next_vortex_success_patterns,
-                &cached_candidate_mechanisms,
-                "hk",
-                tick,
-                &now_str,
-            );
-            let live_count = cached_candidate_mechanisms
-                .iter()
-                .filter(|m| m.mode == "live")
-                .count();
-            let assist_count = cached_candidate_mechanisms
-                .iter()
-                .filter(|m| m.mode == "assist")
-                .count();
-            if !cached_candidate_mechanisms.is_empty() {
-                eprintln!(
-                    "[hk] candidate mechanisms: {} total, {} live, {} assist, {} shadow",
-                    cached_candidate_mechanisms.len(),
-                    live_count,
-                    assist_count,
-                    cached_candidate_mechanisms.len() - live_count - assist_count,
-                );
-            }
-            #[cfg(feature = "persistence")]
-            if let Some(ref store) = runtime.store {
-                if let Err(err) = store
-                    .write_candidate_mechanisms(&cached_candidate_mechanisms)
-                    .await
-                {
-                    eprintln!("[hk] failed to persist candidate mechanisms: {err}");
-                }
-            }
-        }
-
-        // Extract causal schemas from assist/live mechanisms (every 10 ticks)
-        if tick % 10 == 0 && !cached_candidate_mechanisms.is_empty() {
-            let now_str = now
-                .format(&time::format_description::well_known::Rfc3339)
-                .unwrap_or_default();
-            let fingerprints = crate::temporal::lineage::compute_vortex_successful_fingerprints(
-                &history,
-                LINEAGE_WINDOW,
-            );
-            let all_outcomes = crate::temporal::lineage::compute_case_realized_outcomes_adaptive(
-                &history,
-                LINEAGE_WINDOW,
-            );
-            let active_mechs: Vec<
-                &crate::persistence::candidate_mechanism::CandidateMechanismRecord,
-            > = cached_candidate_mechanisms
-                .iter()
-                .filter(|m| m.mode == "assist" || m.mode == "live")
-                .collect();
-            let mut schema_count = 0usize;
-            let mut schemas_to_write = Vec::new();
-            for mech in &active_mechs {
-                if let Some(schema) = extract_causal_schema(
-                    mech,
-                    &fingerprints,
-                    &all_outcomes,
-                    &history,
-                    tick,
-                    &now_str,
-                ) {
-                    schemas_to_write.push(schema);
-                    schema_count += 1;
-                }
-            }
-            if schema_count > 0 {
-                eprintln!(
-                    "[hk] extracted {} causal schemas from {} active mechanisms",
-                    schema_count,
-                    active_mechs.len()
-                );
-                #[cfg(feature = "persistence")]
-                if let Some(ref store) = runtime.store {
-                    if let Err(err) = store.write_causal_schemas(&schemas_to_write).await {
-                        eprintln!("[hk] failed to persist causal schemas: {err}");
-                    }
-                }
-            }
-        }
-
-        // Evolution cycle: governed lifecycle management (every 50 ticks)
-        if tick % 50 == 0 {
-            let now_str = now
-                .format(&time::format_description::well_known::Rfc3339)
-                .unwrap_or_default();
-
-            // Compute current surface quality from lineage outcomes
-            let all_outcomes = crate::temporal::lineage::compute_case_realized_outcomes_adaptive(
-                &history,
-                LINEAGE_WINDOW,
-            );
-            let hits = all_outcomes
-                .iter()
-                .filter(|o| o.net_return > Decimal::ZERO && o.followed_through)
-                .count() as u64;
-            let misses = all_outcomes
-                .iter()
-                .filter(|o| o.net_return <= Decimal::ZERO || !o.followed_through)
-                .count() as u64;
-            let total_return: Decimal = all_outcomes.iter().map(|o| o.net_return).sum();
-            let live_mech_count = cached_candidate_mechanisms
-                .iter()
-                .filter(|m| m.mode == "live")
-                .count();
-            let live_schema_count = cached_causal_schemas
-                .iter()
-                .filter(|s| s.status == "active")
-                .count();
-            let current_quality = SurfaceQualitySnapshot::from_outcomes(
-                tick,
-                hits,
-                misses,
-                total_return,
-                live_mech_count,
-                live_schema_count,
-            );
-
-            // Set baseline on first measurement (before any live schemas)
-            if baseline_quality.is_none() && (live_mech_count == 0 && live_schema_count == 0) {
-                baseline_quality = Some(current_quality.clone());
-            }
-
-            let evolution_result = run_evolution_cycle(
-                &mut cached_candidate_mechanisms,
-                &mut cached_causal_schemas,
-                &shadow_scores,
-                baseline_quality.as_ref(),
-                Some(&current_quality),
-                tick,
-                &now_str,
-            );
-
-            if !evolution_result.events.is_empty() {
-                eprintln!(
-                    "[hk] evolution cycle: {} events ({}p/{}d/{}r/{}x mechanisms, {}p/{}d/{}r/{}x schemas)",
-                    evolution_result.events.len(),
-                    evolution_result.mechanisms_promoted,
-                    evolution_result.mechanisms_demoted,
-                    evolution_result.rollbacks_triggered,
-                    evolution_result.mechanisms_pruned,
-                    evolution_result.schemas_promoted,
-                    evolution_result.schemas_demoted,
-                    evolution_result.rollbacks_triggered,
-                    evolution_result.schemas_pruned,
-                );
-                for event in &evolution_result.events {
-                    eprintln!(
-                        "[hk]   {} {} {} → {} ({})",
-                        event.action,
-                        event.entity_kind,
-                        event.from_state,
-                        event.to_state,
-                        event.reason
-                    );
-                }
-            }
-
-            // Persist updated state
-            #[cfg(feature = "persistence")]
-            if let Some(ref store) = runtime.store {
-                let _ = store
-                    .write_candidate_mechanisms(&cached_candidate_mechanisms)
-                    .await;
-                let _ = store.write_causal_schemas(&cached_causal_schemas).await;
-            }
-        }
+        integration.refresh_vortex_attention(&world_snapshots.world_state);
 
         store
             .knowledge_write()

@@ -468,15 +468,11 @@ fn world_helper_rerenders_leaf_after_backward_gate() {
         None,
     );
 
-    assert_eq!(reasoning.tactical_setups[0].action, "review");
-    assert_eq!(reasoning.hypothesis_tracks[0].action, "review");
+    // Backward confirmation gate was removed in pressure field redesign.
+    // Setups retain their original action; no demotion to "review".
+    assert_eq!(reasoning.tactical_setups[0].action, "enter");
+    assert_eq!(reasoning.hypothesis_tracks[0].action, "enter");
     assert!(snapshots.backward_reasoning.investigations.is_empty());
-    assert!(snapshots
-        .world_state
-        .entities
-        .iter()
-        .find(|entity| entity.label == "Long 700.HK")
-        .is_some_and(|entity| entity.regime == "review"));
 }
 
 #[test]

@@ -8,31 +8,12 @@ use time::OffsetDateTime;
 use crate::pipeline::reasoning::ConvergenceDetail;
 
 use super::buffer::TickHistory;
-#[path = "lineage/evolution.rs"]
-pub mod evolution;
 #[path = "lineage/outcomes.rs"]
 mod outcomes;
-#[path = "lineage/schema.rs"]
-mod schema;
-#[path = "lineage/vortex.rs"]
-mod vortex;
 use outcomes::*;
 pub use outcomes::{
     compute_case_realized_outcomes, compute_case_realized_outcomes_adaptive,
     compute_family_context_outcomes,
-};
-#[cfg(test)]
-use outcomes::{fade_return, setup_direction};
-pub use evolution::{
-    detect_quality_degradation, run_evolution_cycle, shadow_score_schema, EvolutionCycleResult,
-    EvolutionEvent, ShadowScore, SurfaceQualitySnapshot,
-};
-pub use schema::extract_causal_schema;
-pub use vortex::{
-    active_candidate_mechanisms, compute_vortex_success_patterns,
-    compute_vortex_successful_fingerprints, evaluate_candidate_mechanisms,
-    live_candidate_mechanisms, score_candidate_mechanism, vortex_matches_success_pattern,
-    VortexOutcomeFingerprint, VortexSuccessPattern,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -158,8 +139,6 @@ impl MultiHorizonGate {
         }
     }
 
-    /// A family is allowed if it has proven itself OR has never been tried.
-    /// Only families that have been attempted and failed are blocked.
     pub fn allows(&self, family: &str) -> bool {
         self.supported.contains(family) || !self.attempted.contains(family)
     }

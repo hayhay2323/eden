@@ -3,6 +3,7 @@ pub mod dimensions;
 pub mod learning_loop;
 pub mod mechanism_inference;
 pub mod predicate_engine;
+pub mod pressure;
 pub mod reasoning;
 pub mod residual;
 pub mod signals;

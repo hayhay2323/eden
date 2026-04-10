@@ -27,13 +27,9 @@ pub(super) struct UsRuntimeBootstrap {
     pub(super) tick: u64,
     pub(super) debounce: std::time::Duration,
     pub(super) bootstrap_pending: bool,
-    pub(super) absence_memory: crate::pipeline::reasoning::AbsenceMemory,
     pub(super) energy_momentum: crate::graph::energy::EnergyMomentum,
     #[cfg(feature = "persistence")]
     pub(super) cached_us_learning_feedback: Option<ReasoningLearningFeedback>,
-    #[cfg(feature = "persistence")]
-    pub(super) cached_us_reviewer_doctrine:
-        Option<crate::pipeline::reasoning::ReviewerDoctrinePressure>,
 }
 
 pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dyn std::error::Error>>
@@ -141,29 +137,7 @@ pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dy
             let restored_records = tick_history.latest_n(2);
             if let Some(latest) = restored_records.last().copied() {
                 previous_setups = latest.tactical_setups.clone();
-                previous_tracks = if restored_records.len() >= 2 {
-                    let previous_record = restored_records[restored_records.len() - 2];
-                    let baseline_previous_tracks =
-                        crate::pipeline::reasoning::derive_hypothesis_tracks(
-                            previous_record.timestamp,
-                            &previous_record.tactical_setups,
-                            &[],
-                            &[],
-                        );
-                    crate::pipeline::reasoning::derive_hypothesis_tracks(
-                        latest.timestamp,
-                        &latest.tactical_setups,
-                        &previous_record.tactical_setups,
-                        &baseline_previous_tracks,
-                    )
-                } else {
-                    crate::pipeline::reasoning::derive_hypothesis_tracks(
-                        latest.timestamp,
-                        &latest.tactical_setups,
-                        &[],
-                        &[],
-                    )
-                };
+                previous_tracks = Vec::new();
                 lineage_stats = compute_us_lineage_stats(&tick_history, SIGNAL_RESOLUTION_LAG);
                 lineage_accumulator.ingest(&lineage_stats, &lineage_prev_resolved);
                 lineage_prev_resolved = lineage_stats
@@ -241,11 +215,8 @@ pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dy
         tick: restored_tick,
         debounce,
         bootstrap_pending,
-        absence_memory: crate::pipeline::reasoning::AbsenceMemory::default(),
         energy_momentum: crate::graph::energy::EnergyMomentum::default(),
         #[cfg(feature = "persistence")]
         cached_us_learning_feedback: None,
-        #[cfg(feature = "persistence")]
-        cached_us_reviewer_doctrine: None,
     })
 }

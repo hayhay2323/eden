@@ -45,7 +45,6 @@ use eden::pipeline::signals::{
     broker_events_from_delta, DerivedSignalSnapshot, EventSnapshot, ObservationSnapshot,
 };
 use eden::temporal::buffer::TickHistory;
-use eden::temporal::lineage::compute_family_context_outcomes;
 use eden::temporal::record::TickRecord;
 use eden::HypothesisTrackStatus;
 use rust_decimal::Decimal;
@@ -170,30 +169,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .latest()
                 .map(|record| record.hypothesis_tracks.as_slice())
                 .unwrap_or(&[]);
-            let lineage_priors = compute_family_context_outcomes(&history, 300);
-            let empty_convergence = std::collections::HashMap::new();
-            let absence_memory = eden::pipeline::reasoning::AbsenceMemory::default();
-            let family_boost = eden::pipeline::reasoning::FamilyBoostLedger::default();
-            let reasoning_ctx = eden::pipeline::reasoning::ReasoningContext {
-                lineage_priors: &lineage_priors,
-                multi_horizon_gate: None,
-                symbol_dimensions: Some(&dim_snapshot.dimensions),
-                reviewer_doctrine: None,
-                convergence_components: &empty_convergence,
-                market_regime: &decision.market_regime,
-                world_state: None,
-                absence_memory: &absence_memory,
-                family_boost: &family_boost,
-            };
-            let mut reasoning_snapshot = ReasoningSnapshot::derive_with_policy(
-                &event_snapshot,
-                &derived_signal_snapshot,
-                &graph_insights,
-                &decision,
-                previous_setups,
-                previous_tracks,
-                &reasoning_ctx,
-            );
+            let mut reasoning_snapshot = ReasoningSnapshot::empty(decision.timestamp);
             let previous_backward = history.latest().map(|record| &record.backward_reasoning);
             let world_snapshots = eden::pipeline::world::derive_with_backward_confirmation(
                 &event_snapshot,

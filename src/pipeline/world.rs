@@ -60,12 +60,12 @@ pub fn derive_with_backward_confirmation(
     insights: &GraphInsights,
     decision: &DecisionSnapshot,
     reasoning: &mut ReasoningSnapshot,
-    previous_setups: &[TacticalSetup],
-    previous_tracks: &[HypothesisTrack],
+    _previous_setups: &[TacticalSetup],
+    _previous_tracks: &[HypothesisTrack],
     polymarket: Option<&PolymarketSnapshot>,
     previous_backward_reasoning: Option<&BackwardReasoningSnapshot>,
 ) -> WorldSnapshots {
-    let provisional = WorldSnapshots::derive(
+    WorldSnapshots::derive(
         events,
         derived_signals,
         insights,
@@ -73,25 +73,7 @@ pub fn derive_with_backward_confirmation(
         reasoning,
         polymarket,
         previous_backward_reasoning,
-    );
-    if crate::pipeline::reasoning::apply_backward_confirmation_gate(
-        reasoning,
-        previous_setups,
-        previous_tracks,
-        &provisional.backward_reasoning,
-    ) {
-        WorldSnapshots::derive(
-            events,
-            derived_signals,
-            insights,
-            decision,
-            reasoning,
-            polymarket,
-            previous_backward_reasoning,
-        )
-    } else {
-        provisional
-    }
+    )
 }
 
 fn derive_world_state(

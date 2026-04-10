@@ -165,12 +165,17 @@ pub(super) fn merge_standard_attention_maintenance(
         }
     }
 
-    reasoning_snapshot.hypothesis_tracks = eden::pipeline::reasoning::derive_hypothesis_tracks(
-        timestamp,
-        &reasoning_snapshot.tactical_setups,
-        previous_setups,
-        previous_tracks,
-    );
+    // Carry over previous tracks for standard-attention symbols
+    let standard_scope_set: HashSet<_> = standard_symbols.iter().collect();
+    reasoning_snapshot.hypothesis_tracks = previous_tracks
+        .iter()
+        .filter(|track| matches!(
+            &track.scope,
+            eden::ontology::reasoning::ReasoningScope::Symbol(symbol)
+                if standard_scope_set.contains(symbol)
+        ))
+        .cloned()
+        .collect();
 }
 
 pub(super) fn setup_action_priority(action: &str) -> i32 {

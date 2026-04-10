@@ -66,7 +66,6 @@ use crate::us::temporal::buffer::UsTickHistory;
 use crate::us::temporal::causality::compute_causal_timelines;
 use crate::us::temporal::lineage::{
     compute_us_convergence_success_patterns, compute_us_lineage_stats,
-    compute_us_multi_horizon_lineage_metrics,
     evaluate_us_candidate_mechanisms, UsLineageStats,
 };
 use crate::us::temporal::record::{UsSymbolSignals, UsTickRecord};
@@ -132,12 +131,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         mut tick,
         debounce,
         mut bootstrap_pending,
-        mut absence_memory,
         mut energy_momentum,
         #[cfg(feature = "persistence")]
         mut cached_us_learning_feedback,
-        #[cfg(feature = "persistence")]
-        mut cached_us_reviewer_doctrine,
     } = initialize_us_runtime().await?;
     #[cfg(feature = "persistence")]
     const US_LEARNING_FEEDBACK_REFRESH_INTERVAL: u64 = 30;
@@ -163,23 +159,22 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     #[cfg(feature = "persistence")]
-    let mut baseline_quality: Option<crate::temporal::lineage::evolution::SurfaceQualitySnapshot> =
-        None;
-    #[cfg(feature = "persistence")]
-    let mut cached_us_causal_schemas: Vec<crate::persistence::causal_schema::CausalSchemaRecord> =
-        Vec::new();
-    #[cfg(feature = "persistence")]
-    if let Some(ref store) = runtime.store {
-        if let Ok(schemas) = store.load_causal_schemas("us").await {
-            eprintln!("[us] loaded {} causal schemas from store", schemas.len());
-            cached_us_causal_schemas = schemas;
+    let _cached_us_causal_schemas: Vec<crate::persistence::causal_schema::CausalSchemaRecord> = {
+        let mut schemas_vec = Vec::new();
+        if let Some(ref store) = runtime.store {
+            if let Ok(schemas) = store.load_causal_schemas("us").await {
+                eprintln!("[us] loaded {} causal schemas from store", schemas.len());
+                schemas_vec = schemas;
+            }
         }
-    }
+        schemas_vec
+    };
 
     let mut us_hidden_force_state =
         crate::pipeline::residual::HiddenForceVerificationState::default();
     let mut edge_ledger = crate::graph::edge_learning::EdgeLearningLedger::default();
     let mut seen_us_edge_learning_setups = HashSet::new();
+    let mut pressure_field = crate::pipeline::pressure::PressureField::new(time::OffsetDateTime::now_utc());
 
     loop {
         let Some(tick_advance) = ({
@@ -407,13 +402,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             UsDecisionSnapshot::compute(&graph, &cross_market_signals, tick, Some(&edge_ledger));
 
         // 5. Reasoning: hypotheses + tactical setups
-        let mut lineage_prior = compute_us_lineage_stats(&tick_history, SIGNAL_RESOLUTION_LAG);
-        lineage_prior.enrich_with_cumulative(&lineage_accumulator);
-        let multi_horizon_lineage = compute_us_multi_horizon_lineage_metrics(&tick_history);
-        let multi_horizon_gate =
-            crate::temporal::lineage::MultiHorizonGate::from_metrics(&multi_horizon_lineage);
-        let convergence_success_patterns =
-            compute_us_convergence_success_patterns(&tick_history, SIGNAL_RESOLUTION_LAG);
+        let _lineage_prior = compute_us_lineage_stats(&tick_history, SIGNAL_RESOLUTION_LAG);
         let attention_plan = attention_reasoning_plan(
             graph.stock_nodes.keys().cloned(),
             &attention,
@@ -422,61 +411,47 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             &vortex_attention,
         );
         let reasoning_active_symbols = attention_plan.active_symbols();
-        let deep_reasoning_event_snapshot =
-            filter_us_event_snapshot_for_reasoning(&event_snapshot, &attention_plan.deep_symbols);
         let reasoning_event_snapshot =
             filter_us_event_snapshot_for_reasoning(&event_snapshot, &reasoning_active_symbols);
-        let deep_reasoning_derived_snapshot = filter_us_derived_signal_snapshot_for_reasoning(
-            &derived_snapshot,
-            &attention_plan.deep_symbols,
-        );
         let reasoning_derived_snapshot = filter_us_derived_signal_snapshot_for_reasoning(
             &derived_snapshot,
             &reasoning_active_symbols,
         );
-        let deep_reasoning_decision =
-            filter_us_decision_for_reasoning(&decision, &attention_plan.deep_symbols);
         let reasoning_decision =
             filter_us_decision_for_reasoning(&decision, &reasoning_active_symbols);
-        #[cfg(feature = "persistence")]
-        if let Some(ref store) = runtime.store {
-            if cached_us_reviewer_doctrine.is_none() || tick % 30 == 0 {
-                if let Ok(assessments) = store
-                    .recent_case_reasoning_assessments_by_market("us", 240)
-                    .await
-                {
-                    cached_us_reviewer_doctrine = Some(
-                        crate::pipeline::reasoning::ReviewerDoctrinePressure::from_assessments(
-                            &assessments,
-                        ),
-                    );
-                }
-            }
+        // Pressure field: inject local pressure, propagate along US graph edges, detect vortices.
+        pressure_field.tick_us(now, &dim_snapshot.dimensions, &graph);
+        if !pressure_field.vortices.is_empty() {
+            eprintln!(
+                "[us] pressure field: {} vortices (top: {} strength={} ch={} dir={})",
+                pressure_field.vortices.len(),
+                pressure_field.vortices[0].symbol.0,
+                pressure_field.vortices[0].strength,
+                pressure_field.vortices[0].channel_count,
+                pressure_field.vortices[0].direction,
+            );
         }
-        let mut reasoning = UsReasoningSnapshot::derive_with_diffusion(
-            &deep_reasoning_event_snapshot,
-            &deep_reasoning_derived_snapshot,
+
+        let mut reasoning = UsReasoningSnapshot::empty(now);
+
+        // Pressure field → tactical setups: surface vortices as actionable items.
+        let vortex_setups = crate::pipeline::pressure::bridge::vortices_to_tactical_setups(
+            &pressure_field.vortices,
+            now,
             tick,
-            &previous_setups,
-            &previous_tracks,
-            Some(deep_reasoning_decision.market_regime.bias),
-            Some(&lineage_prior),
-            Some(&multi_horizon_gate),
-            Some(&structural_metrics),
-            Some(&deep_reasoning_decision.convergence_scores),
-            &graph,
-            &cross_market_signals,
-            {
-                #[cfg(feature = "persistence")]
-                {
-                    cached_us_reviewer_doctrine.as_ref()
-                }
-                #[cfg(not(feature = "persistence"))]
-                {
-                    None
-                }
-            },
+            10,
         );
+        if !vortex_setups.is_empty() {
+            eprintln!(
+                "[us] pressure→action: {} vortex setups (top: {} action={} conf={})",
+                vortex_setups.len(),
+                vortex_setups[0].scope.label(),
+                vortex_setups[0].action,
+                vortex_setups[0].confidence,
+            );
+            reasoning.tactical_setups.extend(vortex_setups);
+        }
+
         merge_us_standard_attention_maintenance(
             &mut reasoning,
             tick_history.latest(),
@@ -484,28 +459,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             &previous_setups,
             &previous_tracks,
             now,
-        );
-        crate::us::pipeline::reasoning::apply_us_convergence_success_pattern_feedback(
-            &mut reasoning,
-            tick,
-            &previous_setups,
-            &previous_tracks,
-            Some(reasoning_decision.market_regime.bias),
-            Some(&lineage_prior),
-            Some(&multi_horizon_gate),
-            Some(&structural_metrics),
-            {
-                #[cfg(feature = "persistence")]
-                {
-                    cached_us_reviewer_doctrine.as_ref()
-                }
-                #[cfg(not(feature = "persistence"))]
-                {
-                    None
-                }
-            },
-            &convergence_success_patterns,
-            Some(&reasoning_decision.convergence_scores),
         );
 
         // 5a. Energy momentum: accumulate diffusion energy across ticks
@@ -662,30 +615,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
         edge_ledger.decay(now);
 
-        // Update absence memory: clear on successful propagation, record absence, decay
-        {
-            let mut propagated_sectors = std::collections::HashSet::new();
-            for path in &reasoning.propagation_paths {
-                for step in &path.steps {
-                    if let crate::ontology::reasoning::ReasoningScope::Sector(ref sid) = step.to {
-                        propagated_sectors.insert(sid.clone());
-                    }
-                    if let crate::ontology::reasoning::ReasoningScope::Sector(ref sid) = step.from {
-                        propagated_sectors.insert(sid.clone());
-                    }
-                }
-            }
-            for sector in &propagated_sectors {
-                absence_memory.record_propagation(sector);
-            }
-            let absence_sectors =
-                crate::us::pipeline::signals::us_propagation_absence_sectors(&event_snapshot);
-            for sector in &absence_sectors {
-                absence_memory.record_absence(sector, "propagation", tick, now);
-            }
-            absence_memory.decay(now);
-        }
-
         // Accumulate institutional memory from US graph
         store
             .knowledge_write()
@@ -722,103 +651,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .await
                 {
                     eprintln!("[us] failed to persist candidate mechanisms: {err}");
-                }
-            }
-        }
-
-        // Causal schema extraction (every 10 ticks)
-        #[cfg(feature = "persistence")]
-        if tick % 10 == 0 && !cached_us_candidate_mechanisms.is_empty() {
-            let fingerprints = crate::us::temporal::outcomes::compute_us_vortex_successful_fingerprints(
-                &tick_history,
-                SIGNAL_RESOLUTION_LAG,
-            );
-            let all_outcomes = crate::us::temporal::outcomes::compute_us_case_realized_outcomes_adaptive(
-                &tick_history,
-                SIGNAL_RESOLUTION_LAG,
-            );
-            if !fingerprints.is_empty() || !all_outcomes.is_empty() {
-                eprintln!(
-                    "[us] causal schema extraction: {} fingerprints, {} outcomes from {} mechanisms",
-                    fingerprints.len(),
-                    all_outcomes.len(),
-                    cached_us_candidate_mechanisms.len(),
-                );
-            }
-            // Schema extraction requires TickHistory (HK type) for vortex lookup.
-            // US stores fingerprints/outcomes for future schema extraction once
-            // the schema module is generalized to accept UsTickHistory.
-        }
-
-        // Evolution cycle (every 50 ticks): surface quality + mechanism governance
-        #[cfg(feature = "persistence")]
-        if tick % 50 == 0 && tick_history.len() > 20 {
-            let all_outcomes =
-                crate::us::temporal::outcomes::compute_us_case_realized_outcomes_adaptive(
-                    &tick_history,
-                    SIGNAL_RESOLUTION_LAG,
-                );
-            let hits = all_outcomes
-                .iter()
-                .filter(|o| o.net_return > Decimal::ZERO && o.followed_through)
-                .count();
-            let misses = all_outcomes
-                .iter()
-                .filter(|o| o.net_return <= Decimal::ZERO || !o.followed_through)
-                .count();
-            let total_return: Decimal = all_outcomes.iter().map(|o| o.net_return).sum();
-            let live_mech_count = cached_us_candidate_mechanisms
-                .iter()
-                .filter(|m| m.mode == "live")
-                .count();
-            let live_schema_count = cached_us_causal_schemas
-                .iter()
-                .filter(|s| s.status == "active")
-                .count();
-
-            let current_quality =
-                crate::temporal::lineage::evolution::SurfaceQualitySnapshot::from_outcomes(
-                    tick,
-                    hits,
-                    misses,
-                    total_return,
-                    live_mech_count,
-                    live_schema_count,
-                );
-
-            if baseline_quality.is_none() && live_mech_count == 0 && live_schema_count == 0 {
-                baseline_quality = Some(current_quality.clone());
-            }
-
-            eprintln!(
-                "[us] evolution cycle tick={}: hits={} misses={} return={:.4} mechs={} schemas={}",
-                tick, hits, misses, total_return, live_mech_count, live_schema_count,
-            );
-
-            let _evolution_result =
-                crate::temporal::lineage::evolution::run_evolution_cycle(
-                    &mut cached_us_candidate_mechanisms,
-                    &mut cached_us_causal_schemas,
-                    &std::collections::HashMap::new(), // shadow scores (not yet computed for US)
-                    baseline_quality.as_ref(),
-                    Some(&current_quality),
-                    tick,
-                    &now.format(&time::format_description::well_known::Rfc3339)
-                        .unwrap_or_default(),
-                );
-
-            if let Some(ref store) = runtime.store {
-                if let Err(err) = store
-                    .write_candidate_mechanisms(&cached_us_candidate_mechanisms)
-                    .await
-                {
-                    eprintln!("[us] evolution: failed to persist mechanisms: {err}");
-                }
-                if let Err(err) = store
-                    .write_causal_schemas(&cached_us_causal_schemas)
-                    .await
-                {
-                    eprintln!("[us] evolution: failed to persist schemas: {err}");
                 }
             }
         }

@@ -1,6 +1,4 @@
 use super::*;
-use crate::live_snapshot::LiveSuccessPattern;
-use crate::temporal::lineage::compute_vortex_success_patterns;
 use crate::temporal::pyramid::build_hk_live_temporal_bars;
 use crate::temporal::session::{event_half_life_secs, freshness_score_from_age_secs};
 
@@ -232,22 +230,7 @@ pub(crate) fn build_hk_live_snapshot(
         propagation_senses,
         temporal_bars: build_hk_live_temporal_bars(history, &temporal_symbols),
         lineage: build_hk_lineage_metrics(history),
-        success_patterns: compute_vortex_success_patterns(history, LINEAGE_WINDOW)
-            .into_iter()
-            .take(6)
-            .map(|item| LiveSuccessPattern {
-                family: item.top_family,
-                signature: item.channel_signature,
-                dominant_channels: item.dominant_channels,
-                samples: item.samples,
-                mean_net_return: item.mean_net_return,
-                mean_strength: item.mean_strength,
-                mean_coherence: item.mean_coherence,
-                mean_channel_diversity: Some(item.mean_channel_diversity),
-                center_kind: Some(item.center_kind),
-                role: Some(item.role),
-            })
-            .collect(),
+        success_patterns: Vec::new(),
     }
 }
 
