@@ -175,6 +175,24 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut edge_ledger = crate::graph::edge_learning::EdgeLearningLedger::default();
     let mut seen_us_edge_learning_setups = HashSet::new();
     let mut pressure_field = crate::pipeline::pressure::PressureField::new(time::OffsetDateTime::now_utc());
+    let mut lifecycle_tracker =
+        crate::pipeline::pressure::reasoning::LifecycleTracker::default();
+    let mut sector_members: HashMap<SectorId, Vec<Symbol>> = store
+        .sectors
+        .keys()
+        .cloned()
+        .map(|sector_id| (sector_id, Vec::new()))
+        .collect();
+    let mut symbol_sector: HashMap<Symbol, SectorId> = HashMap::new();
+    for (symbol, stock) in &store.stocks {
+        if let Some(sector_id) = stock.sector_id.clone() {
+            sector_members
+                .entry(sector_id.clone())
+                .or_default()
+                .push(symbol.clone());
+            symbol_sector.insert(symbol.clone(), sector_id);
+        }
+    }
 
     loop {
         let Some(tick_advance) = ({
@@ -210,6 +228,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let market_open = is_us_regular_market_hours(now);
         if !market_open {
             // Still write snapshot but mark as after-hours, skip reasoning
+            lifecycle_tracker.decay(tick);
             if tick % 100 == 0 {
                 let (open_hour, open_minute, close_hour, close_minute) = us_market_hours_utc(now);
                 println!(
@@ -256,17 +275,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         // Build US graph
-        let sector_map: HashMap<Symbol, SectorId> = store
-            .stocks
-            .iter()
-            .filter_map(|(sym, s)| s.sector_id.clone().map(|sid| (sym.clone(), sid)))
-            .collect();
         let sector_names: HashMap<SectorId, String> = store
             .sectors
             .iter()
             .map(|(id, s)| (id.clone(), s.name.clone()))
             .collect();
-        let graph = UsGraph::compute(&dim_snapshot, &sector_map, &sector_names);
+        let graph = UsGraph::compute(&dim_snapshot, &symbol_sector, &sector_names);
         let prev_record = tick_history.latest();
         let prev_prev_record = tick_history.latest_n(2).into_iter().next();
         let structural_metrics = dim_snapshot
@@ -421,6 +435,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             filter_us_decision_for_reasoning(&decision, &reasoning_active_symbols);
         // Pressure field: inject local pressure, propagate along US graph edges, detect vortices.
         pressure_field.tick_us(now, &dim_snapshot.dimensions, &graph);
+        for vortex in &pressure_field.vortices {
+            lifecycle_tracker.record(&vortex.symbol, tick, vortex.tension);
+        }
+        lifecycle_tracker.decay(tick);
         if !pressure_field.vortices.is_empty() {
             eprintln!(
                 "[us] pressure field: {} vortices (top: {} strength={} ch={} dir={})",
@@ -430,6 +448,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 pressure_field.vortices[0].tense_channel_count,
                 pressure_field.vortices[0].temporal_divergence,
             );
+        }
+        for vortex in pressure_field.vortices.iter().take(5) {
+            if let Some(insight) = crate::pipeline::pressure::reasoning::reason_about_vortex(
+                vortex,
+                &pressure_field,
+                &lifecycle_tracker,
+                &sector_members,
+                &symbol_sector,
+            ) {
+                eprintln!("[us] {}", insight.summary);
+            }
         }
         // Vortex outcome learning
         {

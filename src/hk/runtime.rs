@@ -177,6 +177,23 @@ pub async fn run() {
     let mut seen_hk_edge_learning_setups = HashSet::new();
     let mut energy_momentum = eden::graph::energy::EnergyMomentum::default();
     let mut pressure_field = eden::pipeline::pressure::PressureField::new(time::OffsetDateTime::now_utc());
+    let mut lifecycle_tracker = eden::pipeline::pressure::reasoning::LifecycleTracker::default();
+    let mut sector_members: HashMap<eden::ontology::objects::SectorId, Vec<Symbol>> = store
+        .sectors
+        .keys()
+        .cloned()
+        .map(|sector_id| (sector_id, Vec::new()))
+        .collect();
+    let mut symbol_sector = HashMap::new();
+    for (symbol, stock) in &store.stocks {
+        if let Some(sector_id) = stock.sector_id.clone() {
+            sector_members
+                .entry(sector_id.clone())
+                .or_default()
+                .push(symbol.clone());
+            symbol_sector.insert(symbol.clone(), sector_id);
+        }
+    }
 
     loop {
         let mut rest_updated = false;
@@ -452,15 +469,10 @@ pub async fn run() {
                 &previous_agent_snapshot.macro_events,
             );
         }
-        let sector_map: std::collections::HashMap<_, _> = store
-            .stocks
-            .iter()
-            .filter_map(|(sym, stock)| stock.sector_id.as_ref().map(|s| (sym.clone(), s.clone())))
-            .collect();
         crate::pipeline::signals::detect_propagation_absences(
             &mut event_snapshot,
             &dim_snapshot,
-            &sector_map,
+            &symbol_sector,
         );
         let derived_signal_snapshot = DerivedSignalSnapshot::compute(
             &dim_snapshot,
@@ -568,6 +580,10 @@ pub async fn run() {
             &brain,
             &edge_ledger,
         );
+        for vortex in &pressure_field.vortices {
+            lifecycle_tracker.record(&vortex.symbol, tick, vortex.tension);
+        }
+        lifecycle_tracker.decay(tick);
         if !pressure_field.vortices.is_empty() {
             eprintln!(
                 "[hk] pressure field: {} vortices detected (top: {} strength={} channels={} dir={})",
@@ -577,6 +593,17 @@ pub async fn run() {
                 pressure_field.vortices[0].tense_channel_count,
                 pressure_field.vortices[0].temporal_divergence,
             );
+        }
+        for vortex in pressure_field.vortices.iter().take(5) {
+            if let Some(insight) = eden::pipeline::pressure::reasoning::reason_about_vortex(
+                vortex,
+                &pressure_field,
+                &lifecycle_tracker,
+                &sector_members,
+                &symbol_sector,
+            ) {
+                eprintln!("[hk] {}", insight.summary);
+            }
         }
         // Vortex outcome learning: record pending vortices, resolve old ones, update edges
         {
@@ -716,7 +743,7 @@ pub async fn run() {
             previous_tracks,
             decision.timestamp,
         );
-        let mut world_snapshots = derive_with_backward_confirmation(
+        let world_snapshots = derive_with_backward_confirmation(
             &reasoning_event_snapshot,
             &reasoning_derived_signal_snapshot,
             &graph_insights,

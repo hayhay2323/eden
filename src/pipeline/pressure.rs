@@ -5,6 +5,8 @@
 
 #[path = "pressure/bridge.rs"]
 pub mod bridge;
+#[path = "pressure/reasoning.rs"]
+pub mod reasoning;
 
 use std::collections::HashMap;
 
