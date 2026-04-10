@@ -426,9 +426,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "[us] pressure field: {} vortices (top: {} strength={} ch={} dir={})",
                 pressure_field.vortices.len(),
                 pressure_field.vortices[0].symbol.0,
-                pressure_field.vortices[0].strength,
-                pressure_field.vortices[0].channel_count,
-                pressure_field.vortices[0].direction,
+                pressure_field.vortices[0].tension,
+                pressure_field.vortices[0].tense_channel_count,
+                pressure_field.vortices[0].temporal_divergence,
             );
         }
         // Vortex outcome learning

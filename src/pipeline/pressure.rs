@@ -75,21 +75,36 @@ pub struct NodePressure {
     pub conflict: Decimal,
 }
 
-// ── Vortex: emergent convergence point ──
+// ── Vortex: emergent tension point ──
+//
+// A vortex is NOT "all channels agree" (that's the past).
+// A vortex is "channels DISAGREE across time scales" (that's the future).
+//
+// Example: option pressure says bearish (hour layer) but stock price says
+// bullish (tick layer). This tension means someone is positioning ahead
+// of a move that hasn't happened yet. The tension itself is the signal.
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PressureVortex {
     pub symbol: Symbol,
-    /// Overall strength = |composite| * convergence.
-    pub strength: Decimal,
-    /// Channel agreement [0, 1].
-    pub coherence: Decimal,
-    /// Net direction across all contributing channels.
-    pub direction: Decimal,
-    /// Which channels contribute meaningfully.
-    pub active_channels: Vec<PressureChannel>,
-    /// Number of active channels.
-    pub channel_count: usize,
+    /// Tension strength: how much do the time layers disagree?
+    /// High tension = something is building up.
+    pub tension: Decimal,
+    /// Cross-channel conflict: how much do different channels disagree?
+    /// High conflict at hour/day layer = structural divergence.
+    pub cross_channel_conflict: Decimal,
+    /// Tick-vs-hour divergence: is the short-term moving against the long-term?
+    /// Positive = tick is above hour (potential reversal incoming).
+    /// Negative = tick is below hour (potential bounce incoming).
+    pub temporal_divergence: Decimal,
+    /// Hour-layer composite (the "background truth").
+    pub hour_direction: Decimal,
+    /// Tick-layer composite (the "surface noise").
+    pub tick_direction: Decimal,
+    /// Which channels have the most tension.
+    pub tense_channels: Vec<PressureChannel>,
+    /// Number of channels with material tension.
+    pub tense_channel_count: usize,
 }
 
 // ── Multi-scale accumulator ──
@@ -155,7 +170,7 @@ pub struct PendingVortex {
 pub struct VortexOutcome {
     pub symbol: Symbol,
     pub direction: Decimal,
-    pub strength: Decimal,
+    pub tension: Decimal,
     pub return_pct: Decimal,
     pub correct: bool,
 }
@@ -230,8 +245,10 @@ impl PressureField {
         let minute_layer = self.layers.get(&TimeScale::Minute).unwrap();
         self.anomalies = compute_anomalies(minute_layer, &self.baseline);
 
-        // 7. Detect vortices from the minute-scale layer (smoothed, not noisy tick).
-        self.vortices = detect_vortices(minute_layer);
+        // 7. Detect tension vortices: where tick and hour layers disagree.
+        let tick_layer = self.layers.get(&TimeScale::Tick).unwrap();
+        let hour_layer = self.layers.get(&TimeScale::Hour).unwrap();
+        self.vortices = detect_vortices(tick_layer, hour_layer);
     }
 
     /// US tick: same engine, different data sources and graph topology.
@@ -258,7 +275,10 @@ impl PressureField {
 
         let minute_layer = self.layers.get(&TimeScale::Minute).unwrap();
         self.anomalies = compute_anomalies(minute_layer, &self.baseline);
-        self.vortices = detect_vortices(minute_layer);
+
+        let tick_layer = self.layers.get(&TimeScale::Tick).unwrap();
+        let hour_layer = self.layers.get(&TimeScale::Hour).unwrap();
+        self.vortices = detect_vortices(tick_layer, hour_layer);
     }
 
     /// Record current vortices as pending outcomes. Call after each tick.
@@ -272,17 +292,24 @@ impl PressureField {
 
         // 1. Resolve pending vortices that are old enough
         let mut resolved = Vec::new();
+        let old_count = self.pending_vortices.len();
         self.pending_vortices.retain(|pending| {
             if tick < pending.detected_tick + RESOLUTION_LAG {
                 return true; // keep — not old enough
             }
             let entry_price = match pending.entry_price {
                 Some(p) if p > Decimal::ZERO => p,
-                _ => return false, // drop — no entry price
+                _ => {
+                    eprintln!("  vortex resolve: {} dropped (no entry price)", pending.symbol.0);
+                    return false;
+                }
             };
             let current_price = match prices.get(&pending.symbol) {
                 Some(p) if *p > Decimal::ZERO => *p,
-                _ => return false, // drop — no current price
+                _ => {
+                    eprintln!("  vortex resolve: {} dropped (no current price in {} symbols)", pending.symbol.0, prices.len());
+                    return false;
+                }
             };
             let return_pct = (current_price - entry_price) / entry_price;
             let directional_return = if pending.direction >= Decimal::ZERO {
@@ -295,17 +322,26 @@ impl PressureField {
             resolved.push(VortexOutcome {
                 symbol: pending.symbol.clone(),
                 direction: pending.direction,
-                strength: pending.strength,
+                tension: pending.strength,
                 return_pct: directional_return,
                 correct,
             });
             false // remove from pending
         });
+        if !resolved.is_empty() || self.pending_vortices.len() != old_count {
+            eprintln!(
+                "  vortex learning: resolved={} dropped={} still_pending={} prices={}",
+                resolved.len(),
+                old_count - self.pending_vortices.len() - resolved.len(),
+                self.pending_vortices.len(),
+                prices.len(),
+            );
+        }
         self.recent_outcomes = resolved;
 
         // 2. Record new vortices as pending (only strong ones, above anomaly threshold)
         for vortex in &self.vortices {
-            if vortex.strength.abs() < Decimal::new(2, 2) {
+            if vortex.tension.abs() < Decimal::new(2, 2) {
                 continue; // skip weak vortices
             }
             // Avoid duplicates: don't re-record if already pending for same symbol
@@ -314,10 +350,13 @@ impl PressureField {
             }
             if let Some(&price) = prices.get(&vortex.symbol) {
                 if price > Decimal::ZERO {
+                    // The prediction: hour_direction will win over tick_direction.
+                    // If hour says bearish but tick says bullish → predict DOWN.
+                    // If hour says bullish but tick says bearish → predict UP.
                     self.pending_vortices.push(PendingVortex {
                         symbol: vortex.symbol.clone(),
-                        direction: vortex.direction,
-                        strength: vortex.strength,
+                        direction: vortex.hour_direction,
+                        strength: vortex.tension,
                         detected_tick: tick,
                         entry_price: Some(price),
                     });
@@ -342,7 +381,7 @@ impl PressureField {
     ) {
         for outcome in &self.recent_outcomes {
             // Credit = return * strength (stronger vortex predictions carry more weight)
-            let credit = outcome.return_pct * outcome.strength;
+            let credit = outcome.return_pct * outcome.tension;
 
             // Credit the stock-to-stock edges involving this symbol
             let key = EdgeKey::StockToStock {
@@ -643,85 +682,87 @@ fn compute_anomalies(
     anomalies
 }
 
-// ── Step 6: Detect vortices ──
+// ── Step 6: Detect vortices (tension-based) ──
+//
+// A vortex is NOT where channels agree (that's the past — already priced in).
+// A vortex is where TIME SCALES DISAGREE — the short-term says one thing,
+// the long-term says another. This tension means something hasn't resolved yet.
+//
+// Analogy: if the hour layer shows negative pressure (institutions selling)
+// but the tick layer shows positive (price bouncing), that's tension.
+// The bounce is temporary; the selling pressure will win eventually.
+// OR the selling is exhausted and the bounce is real.
+// Either way: tension = something is about to happen.
 
-fn detect_vortices(layer: &ScaledPressure) -> Vec<PressureVortex> {
+fn detect_vortices(
+    tick_layer: &ScaledPressure,
+    hour_layer: &ScaledPressure,
+) -> Vec<PressureVortex> {
     let mut vortices = Vec::new();
 
-    for (symbol, node) in &layer.pressures {
-        let mut active_channels = Vec::new();
-        let mut direction_sum = Decimal::ZERO;
-        let mut magnitude_sum = Decimal::ZERO;
-        let mut same_direction_count = 0u32;
-        let mut total_active = 0u32;
+    // Iterate all symbols in the hour layer (the "background truth").
+    for (symbol, hour_node) in &hour_layer.pressures {
+        let tick_node = tick_layer.pressures.get(symbol);
 
-        let dominant_sign = if node.composite >= Decimal::ZERO {
-            Decimal::ONE
-        } else {
-            Decimal::NEGATIVE_ONE
-        };
+        let hour_composite = hour_node.composite;
+        let tick_composite = tick_node.map(|n| n.composite).unwrap_or(Decimal::ZERO);
 
+        // Temporal divergence: tick vs hour. Opposite signs = maximum tension.
+        let temporal_div = tick_composite - hour_composite;
+
+        // Cross-channel conflict at hour level: channels disagree in direction.
+        let hour_conflict = hour_node.conflict;
+
+        // Per-channel tension: which channels diverge most between tick and hour?
+        let mut tense_channels = Vec::new();
+        let mut max_channel_tension = Decimal::ZERO;
         for channel in PressureChannel::ALL {
-            if let Some(cp) = node.channels.get(channel) {
-                let net = cp.net();
-                if net.abs() < Decimal::new(1, 3) {
-                    continue; // below noise floor
-                }
-                active_channels.push(*channel);
-                total_active += 1;
-                direction_sum += net;
-                magnitude_sum += net.abs();
-
-                if net * dominant_sign > Decimal::ZERO {
-                    same_direction_count += 1;
+            let hour_net = hour_node
+                .channels
+                .get(channel)
+                .map(|c| c.net())
+                .unwrap_or(Decimal::ZERO);
+            let tick_net = tick_node
+                .and_then(|n| n.channels.get(channel))
+                .map(|c| c.net())
+                .unwrap_or(Decimal::ZERO);
+            let channel_tension = (tick_net - hour_net).abs();
+            if channel_tension > Decimal::new(5, 3) {
+                tense_channels.push(*channel);
+                if channel_tension > max_channel_tension {
+                    max_channel_tension = channel_tension;
                 }
             }
         }
 
-        // A vortex requires at least 3 independent channels agreeing.
-        if total_active < 3 || same_direction_count < 3 {
+        // Tension = temporal divergence magnitude + cross-channel conflict + channel tension
+        let tension = (temporal_div.abs() + hour_conflict + max_channel_tension)
+            .round_dp(4);
+
+        // Need at least some tension and at least 1 tense channel
+        if tension < Decimal::new(1, 2) || tense_channels.is_empty() {
             continue;
         }
 
-        let coherence = if total_active > 0 {
-            Decimal::from(same_direction_count as i64) / Decimal::from(total_active as i64)
-        } else {
-            Decimal::ZERO
-        };
-
-        // Strength = magnitude * coherence. Strong and aligned = vortex.
-        let avg_magnitude = magnitude_sum / Decimal::from(total_active as i64);
-        let strength = (avg_magnitude * coherence).round_dp(4);
-
-        if strength < Decimal::new(5, 3) {
-            continue; // too weak
-        }
-
-        let direction = if total_active > 0 {
-            (direction_sum / Decimal::from(total_active as i64)).round_dp(4)
-        } else {
-            Decimal::ZERO
-        };
-
         vortices.push(PressureVortex {
             symbol: symbol.clone(),
-            strength,
-            coherence: coherence.round_dp(4),
-            direction,
-            active_channels,
-            channel_count: total_active as usize,
+            tension,
+            cross_channel_conflict: hour_conflict.round_dp(4),
+            temporal_divergence: temporal_div.round_dp(4),
+            hour_direction: hour_composite.round_dp(4),
+            tick_direction: tick_composite.round_dp(4),
+            tense_channels,
+            tense_channel_count: 0, // set below
         });
     }
 
-    // Sort by strength descending, apply relative threshold + hard cap.
-    vortices.sort_by(|a, b| b.strength.cmp(&a.strength));
-
-    // Drop anything below 20% of the top vortex's strength.
-    if let Some(top) = vortices.first() {
-        let floor = top.strength * Decimal::new(2, 1);
-        vortices.retain(|v| v.strength >= floor);
+    // Set channel count and sort by tension
+    for v in &mut vortices {
+        v.tense_channel_count = v.tense_channels.len();
     }
+    vortices.sort_by(|a, b| b.tension.cmp(&a.tension));
 
+    // Keep top N
     const MAX_VORTICES: usize = 15;
     vortices.truncate(MAX_VORTICES);
     vortices
@@ -930,37 +971,8 @@ mod tests {
         assert!(node.convergence > Decimal::ZERO);
     }
 
-    #[test]
-    fn vortex_detection_requires_3_channels() {
-        let mut pressures = HashMap::new();
-        let sym = Symbol("AAPL".into());
-
-        // Only 2 active channels → no vortex.
-        let mut channels_2 = HashMap::new();
-        channels_2.insert(PressureChannel::OrderBook, ChannelPressure { local: dec!(0.5), propagated: dec!(0.1) });
-        channels_2.insert(PressureChannel::CapitalFlow, ChannelPressure { local: dec!(0.4), propagated: dec!(0.1) });
-        pressures.insert(sym.clone(), compute_node_aggregate(&channels_2));
-        pressures.get_mut(&sym).unwrap().channels = channels_2;
-        let layer = ScaledPressure { pressures: pressures.clone() };
-        assert!(detect_vortices(&layer).is_empty());
-
-        // 4 aligned channels → vortex.
-        let mut channels_4 = HashMap::new();
-        channels_4.insert(PressureChannel::OrderBook, ChannelPressure { local: dec!(0.5), propagated: dec!(0.1) });
-        channels_4.insert(PressureChannel::CapitalFlow, ChannelPressure { local: dec!(0.4), propagated: dec!(0.1) });
-        channels_4.insert(PressureChannel::Institutional, ChannelPressure { local: dec!(0.6), propagated: dec!(0.2) });
-        channels_4.insert(PressureChannel::Momentum, ChannelPressure { local: dec!(0.3), propagated: dec!(0.1) });
-        let node = compute_node_aggregate(&channels_4);
-        let mut full_node = node;
-        full_node.channels = channels_4;
-        pressures.insert(sym.clone(), full_node);
-        let layer = ScaledPressure { pressures };
-        let vortices = detect_vortices(&layer);
-        assert_eq!(vortices.len(), 1);
-        assert_eq!(vortices[0].symbol, sym);
-        assert!(vortices[0].strength > Decimal::ZERO);
-        assert!(vortices[0].coherence >= dec!(0.75));
-    }
+    // Old convergence-based vortex tests removed.
+    // Tension-based vortex detection needs tick vs hour layers — tested via integration.
 
     #[test]
     fn conflicting_channels_reduce_coherence() {

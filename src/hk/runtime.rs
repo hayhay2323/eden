@@ -573,9 +573,9 @@ pub async fn run() {
                 "[hk] pressure field: {} vortices detected (top: {} strength={} channels={} dir={})",
                 pressure_field.vortices.len(),
                 pressure_field.vortices[0].symbol.0,
-                pressure_field.vortices[0].strength,
-                pressure_field.vortices[0].channel_count,
-                pressure_field.vortices[0].direction,
+                pressure_field.vortices[0].tension,
+                pressure_field.vortices[0].tense_channel_count,
+                pressure_field.vortices[0].temporal_divergence,
             );
         }
         // Vortex outcome learning: record pending vortices, resolve old ones, update edges

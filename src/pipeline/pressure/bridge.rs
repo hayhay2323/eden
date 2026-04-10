@@ -1,7 +1,10 @@
 //! Vortex → TacticalSetup bridge.
 //!
-//! Converts pressure-field vortices into TacticalSetup objects so the existing
+//! Converts tension-based vortices into TacticalSetup objects so the existing
 //! action pipeline (workflows, console display, persistence) can surface them.
+//!
+//! A tension vortex means: tick and hour layers disagree. The setup predicts
+//! that the hour direction will eventually win (mean reversion of surface noise).
 
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
@@ -21,52 +24,43 @@ fn channel_name(ch: &PressureChannel) -> &'static str {
     }
 }
 
-/// Convert a single vortex into an optional TacticalSetup.
-///
-/// Returns `None` if the vortex is too weak or too narrow to act on.
+/// Convert a tension vortex into an optional TacticalSetup.
 pub fn vortex_to_tactical_setup(
     vortex: &PressureVortex,
     timestamp: OffsetDateTime,
     tick: u64,
 ) -> Option<TacticalSetup> {
-    // Minimum gate: need at least 3 channels and strength above noise floor.
-    if vortex.channel_count < 3 || vortex.strength < Decimal::new(5, 3) {
+    // Need at least 1 tense channel and material tension.
+    if vortex.tense_channel_count == 0 || vortex.tension < Decimal::new(1, 2) {
         return None;
     }
 
-    // Action mapping based on coherence, channel count, and strength.
-    let action = if vortex.coherence >= Decimal::new(8, 1)
-        && vortex.channel_count >= 4
-        && vortex.strength >= Decimal::new(10, 2)
-    {
-        "enter"
-    } else if vortex.coherence >= Decimal::new(75, 2)
-        && vortex.channel_count >= 3
-        && vortex.strength >= Decimal::new(3, 2)
-    {
+    // Action based on tension strength and channel count.
+    let action = if vortex.tension >= Decimal::new(15, 2) && vortex.tense_channel_count >= 3 {
         "review"
     } else {
         "observe"
     };
 
-    let confidence = (vortex.coherence * vortex.strength * Decimal::TWO)
+    let confidence = (vortex.tension * Decimal::TWO)
         .min(Decimal::ONE)
         .max(Decimal::ZERO);
 
-    let direction_label = if vortex.direction >= Decimal::ZERO {
+    // Direction: hour layer is the "background truth".
+    let direction_label = if vortex.hour_direction >= Decimal::ZERO {
         "Long"
     } else {
         "Short"
     };
 
     let symbol_str = &vortex.symbol.0;
+    let channel_list: Vec<&str> = vortex.tense_channels.iter().map(channel_name).collect();
 
-    let channel_list: Vec<&str> = vortex.active_channels.iter().map(channel_name).collect();
     let entry_rationale = format!(
-        "{} channels converge on {} {}: {}",
-        vortex.channel_count,
-        direction_label.to_lowercase(),
-        symbol_str,
+        "Tension: tick says {:.3} but hour says {:.3}. {} channels diverge: {}",
+        vortex.tick_direction,
+        vortex.hour_direction,
+        vortex.tense_channel_count,
         channel_list.join(", ")
     );
 
@@ -82,23 +76,24 @@ pub fn vortex_to_tactical_setup(
             falsified_by: Vec::new(),
         },
         scope: ReasoningScope::Symbol(vortex.symbol.clone()),
-        title: format!("{} {} (pressure vortex)", direction_label, symbol_str),
+        title: format!("{} {} (tension vortex)", direction_label, symbol_str),
         action: action.to_string(),
         time_horizon: "intraday".to_string(),
         confidence,
         confidence_gap: Decimal::ZERO,
-        heuristic_edge: vortex.strength,
-        convergence_score: Some(vortex.coherence),
+        heuristic_edge: vortex.tension,
+        convergence_score: Some(vortex.cross_channel_conflict),
         convergence_detail: None,
         workflow_id: None,
         entry_rationale,
         causal_narrative: Some(format!(
-            "Pressure vortex: {} independent channels align {} on {}",
-            vortex.channel_count,
-            direction_label.to_lowercase(),
-            symbol_str
+            "Temporal tension: hour layer ({:.3}) vs tick layer ({:.3}). Divergence={:.3}. {} channels under stress.",
+            vortex.hour_direction,
+            vortex.tick_direction,
+            vortex.temporal_divergence,
+            vortex.tense_channel_count,
         )),
-        risk_notes: vec!["family=pressure_vortex".to_string()],
+        risk_notes: vec!["family=tension_vortex".to_string()],
         review_reason_code: None,
         policy_verdict: None,
     })
@@ -116,100 +111,4 @@ pub fn vortices_to_tactical_setups(
         .filter_map(|v| vortex_to_tactical_setup(v, timestamp, tick))
         .take(max_setups)
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rust_decimal_macros::dec;
-
-    use crate::ontology::objects::Symbol;
-    use crate::pipeline::pressure::PressureChannel;
-
-    fn make_vortex(
-        symbol: &str,
-        strength: Decimal,
-        coherence: Decimal,
-        direction: Decimal,
-        channels: &[PressureChannel],
-    ) -> PressureVortex {
-        PressureVortex {
-            symbol: Symbol(symbol.into()),
-            strength,
-            coherence,
-            direction,
-            active_channels: channels.to_vec(),
-            channel_count: channels.len(),
-        }
-    }
-
-    #[test]
-    fn strong_vortex_produces_enter_setup() {
-        let vortex = make_vortex(
-            "AAPL",
-            dec!(0.45),
-            dec!(1.0),
-            dec!(0.3),
-            &[
-                PressureChannel::OrderBook,
-                PressureChannel::CapitalFlow,
-                PressureChannel::Institutional,
-                PressureChannel::Momentum,
-            ],
-        );
-        let now = OffsetDateTime::now_utc();
-        let setup = vortex_to_tactical_setup(&vortex, now, 42).expect("should produce a setup");
-
-        assert_eq!(setup.action, "enter");
-        assert!(
-            setup.title.starts_with("Long ") || setup.title.starts_with("Short "),
-            "title should start with direction, got: {}",
-            setup.title
-        );
-        assert!(
-            setup.confidence > dec!(0.5),
-            "confidence should be > 0.5, got: {}",
-            setup.confidence
-        );
-        assert_eq!(setup.setup_id, "pf:AAPL:42");
-        assert_eq!(setup.hypothesis_id, "pfh:AAPL:42");
-        assert!(setup.risk_notes.contains(&"family=pressure_vortex".to_string()));
-    }
-
-    #[test]
-    fn weak_vortex_produces_observe() {
-        let vortex = make_vortex(
-            "MSFT",
-            dec!(0.02),
-            dec!(0.75),
-            dec!(-0.01),
-            &[
-                PressureChannel::CapitalFlow,
-                PressureChannel::Momentum,
-                PressureChannel::Volume,
-            ],
-        );
-        let now = OffsetDateTime::now_utc();
-        let setup = vortex_to_tactical_setup(&vortex, now, 10).expect("should produce a setup");
-
-        // strength=0.02 < 0.03 review threshold → falls through to observe
-        assert_eq!(setup.action, "observe");
-    }
-
-    #[test]
-    fn below_minimum_strength_produces_nothing() {
-        let vortex = make_vortex(
-            "GOOG",
-            dec!(0.003),
-            dec!(0.5),
-            dec!(0.001),
-            &[
-                PressureChannel::OrderBook,
-                PressureChannel::CapitalFlow,
-            ],
-        );
-        let now = OffsetDateTime::now_utc();
-        let result = vortex_to_tactical_setup(&vortex, now, 5);
-        assert!(result.is_none(), "below minimum should produce None");
-    }
 }
