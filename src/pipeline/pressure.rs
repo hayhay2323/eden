@@ -127,11 +127,29 @@ pub struct ScaledPressure {
 
 // ── The Pressure Field ──
 
+/// Anomaly at a node: how much current pressure deviates from baseline.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PressureAnomaly {
+    /// Deviation of composite from baseline (positive = unusually strong).
+    pub composite_deviation: Decimal,
+    /// Deviation of convergence from baseline.
+    pub convergence_deviation: Decimal,
+    /// Deviation of conflict from baseline.
+    pub conflict_deviation: Decimal,
+    /// Per-channel deviation from baseline.
+    pub channel_deviations: HashMap<PressureChannel, Decimal>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PressureField {
     pub timestamp: OffsetDateTime,
     /// Pressure at each time scale.
     pub layers: HashMap<TimeScale, ScaledPressure>,
+    /// Long-term baseline: what "normal" looks like for each node.
+    /// Updated with very slow EMA (decay ~0.9999) so it drifts with market structure.
+    pub baseline: ScaledPressure,
+    /// Anomalies: how much the current minute-layer deviates from baseline.
+    pub anomalies: HashMap<Symbol, PressureAnomaly>,
     /// Detected vortices (multi-channel convergence points).
     pub vortices: Vec<PressureVortex>,
 }
@@ -146,6 +164,8 @@ impl PressureField {
         Self {
             timestamp,
             layers,
+            baseline: ScaledPressure::default(),
+            anomalies: HashMap::new(),
             vortices: Vec::new(),
         }
     }
@@ -177,8 +197,14 @@ impl PressureField {
             accumulate_into(layer, &tick_snapshot, decay);
         }
 
-        // 5. Detect vortices from the minute-scale layer (smoothed, not noisy tick).
+        // 5. Update baseline (very slow EMA — adapts to market structure drift).
+        accumulate_into(&mut self.baseline, &tick_snapshot, Decimal::new(9999, 4));
+
+        // 6. Compute anomalies: how much minute-layer deviates from baseline.
         let minute_layer = self.layers.get(&TimeScale::Minute).unwrap();
+        self.anomalies = compute_anomalies(minute_layer, &self.baseline);
+
+        // 7. Detect vortices from the minute-scale layer (smoothed, not noisy tick).
         self.vortices = detect_vortices(minute_layer);
     }
 
@@ -202,12 +228,31 @@ impl PressureField {
             accumulate_into(layer, &tick_snapshot, decay);
         }
 
+        accumulate_into(&mut self.baseline, &tick_snapshot, Decimal::new(9999, 4));
+
         let minute_layer = self.layers.get(&TimeScale::Minute).unwrap();
+        self.anomalies = compute_anomalies(minute_layer, &self.baseline);
         self.vortices = detect_vortices(minute_layer);
     }
 
     pub fn node_pressure(&self, symbol: &Symbol, scale: TimeScale) -> Option<&NodePressure> {
         self.layers.get(&scale)?.pressures.get(symbol)
+    }
+
+    pub fn node_anomaly(&self, symbol: &Symbol) -> Option<&PressureAnomaly> {
+        self.anomalies.get(symbol)
+    }
+
+    /// Top anomalies sorted by absolute composite deviation.
+    pub fn top_anomalies(&self, limit: usize) -> Vec<(&Symbol, &PressureAnomaly)> {
+        let mut ranked: Vec<_> = self.anomalies.iter().collect();
+        ranked.sort_by(|a, b| {
+            b.1.composite_deviation
+                .abs()
+                .cmp(&a.1.composite_deviation.abs())
+        });
+        ranked.truncate(limit);
+        ranked
     }
 }
 
@@ -419,7 +464,64 @@ fn accumulate_into(layer: &mut ScaledPressure, tick: &ScaledPressure, decay: Dec
     });
 }
 
-// ── Step 5: Detect vortices ──
+// ── Step 5b: Compute anomalies vs baseline ──
+
+fn compute_anomalies(
+    current: &ScaledPressure,
+    baseline: &ScaledPressure,
+) -> HashMap<Symbol, PressureAnomaly> {
+    let mut anomalies = HashMap::new();
+
+    for (symbol, node) in &current.pressures {
+        let baseline_node = baseline.pressures.get(symbol);
+        let base_composite = baseline_node.map(|n| n.composite).unwrap_or(Decimal::ZERO);
+        let base_convergence = baseline_node.map(|n| n.convergence).unwrap_or(Decimal::ZERO);
+        let base_conflict = baseline_node.map(|n| n.conflict).unwrap_or(Decimal::ZERO);
+
+        let composite_dev = node.composite - base_composite;
+        let convergence_dev = node.convergence - base_convergence;
+        let conflict_dev = node.conflict - base_conflict;
+
+        // Only record if any deviation is material
+        if composite_dev.abs() < Decimal::new(1, 3)
+            && convergence_dev.abs() < Decimal::new(1, 3)
+            && conflict_dev.abs() < Decimal::new(1, 3)
+        {
+            continue;
+        }
+
+        let mut channel_devs = HashMap::new();
+        for channel in PressureChannel::ALL {
+            let current_net = node
+                .channels
+                .get(channel)
+                .map(|c| c.net())
+                .unwrap_or(Decimal::ZERO);
+            let base_net = baseline_node
+                .and_then(|n| n.channels.get(channel))
+                .map(|c| c.net())
+                .unwrap_or(Decimal::ZERO);
+            let dev = current_net - base_net;
+            if dev.abs() >= Decimal::new(1, 3) {
+                channel_devs.insert(*channel, dev);
+            }
+        }
+
+        anomalies.insert(
+            symbol.clone(),
+            PressureAnomaly {
+                composite_deviation: composite_dev,
+                convergence_deviation: convergence_dev,
+                conflict_deviation: conflict_dev,
+                channel_deviations: channel_devs,
+            },
+        );
+    }
+
+    anomalies
+}
+
+// ── Step 6: Detect vortices ──
 
 fn detect_vortices(layer: &ScaledPressure) -> Vec<PressureVortex> {
     let mut vortices = Vec::new();
