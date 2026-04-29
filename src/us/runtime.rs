@@ -492,33 +492,28 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             crate::pipeline::event_driven_bp::EventDrivenSubstrate::default(),
         );
 
-    // 2026-04-29 Phase B: pressure-event bus. Push handler demuxes
-    // each PushEvent into PressureEvent variants and publishes here;
-    // per-channel workers (Phase C) drain it. Phase B drainer below
-    // is a no-op counter to verify the wiring.
+    // 2026-04-29 Phase B + C1: pressure-event bus + per-channel
+    // workers. Push handler demuxes each PushEvent into PressureEvent
+    // variants and publishes here; the dispatcher routes to per-channel
+    // sub-buses; workers update incremental state and notify the
+    // aggregator, which derives a sub-tick NodePrior and calls
+    // BeliefSubstrate::observe_symbol so BP propagates the change
+    // between ticks.
     let pressure_event_bus = std::sync::Arc::new(
         crate::pipeline::pressure_events::spawn_bus(),
     );
-    {
-        let bus = std::sync::Arc::clone(&pressure_event_bus);
-        tokio::spawn(async move {
-            let mut counter = 0u64;
-            loop {
-                if bus.pop().await.is_none() {
-                    break;
-                }
-                counter = counter.wrapping_add(1);
-                if counter == 1 || counter % 1_000 == 0 {
-                    eprintln!(
-                        "[us pressure-bus] drained {} events (pending={}, dropped={})",
-                        counter,
-                        bus.pending_count(),
-                        bus.dropped_count(),
-                    );
-                }
-            }
-        });
-    }
+    let pressure_channel_states = std::sync::Arc::new(
+        crate::pipeline::pressure_events::ChannelStates::default(),
+    );
+    let pressure_aggregator = crate::pipeline::pressure_events::spawn_aggregator(
+        std::sync::Arc::clone(&pressure_channel_states),
+        std::sync::Arc::clone(&belief_substrate),
+    );
+    let _pressure_worker_pool = crate::pipeline::pressure_events::spawn_worker_pool(
+        std::sync::Arc::clone(&pressure_event_bus),
+        std::sync::Arc::clone(&pressure_channel_states),
+        pressure_aggregator,
+    );
 
     let mut previous_visual_frame: Option<crate::pipeline::visual_graph_frame::VisualGraphFrame> =
         None;

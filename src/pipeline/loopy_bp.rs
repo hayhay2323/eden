@@ -84,7 +84,7 @@ const EPSILON: f64 = 1e-9;
 
 /// Below this prior magnitude the symbol is treated as unobserved
 /// (uniform prior). Algorithmic floor — not a business threshold.
-const PRIOR_MAGNITUDE_FLOOR: f64 = 0.05;
+pub const PRIOR_MAGNITUDE_FLOOR: f64 = 0.05;
 
 /// Algorithmic stability bounds for directional message weights.
 const MIN_MESSAGE_WEIGHT: f64 = 0.1;
@@ -306,6 +306,64 @@ pub fn observe_from_subkg(kg: &crate::pipeline::symbol_sub_kg::SymbolSubKG) -> N
     };
     let mut belief = [0.0; N_STATES];
     let dominant_mass = (1.0 + concentration) / (N_STATES as f64 + concentration);
+    let rest_mass = (1.0 - dominant_mass) / (N_STATES - 1) as f64;
+    for i in 0..N_STATES {
+        belief[i] = if i == dominant_idx {
+            dominant_mass
+        } else {
+            rest_mass
+        };
+    }
+    NodePrior {
+        belief,
+        observed: true,
+    }
+}
+
+/// Sub-tick prior derivation for the event-driven path. Builds a
+/// `NodePrior` from a subset of pressure channels (whichever channels
+/// have been wired so far). This intentionally does NOT match
+/// `observe_from_subkg` exactly — that one fuses Memory/Belief/Sector/KL
+/// signals which only update at tick boundary. The sub-tick prior is
+/// pressure-only and acts as a delta on top of the latest tick-bound
+/// belief; observe_symbol's residual queue propagates the difference.
+///
+/// Channels are passed as `Option<f64>` so the aggregator can pass
+/// `None` for channels not yet wired event-driven. Missing channels
+/// contribute zero to direction_raw, weakening (but not biasing) the
+/// prior.
+pub fn prior_from_pressure_channels(
+    order_book: Option<f64>,
+    capital_flow: Option<f64>,
+    institutional: Option<f64>,
+    momentum: Option<f64>,
+    volume: Option<f64>,
+    structure: Option<f64>,
+) -> NodePrior {
+    let ob = order_book.unwrap_or(0.0);
+    let cf = capital_flow.unwrap_or(0.0);
+    let inst = institutional.unwrap_or(0.0);
+    let mo = momentum.unwrap_or(0.0);
+    let vol = volume.unwrap_or(0.0);
+    let st = structure.unwrap_or(0.0);
+
+    // Direction signal: dimensions agree → reinforce; disagree → cancel.
+    // Coefficients echo observe_from_subkg's pcf + 0.5*pm weighting; the
+    // remaining channels are added as supportive evidence with smaller
+    // weights so the dominant tick-bound prior (CapitalFlow/Momentum-led)
+    // continues to drive the magnitude when those are wired.
+    let direction_raw = cf + 0.5 * mo + 0.3 * ob + 0.3 * inst + 0.2 * vol + 0.2 * st;
+    let base_magnitude = (direction_raw.abs() / 2.0).min(1.0);
+    if base_magnitude < PRIOR_MAGNITUDE_FLOOR {
+        return NodePrior::default();
+    }
+    let dominant_idx = if direction_raw > 0.0 {
+        STATE_BULL
+    } else {
+        STATE_BEAR
+    };
+    let mut belief = [0.0; N_STATES];
+    let dominant_mass = (1.0 + base_magnitude) / (N_STATES as f64 + base_magnitude);
     let rest_mass = (1.0 - dominant_mass) / (N_STATES - 1) as f64;
     for i in 0..N_STATES {
         belief[i] = if i == dominant_idx {

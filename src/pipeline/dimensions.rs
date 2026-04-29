@@ -142,6 +142,46 @@ fn compute_order_book_pressure(links: &LinkSnapshot) -> HashMap<Symbol, Decimal>
         .collect()
 }
 
+/// Per-symbol incremental variant of `compute_order_book_pressure` for
+/// the event-driven path. Takes raw bid/ask level vectors as
+/// `(price, volume)` pairs (as published by the pressure-event bus
+/// from a longport `Depth` push) and applies the same
+/// total_bid_volume / total_ask_volume → normalized_ratio formula as
+/// the tick-bound path. Mathematically identical for matching inputs.
+pub fn compute_order_book_pressure_from_depth(
+    bids: &[(Decimal, Decimal)],
+    asks: &[(Decimal, Decimal)],
+) -> Decimal {
+    let bid_total: Decimal = bids.iter().map(|(_, v)| *v).sum();
+    let ask_total: Decimal = asks.iter().map(|(_, v)| *v).sum();
+    normalized_ratio(bid_total, ask_total)
+}
+
+/// Per-symbol incremental variant of `compute_depth_structure_imbalance`.
+/// Mirrors the tick-bound formula: average of (top3-volume share) and
+/// (best-level share) on each side, then normalized_ratio of the two
+/// wall strengths. Caller should pass the latest 10-level depth slice
+/// from the pressure-event bus.
+pub fn compute_depth_structure_imbalance_from_depth(
+    bids: &[(Decimal, Decimal)],
+    asks: &[(Decimal, Decimal)],
+) -> Decimal {
+    fn wall(side: &[(Decimal, Decimal)]) -> Decimal {
+        let total: Decimal = side.iter().map(|(_, v)| *v).sum();
+        if total == Decimal::ZERO {
+            return Decimal::ZERO;
+        }
+        let top3: Decimal = side.iter().take(3).map(|(_, v)| *v).sum();
+        let best = side.first().map(|(_, v)| *v).unwrap_or(Decimal::ZERO);
+        let top3_ratio = top3 / total;
+        let best_ratio = best / total;
+        (top3_ratio + best_ratio) / Decimal::TWO
+    }
+    let bid_wall = wall(bids);
+    let ask_wall = wall(asks);
+    normalized_ratio(bid_wall, ask_wall)
+}
+
 /// Depth structure imbalance: compares bid vs ask wall concentration.
 /// Bid wall stronger than ask wall → positive (bullish structural support).
 /// Uses top3_volume_ratio and best_level_ratio as wall indicators.

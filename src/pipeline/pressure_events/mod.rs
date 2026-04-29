@@ -10,8 +10,14 @@
 //! Phase B (this module): bus + demux only. No workers yet — a single
 //! drainer in the runtime counts events for liveness check.
 
+pub mod aggregator;
 pub mod bus;
+pub mod channel_state;
 pub mod event;
+pub mod worker;
 
+pub use aggregator::{spawn_aggregator, AggregatorHandle};
 pub use bus::{spawn_bus, EventBusHandle};
+pub use channel_state::{ChannelStates, SharedChannelStates};
 pub use event::{demux_push_event, PressureEvent, TradeSide};
+pub use worker::{spawn_worker_pool, WorkerPoolHandles};
