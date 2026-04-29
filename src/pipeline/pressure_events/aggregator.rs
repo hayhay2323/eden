@@ -10,12 +10,15 @@
 use std::sync::Arc;
 
 use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
 use tokio::sync::mpsc;
 
+use crate::ontology::reasoning::TacticalDirection;
 use crate::pipeline::event_driven_bp::BeliefSubstrate;
-use crate::pipeline::loopy_bp;
+use crate::pipeline::loopy_bp::{self, STATE_BEAR, STATE_BULL};
 
 use super::channel_state::SharedChannelStates;
+use super::setup_registry::SharedSetupRegistry;
 
 #[derive(Clone)]
 pub struct AggregatorHandle {
@@ -36,6 +39,7 @@ const NOTIFY_QUEUE_CAP: usize = 50_000;
 pub fn spawn_aggregator(
     states: SharedChannelStates,
     substrate: Arc<dyn BeliefSubstrate>,
+    setup_registry: SharedSetupRegistry,
 ) -> AggregatorHandle {
     let (tx, mut rx) = mpsc::channel::<String>(NOTIFY_QUEUE_CAP);
     tokio::spawn(async move {
@@ -71,6 +75,43 @@ pub fn spawn_aggregator(
             let prior_snap = prior.clone();
             substrate.observe_symbol(&symbol, prior, &[]);
             observe_count = observe_count.wrapping_add(1);
+
+            // Sub-tick setup confidence trace. Pull the latest posterior
+            // (already refreshed by the substrate's publisher) and, for
+            // every setup the tactical pipeline has registered for this
+            // symbol, compute what its confidence WOULD be right now and
+            // print a delta vs the tick-bound confidence. Mutation of
+            // the running setup objects stays at tick boundary; this is
+            // observability only.
+            if let Some(setups) = setup_registry.get(&symbol) {
+                let snap = substrate.posterior_snapshot();
+                if let Some(post) = snap.beliefs.get(&symbol) {
+                    for s in &setups {
+                        let p_target = match s.direction {
+                            TacticalDirection::Long => post[STATE_BULL],
+                            TacticalDirection::Short => post[STATE_BEAR],
+                        };
+                        if let Ok(sub_conf) = Decimal::try_from(p_target.clamp(0.0, 1.0)) {
+                            let delta = sub_conf - s.tick_confidence;
+                            // Only print when sub-tick has drifted ≥0.05
+                            // from tick-bound confidence — otherwise
+                            // noise dominates.
+                            if delta.abs() >= Decimal::new(5, 2) {
+                                eprintln!(
+                                    "[setup-trace] sym={} dir={:?} tick_conf={:.3} sub_conf={:.3} delta={:+.3} hyp={} gen={}",
+                                    symbol,
+                                    s.direction,
+                                    s.tick_confidence,
+                                    sub_conf,
+                                    delta,
+                                    s.hypothesis_id,
+                                    snap.generation,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             if observe_count == 1 || observe_count % 25 == 0 {
                 let snap = substrate.posterior_snapshot();
                 eprintln!(

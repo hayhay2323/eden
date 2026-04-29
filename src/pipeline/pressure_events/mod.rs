@@ -14,10 +14,12 @@ pub mod aggregator;
 pub mod bus;
 pub mod channel_state;
 pub mod event;
+pub mod setup_registry;
 pub mod worker;
 
 pub use aggregator::{spawn_aggregator, AggregatorHandle};
 pub use bus::{spawn_bus, EventBusHandle};
 pub use channel_state::{ChannelStates, SharedChannelStates};
 pub use event::{demux_push_event, PressureEvent, TradeSide};
+pub use setup_registry::{RegisteredSetup, SetupRegistry, SharedSetupRegistry};
 pub use worker::{spawn_worker_pool, WorkerPoolHandles};

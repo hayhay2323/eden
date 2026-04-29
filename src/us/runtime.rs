@@ -505,9 +505,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let pressure_channel_states = std::sync::Arc::new(
         crate::pipeline::pressure_events::ChannelStates::default(),
     );
+    let setup_registry = std::sync::Arc::new(
+        crate::pipeline::pressure_events::SetupRegistry::new(),
+    );
     let pressure_aggregator = crate::pipeline::pressure_events::spawn_aggregator(
         std::sync::Arc::clone(&pressure_channel_states),
         std::sync::Arc::clone(&belief_substrate),
+        std::sync::Arc::clone(&setup_registry),
     );
     let _pressure_worker_pool = crate::pipeline::pressure_events::spawn_worker_pool(
         std::sync::Arc::clone(&pressure_event_bus),
@@ -3007,6 +3011,22 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             now_utc,
                             tick,
                         );
+                        // Quick visibility: print top 5 by call IV
+                        let mut summary: Vec<_> = option_surfaces
+                            .iter()
+                            .filter_map(|(sym, f)| {
+                                f.atm_call_iv.map(|iv| (sym.clone(), iv, f.put_call_oi_ratio, f.put_call_skew))
+                            })
+                            .collect();
+                        summary.sort_by(|a, b| b.1.cmp(&a.1));
+                        eprintln!(
+                            "[us option] tick={} surfaces={} top5={:?}",
+                            tick,
+                            option_surfaces.len(),
+                            summary.iter().take(5).collect::<Vec<_>>(),
+                        );
+                    } else {
+                        eprintln!("[us option] tick={} surfaces=0", tick);
                     }
                 }
 
@@ -3472,6 +3492,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             &kl_surprise_tracker,
                             &belief_field,
                         );
+                        // 2026-04-29 Phase D: hand the latest setups to
+                        // the sub-tick setup registry so the pressure
+                        // aggregator can compute confidence drift between
+                        // ticks. Read-only on the aggregator side; the
+                        // tick loop is the sole writer.
+                        setup_registry.refresh_from_setups(&reasoning.tactical_setups);
                         us_setup_surface_dirty = true;
                         if us_bp_conf_applied + us_bp_conf_skipped > 0 {
                             artifact_projection

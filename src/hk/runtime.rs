@@ -250,9 +250,13 @@ pub async fn run() {
     let pressure_channel_states = std::sync::Arc::new(
         eden::pipeline::pressure_events::ChannelStates::default(),
     );
+    let setup_registry = std::sync::Arc::new(
+        eden::pipeline::pressure_events::SetupRegistry::new(),
+    );
     let pressure_aggregator = eden::pipeline::pressure_events::spawn_aggregator(
         std::sync::Arc::clone(&pressure_channel_states),
         std::sync::Arc::clone(&belief_substrate),
+        std::sync::Arc::clone(&setup_registry),
     );
     let _pressure_worker_pool = eden::pipeline::pressure_events::spawn_worker_pool(
         std::sync::Arc::clone(&pressure_event_bus),
@@ -2496,6 +2500,7 @@ pub async fn run() {
                         &kl_surprise_tracker,
                         &belief_field,
                     );
+                    setup_registry.refresh_from_setups(&reasoning_snapshot.tactical_setups);
                     if hk_bp_conf_applied + hk_bp_conf_skipped > 0 {
                         eprintln!(
                             "[hk] bp_posterior_confidence: applied={} skipped={} \
