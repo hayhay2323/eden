@@ -61,6 +61,13 @@ pub fn spawn_aggregator(
                 Some(vol_value),
                 Some(st_value.to_f64().unwrap_or(0.0)),
             );
+            // Skip if sub-tick channels can't produce a confident prior —
+            // overwriting the tick-bound prior with uniform/unobserved
+            // would erase real evidence between ticks. Only update BP
+            // when the sub-tick path has something material to add.
+            if !prior.observed {
+                continue;
+            }
             let prior_snap = prior.clone();
             substrate.observe_symbol(&symbol, prior, &[]);
             observe_count = observe_count.wrapping_add(1);

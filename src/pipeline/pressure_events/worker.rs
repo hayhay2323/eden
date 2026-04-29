@@ -191,17 +191,16 @@ fn spawn_trade_worker(
                 let new_vol_raw = (volume_f / prev_ema_volume) - 1.0;
                 let new_vol = new_vol_raw.clamp(-1.0, 1.0);
 
-                let cf_changed = (s.capital_flow_value - new_cf).abs() > 0.005;
-                let mo_changed = (s.momentum_value - new_mo).abs() > 0.005;
-                let vol_changed = (s.volume_value - new_vol).abs() > 0.05;
-
                 s.last_price = Some(price);
                 s.last_updated = Some(ts);
                 s.capital_flow_value = new_cf;
                 s.momentum_value = new_mo;
                 s.volume_value = new_vol;
-
-                cf_changed || mo_changed || vol_changed
+                // Always notify — EMA updates are inexpensive at the
+                // aggregator level (single ArcSwap read + observe_symbol),
+                // and substrate.observe_symbol's own prior_changed gate
+                // is the authoritative no-op suppressor.
+                true
             };
 
             if changed {
