@@ -93,10 +93,10 @@ pub fn spawn_aggregator(
                         };
                         if let Ok(sub_conf) = Decimal::try_from(p_target.clamp(0.0, 1.0)) {
                             let delta = sub_conf - s.tick_confidence;
-                            // Only print when sub-tick has drifted ≥0.05
-                            // from tick-bound confidence — otherwise
-                            // noise dominates.
-                            if delta.abs() >= Decimal::new(5, 2) {
+                            // Print on any meaningful drift (≥0.01).
+                            // 0.01 is barely-noisy; 0.05 was missing
+                            // most of the actual sub-tick evolution.
+                            if delta.abs() >= Decimal::new(1, 2) {
                                 eprintln!(
                                     "[setup-trace] sym={} dir={:?} tick_conf={:.3} sub_conf={:.3} delta={:+.3} hyp={} gen={}",
                                     symbol,

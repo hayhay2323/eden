@@ -44,14 +44,22 @@ impl SetupRegistry {
     /// Called once per tick after the tactical pipeline finalises.
     pub fn refresh_from_setups(&self, setups: &[TacticalSetup]) {
         let mut by_symbol: HashMap<String, Vec<RegisteredSetup>> = HashMap::new();
+        let mut total = 0usize;
+        let mut skipped_scope = 0usize;
+        let mut skipped_dir = 0usize;
         for setup in setups {
             let symbol = match &setup.scope {
                 ReasoningScope::Symbol(s) => s.0.clone(),
-                _ => continue,
+                _ => {
+                    skipped_scope += 1;
+                    continue;
+                }
             };
             let Some(direction) = setup.direction else {
+                skipped_dir += 1;
                 continue;
             };
+            total += 1;
             by_symbol
                 .entry(symbol)
                 .or_default()
@@ -62,7 +70,16 @@ impl SetupRegistry {
                     tick_confidence: setup.confidence,
                 });
         }
+        let unique_symbols = by_symbol.len();
         *self.by_symbol.write() = by_symbol;
+        eprintln!(
+            "[setup-registry] refresh: total_setups={} registered={} symbols={} skipped_scope={} skipped_dir={}",
+            setups.len(),
+            total,
+            unique_symbols,
+            skipped_scope,
+            skipped_dir,
+        );
     }
 
     pub fn get(&self, symbol: &str) -> Option<Vec<RegisteredSetup>> {
