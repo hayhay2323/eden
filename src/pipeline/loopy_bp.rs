@@ -267,23 +267,61 @@ pub fn observe_from_subkg(kg: &crate::pipeline::symbol_sub_kg::SymbolSubKG) -> N
     // to evidence boost. No gating, no thresholds.
     let kl_mag = read(kg, &NodeId::KlSurpriseMagnitude);
     let kl_dir = read(kg, &NodeId::KlSurpriseDirection);
+    // V5 Option NodeKind (US only — HK uses warrants instead). Three
+    // signals fold into the direction term:
+    //   - put_call_oi_ratio: bullish when < 1, bearish when > 1.
+    //     Mapped via -tanh(ln(ratio)) so ratio=1 contributes 0, ratio→0
+    //     saturates +1, ratio→∞ saturates −1.
+    //   - put_call_skew: (put_iv − call_iv) / call_iv. Positive = fear
+    //     smirk → bearish. Mapped via -tanh(skew * 5).
+    //   - atm_call_iv − atm_put_iv: rare bullish term when call IV > put IV.
+    //     Small contribution, bounded.
+    // ATM IV magnitude (call+put / 2) feeds evidence_boost — the BP
+    // posterior should sharpen when option market expresses opinion at
+    // all (high IV = market is pricing event), not just when direction
+    // agrees.
+    let pcr_oi = read(kg, &NodeId::OptionPutCallOiRatio);
+    let opt_skew = read(kg, &NodeId::OptionPutCallSkew);
+    let atm_call_iv = read(kg, &NodeId::OptionAtmCallIv);
+    let atm_put_iv = read(kg, &NodeId::OptionAtmPutIv);
+    let pcr_signal = if pcr_oi > 1e-6 {
+        -((pcr_oi).ln()).tanh()
+    } else {
+        0.0
+    };
+    let skew_signal = -(opt_skew * 5.0).tanh();
+    let iv_diff_signal = (atm_call_iv - atm_put_iv).clamp(-0.5, 0.5);
+    let option_direction = pcr_signal + skew_signal + iv_diff_signal;
+    // ATM IV magnitude → [0, 1] evidence component. Typical equity ATM
+    // IV is 0.15-0.50; map (call_iv + put_iv) / 2 / 0.40 with a soft
+    // saturation so values above 0.40 contribute strongly but capped
+    // at 1.0.
+    let iv_avg = if atm_call_iv > 0.0 && atm_put_iv > 0.0 {
+        (atm_call_iv + atm_put_iv) / 2.0
+    } else {
+        0.0
+    };
+    let iv_evidence = (iv_avg / 0.40).clamp(0.0, 1.0);
 
     // Direction: combined signed signal. Pressure+Intent (existing) +
     // outcome_memory + engram_alignment (Memory NodeKind, signed) +
     // sector_intent (Sector NodeKind, signed via bull − bear) +
-    // KL surprise (Surprise NodeKind, signed via direction × magnitude).
+    // KL surprise (Surprise NodeKind, signed via direction × magnitude) +
+    // option_direction (Option NodeKind, US-only — see above).
     let direction_raw = pcf + 0.5 * pm + acc - dist
         + outcome_memory
         + engram_alignment
         + (sector_bull - sector_bear)
-        + (kl_dir * kl_mag);
+        + (kl_dir * kl_mag)
+        + option_direction;
     let base_magnitude = (direction_raw.abs() / 2.0).min(1.0);
 
     // Evidence uplift: WL recurrence + belief sample density + forecast
-    // accuracy + KL surprise magnitude (each [0,1]) — additive boost
-    // toward saturation, NOT a gate. Pure Pressure+Intent alone still
-    // anchors the prior; new NodeKind values just sharpen it.
-    let evidence_boost = (wl_confidence + sample_count + forecast_acc + kl_mag) / 4.0;
+    // accuracy + KL surprise magnitude + option ATM IV (each [0,1]) —
+    // additive boost toward saturation, NOT a gate. Pure Pressure+Intent
+    // alone still anchors the prior; new NodeKind values just sharpen it.
+    let evidence_boost =
+        (wl_confidence + sample_count + forecast_acc + kl_mag + iv_evidence) / 5.0;
 
     // Belief entropy dampens (high entropy = Eden uncertain about its
     // own belief = pull toward uniform). Halving max effect keeps
