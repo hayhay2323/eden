@@ -1,0 +1,9 @@
+pub(super) const DEFAULT_LIMIT: usize = 120;
+#[cfg(feature = "persistence")]
+pub(super) const DEFAULT_TOP: usize = 5;
+pub(super) const MAX_LIMIT: usize = 2_000;
+#[cfg(feature = "persistence")]
+pub(super) const MAX_TOP: usize = 100;
+#[cfg(feature = "persistence")]
+pub(super) const DEFAULT_US_RESOLUTION_LAG: u64 = 15;
+pub(super) const CASE_STREAM_INTERVAL_SECS: u64 = 4;

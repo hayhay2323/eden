@@ -1,0 +1,28 @@
+# Cargo
+target/
+Cargo.lock.bak
+
+# Env / secrets
+.env
+.env.*
+
+# Logs / runtime artifacts
+.run/
+*.log
+
+# Local DB (now lives at ~/eden-databases/)
+data/
+*.db/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Node
+node_modules/
+
+# Recovery scratch
+.recovery/

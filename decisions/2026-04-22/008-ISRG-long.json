@@ -1,0 +1,40 @@
+{
+  "decision_id": "2026-04-22-008-ISRG-long",
+  "at": "2026-04-22T22:41:43+08:00",
+  "symbol": "ISRG.US",
+  "side": "Buy",
+  "quantity": 2,
+  "order_type": "MO",
+  "longport_order_id": "1231615859835830272",
+  "status": "FILLED",
+  "executed_price": 487.12,
+  "notional_usd": 974.24,
+  "eden_source": {
+    "setup_id": "pf:ISRG.US:long:mid30m",
+    "confidence": 1.0,
+    "action": "enter",
+    "cycles_persisted_long_direction": 4,
+    "cycle_path": "cycles 52 long enter → 53 long enter → 55 long enter → 56 long enter (hit threshold)",
+    "direction_flip_from_short": "ISRG was short at cycle 40/42/48, flipped long at cycle 52, now 4 cycles post-flip"
+  },
+  "longport_cross_check": {
+    "price_today_pct": 8.21,
+    "capital_flow_70min": "+632 → peak +2198, no negative bar",
+    "institutional_buying_ratio": 1.44,
+    "verdict": "STRONG LONG CONFIRM"
+  },
+  "operator_reasoning": "第二筆 Eden-driven 主動 entry. MSTR round-trip 後這是第二次. Conditions: 4-cycle persistence ✓ + action=enter ✓ + direction flip (post-flip as new thesis) ✓ + longport cross-check STRONG CONFIRM ✓. Size 2 shares ($974) 小試 — ISRG 是 mega-cap 醫療 (不像 MSTR 2x crypto leverage), 風險較低. 追 8% gap up 的風險存在，但 mega-cap 通常 consolidate 而非反轉.",
+  "quote_at_decision": {
+    "last_done": 488.33,
+    "prev_close": 451.29,
+    "high": 491.15,
+    "low": 460.01,
+    "pct_from_prev": 8.21
+  },
+  "risk_flags": [
+    "Gap up +8% 後入場，追高風險",
+    "MSTR case 顯示 4-cycle persistence 入場後 Eden 可能快速 oscillate out",
+    "Mega-cap 醫療 vs 小 size 2 shares = 小風險 / 小回報"
+  ],
+  "exit_plan": "跟 Eden：(1) 3-cycle gap 消失 → 平倉 (2) direction flip long→short → 立即 SELL (3) cluster coordinate flip bearish"
+}

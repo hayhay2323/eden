@@ -1,0 +1,45 @@
+{
+  "decision_id": "2026-04-22-005-MSTR-long",
+  "at": "2026-04-22T21:33:58+08:00",
+  "symbol": "MSTR.US",
+  "side": "Buy",
+  "quantity": 5,
+  "order_type": "MO",
+  "time_in_force": "Day",
+  "outside_rth": "RTH_ONLY",
+  "longport_order_id": "1231598811806199808",
+  "status": "FILLED",
+  "executed_price": 177.06,
+  "executed_quantity": 5,
+  "notional_usd": 885.30,
+  "filled_at": "2026-04-22T21:33:58+08:00 (near-instant MO at open)",
+  "eden_source": {
+    "setup_id": "pf:MSTR.US:long:mid30m",
+    "confidence": 1.0,
+    "action": "enter",
+    "cycles_persisted_long_direction": 4,
+    "cycle_path": "cycle #26 first seen long review → #27 long review → #28 long review → #29 long ENTER (upgrade)",
+    "previous_direction": "short in cycles #23-24 (direction flipped)",
+    "cluster_context": "crypto cluster 全翻多 (MARA/BITO/MSTR/IBIT long) except CLSK short",
+    "planner": "do(inst_flow := +0.50) U=+0.57 (本 session 最高 utility)",
+    "world_state": "stress=0.13, synchrony=0.71 (本 session 最高 coordination), post-open regime surge"
+  },
+  "operator_reasoning": "第一筆 fill trade。Conditions aligned: (1) MSTR long 4 cycle persistence ✓ (2) action=enter (首見最強級別) ✓ (3) 市場已開 MO 立即 fill ✓ (4) planner U 0.57 session 新高 ✓ (5) synchrony 0.71 coordinated move 確認 ✓ (6) pre-market +7% + open +8% 確認 BTC rally 真實，非 Eden 單獨 hallucinate. Risk: 開盤 +8% 後追高，但 paper 帳 + 小量可容忍。size 5 shares = $885 小試 Eden execute-signal.",
+  "quote_at_decision": {
+    "last_done": 177.25,
+    "prev_close": 163.97,
+    "open": 175.09,
+    "high": 179.03,
+    "low": 174.55,
+    "change_from_prev_pct": 8.1,
+    "pre_market_last": 175.25,
+    "volume_intraday": 2729203
+  },
+  "risk_flags": [
+    "開盤 +8% 後入場 = 追高，reversal 可能虧 2-3%",
+    "MSTR 對 BTC 高 leverage (~2x)，BTC 回檔放大",
+    "4-cycle persistence 今晚 session 內 BX 達 9 cycle 後也全倒，persistence ≠ guarantee",
+    "首筆 live fill，注重 protocol learning 勝過 P&L optimization"
+  ],
+  "exit_plan": "跟 Eden：(1) MSTR setup 翻向 short / 消失 ≥3 cycle → 平倉 SELL. (2) crypto cluster 整體 flip bearish → 平倉. (3) 無固定 stop-loss，信任 Eden state-driven exit."
+}

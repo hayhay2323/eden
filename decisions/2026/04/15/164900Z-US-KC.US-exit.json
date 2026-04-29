@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "decision_id": "2026-04-15T16-49-00Z-US-KC.US-exit",
+  "timestamp": "2026-04-15T16:49:00Z",
+  "market": "US",
+  "symbol": "KC.US",
+  "action": "exit",
+  "direction": null,
+  "eden_session": {
+    "binary": "us",
+    "tick_seq": 195,
+    "stress_composite": null,
+    "wake_excerpt": "KC.US case disappeared from roster → v2 exit rule 1 triggered",
+    "wake_context": [
+      "AHR 49.12% / excess 8.50pp / baseline 40.62% / ares 3288",
+      "excess_over_baseline first populated — 8.50pp selectivity edge"
+    ],
+    "supporting_evidence": [
+      "Eden case roster drop (v2 exit rule 1)"
+    ],
+    "opposing_evidence": [],
+    "missing_evidence": [
+      "no price-action-based exit trigger"
+    ]
+  },
+  "claude": {
+    "reasoning": "v2 exit discipline: case disappearance from roster triggers cover regardless of P&L.",
+    "concerns": [
+      "3-min hold is very short — case roster churn could be noise, not real signal fade"
+    ],
+    "confidence": 0.6,
+    "prior_knowledge_used": [
+      "Eden-signal exit rule (never use arbitrary % stops)",
+      "KC 3-min whipsaw lesson — case roster churn ≠ signal fade"
+    ],
+    "alternatives_considered": [
+      "hold until price-action confirms fade",
+      "switch to momentum-derivative exit instead of roster churn"
+    ],
+    "decision_rationale": "Follow v2 rules as written but flag the whipsaw concern for post-session retrospective"
+  },
+  "execution": {
+    "price": "16.68",
+    "size_bps": null,
+    "size_notional_hkd": null,
+    "size_notional_usd": 3002.4,
+    "linked_entry_id": "2026-04-15T16-46-00Z-US-KC.US-entry",
+    "broker_order_id": null,
+    "paper_or_real": "real"
+  },
+  "outcome": {
+    "exit_timestamp": "2026-04-15T16:49:00Z",
+    "exit_price": "16.68",
+    "hold_duration_sec": 180,
+    "pnl_bps": -18,
+    "pnl_abs_hkd": null,
+    "pnl_abs_usd": -5.40,
+    "closing_reason": "eden_signal_faded"
+  },
+  "retrospective": {
+    "what_worked": "v2 exit rule fired deterministically — discipline honored",
+    "what_didnt": "3-min hold was too short; case roster churn may not reflect real signal fade",
+    "would_do_differently": "Add velocity+acceleration check before exit on roster churn (per feedback_exit_on_momentum_derivative)",
+    "new_pattern_observed": "Case roster can flip within 3 min without price fade — roster is noisier than momentum signal",
+    "eden_gap": "Eden emits case-roster event but not signal-momentum-derivative; exit decisions lack second-order signal read"
+  },
+  "metadata": {
+    "backfilled": true,
+    "backfill_source": "docs/operator_session_us_2026-04-15_v2.md#R2",
+    "created_at": "2026-04-18T00:00:00Z",
+    "updated_at": null
+  }
+}

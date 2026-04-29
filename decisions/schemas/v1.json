@@ -1,0 +1,106 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Eden Decision Record v1",
+  "description": "A single decision made by Claude Code while reading Eden wake output. See docs/superpowers/specs/2026-04-18-decision-log-design.md",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "decision_id",
+    "timestamp",
+    "market",
+    "symbol",
+    "action",
+    "eden_session",
+    "claude",
+    "metadata"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "decision_id": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z-(HK|US)-[A-Z0-9.]+-(entry|exit|skip|size_change)$"
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "market": { "type": "string", "enum": ["HK", "US"] },
+    "symbol": { "type": "string", "minLength": 1 },
+    "action": { "type": "string", "enum": ["entry", "exit", "skip", "size_change"] },
+    "direction": { "type": ["string", "null"], "enum": ["long", "short", null] },
+    "eden_session": {
+      "type": "object",
+      "required": ["binary", "tick_seq", "wake_excerpt"],
+      "additionalProperties": false,
+      "properties": {
+        "binary": { "type": "string", "enum": ["hk", "us"] },
+        "tick_seq": { "type": "integer", "minimum": 0 },
+        "stress_composite": { "type": ["number", "null"] },
+        "wake_excerpt": { "type": "string", "minLength": 1 },
+        "wake_context": { "type": "array", "items": { "type": "string" } },
+        "supporting_evidence": { "type": "array", "items": { "type": "string" } },
+        "opposing_evidence": { "type": "array", "items": { "type": "string" } },
+        "missing_evidence": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "claude": {
+      "type": "object",
+      "required": ["reasoning", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "reasoning": { "type": "string", "minLength": 1 },
+        "concerns": { "type": "array", "items": { "type": "string" } },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "prior_knowledge_used": { "type": "array", "items": { "type": "string" } },
+        "alternatives_considered": { "type": "array", "items": { "type": "string" } },
+        "decision_rationale": { "type": "string" }
+      }
+    },
+    "execution": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "price": { "type": "string" },
+        "size_bps": { "type": ["integer", "null"] },
+        "size_notional_hkd": { "type": ["number", "null"] },
+        "size_notional_usd": { "type": ["number", "null"] },
+        "linked_entry_id": { "type": ["string", "null"] },
+        "broker_order_id": { "type": ["string", "null"] },
+        "paper_or_real": { "type": "string", "enum": ["paper", "real", "simulated", "backtest"] }
+      }
+    },
+    "outcome": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "exit_timestamp": { "type": "string", "format": "date-time" },
+        "exit_price": { "type": "string" },
+        "hold_duration_sec": { "type": "integer", "minimum": 0 },
+        "pnl_bps": { "type": "number" },
+        "pnl_abs_hkd": { "type": ["number", "null"] },
+        "pnl_abs_usd": { "type": ["number", "null"] },
+        "closing_reason": { "type": "string" }
+      }
+    },
+    "retrospective": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "what_worked": { "type": "string" },
+        "what_didnt": { "type": "string" },
+        "would_do_differently": { "type": "string" },
+        "new_pattern_observed": { "type": "string" },
+        "eden_gap": { "type": "string" }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["backfilled", "created_at"],
+      "additionalProperties": false,
+      "properties": {
+        "backfilled": { "type": "boolean" },
+        "backfill_source": { "type": ["string", "null"] },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    }
+  }
+}

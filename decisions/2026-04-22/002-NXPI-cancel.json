@@ -1,0 +1,25 @@
+{
+  "decision_id": "2026-04-22-002-NXPI-cancel",
+  "at": "2026-04-22T20:40:00+08:00",
+  "action": "cancel_pending",
+  "symbol": "NXPI.US",
+  "longport_order_id": "1231583210933071872",
+  "original_decision": "decisions/2026-04-22/001-NXPI-long.json",
+  "original_quantity": 5,
+  "executed_quantity": 0,
+  "realized_pnl_usd": 0,
+  "trigger": "Eden 的 pf:NXPI.US:long:mid30m setup 從 active_structures 完全消失（cycle #4 confirmed）。從 cycle #1 (tick 534) conf=1 → cycle #2 掉出 top 5 → cycle #4 完全 missing。Eden 的 thesis 演化了，繼續持有 pending order 違反「跟 Eden」原則。",
+  "eden_state_at_cancel": {
+    "tick": 562,
+    "top5": "APH short / CEG short / CL short / COF short / CTSH long",
+    "planner": "do(inst_flow := +0.50) U=+0.50 (stable)",
+    "nxpi_in_active_structures": false,
+    "ratio_bull_bear": "330:255 = 1.29:1"
+  },
+  "lessons": [
+    "Eden setup 的壽命比我最初估計短 — 8 min 內從 conf=1 → 消失",
+    "MO RTH_ONLY order 排隊期間 (pre-market 到 open) 信號可能已經過期。下次：或者用 LO 加價容忍度 + outside_rth 立即 fill，或者只在市場開後才下單",
+    "自我驗證到「跟 Eden 平倉」機制有效 — Eden 撤 thesis → operator 撤單，zero 反抗"
+  ],
+  "status": "CANCELED"
+}

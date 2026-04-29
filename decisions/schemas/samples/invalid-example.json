@@ -1,0 +1,21 @@
+{
+  "schema_version": 2,
+  "decision_id": "bad-id-format",
+  "timestamp": "not-a-timestamp",
+  "market": "INVALID_MARKET",
+  "symbol": "",
+  "action": "teleport",
+  "eden_session": {
+    "binary": "xx",
+    "tick_seq": -5,
+    "wake_excerpt": ""
+  },
+  "claude": {
+    "reasoning": "",
+    "confidence": 1.5
+  },
+  "metadata": {
+    "backfilled": "not-a-boolean",
+    "created_at": "bad"
+  }
+}

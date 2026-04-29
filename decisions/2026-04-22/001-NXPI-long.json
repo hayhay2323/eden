@@ -1,0 +1,42 @@
+{
+  "decision_id": "2026-04-22-001-NXPI-long",
+  "submitted_at": "2026-04-22T20:32:00+08:00",
+  "symbol": "NXPI.US",
+  "side": "Buy",
+  "quantity": 5,
+  "order_type": "MO",
+  "time_in_force": "Day",
+  "outside_rth": "RTH_ONLY",
+  "longport_order_id": "1231583210933071872",
+  "eden_source": {
+    "snapshot_path": "data/us_agent_snapshot.json",
+    "active_structure": {
+      "setup_id": "pf:NXPI.US:long:mid30m",
+      "confidence": 1.0,
+      "confidence_gap": 0.0,
+      "thesis_family": "pressure_vortex",
+      "leader_transition_summary": "capital_flow",
+      "alpha_horizon": "intraday:10t",
+      "invalidation_rule": "phase=Growing",
+      "action": "review"
+    },
+    "cluster_context": "semi trio NXPI+ON+SWKS all Long conf=1 Growing — coherent sector thesis",
+    "planner_signal": "do(inst_flow := +0.50) U=+0.52 (stable 6+ reports) — model says push institutional flow up",
+    "sector_spread": "energy outperforming china_adr / real_estate / industrial / crypto — risk-on rotation"
+  },
+  "operator_reasoning": "Semi 三兄弟 Eden conf=1 一致 + pre-market +2 to +3.5% + planner stable 6+ 報告 = 最 coherent setup。NXPI 選因為最 liquid（755M turnover yesterday）+ 最 mid-cap quality 風險最小。MO RTH_ONLY 接受開盤 slippage 為代價換確定 fill。5 shares ≈ $1125 小測試，主要目的學 MCP 工具 + 驗證 Eden → execution loop。",
+  "quote_at_decision": {
+    "last_done": 224.50,
+    "pre_market_last": 228.97,
+    "pre_market_pct_vs_last": 0.02,
+    "regular_high": 226.61,
+    "regular_low": 221.70
+  },
+  "risk_flags": [
+    "pre-market already +2%, may be chasing top",
+    "first live trade via longport MCP — process learning, not P&L optimized",
+    "no stop-loss set; exit driven by Eden signal invalidation or peer flip"
+  ],
+  "exit_plan": "跟 Eden：若 NXPI setup 從 Long/Growing 變 Fading / Peaking / setup 消失 / semi trio 整體 flip conflicted → 平倉。無固定 stop-loss，依賴 Eden 狀態驅動。",
+  "status": "QUEUED_FOR_RTH"
+}

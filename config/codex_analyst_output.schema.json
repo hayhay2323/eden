@@ -1,0 +1,168 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "should_alert",
+    "alert_level",
+    "headline",
+    "message",
+    "bullets",
+    "focus_symbols",
+    "tags",
+    "primary_action",
+    "confidence_band",
+    "what_changed",
+    "why_it_matters",
+    "watch_next",
+    "what_not_to_do",
+    "fragility",
+    "recommendation_ids",
+    "market_summary_5m",
+    "action_cards",
+    "final_action",
+    "rationale"
+  ],
+  "properties": {
+    "should_alert": {
+      "type": "boolean"
+    },
+    "alert_level": {
+      "type": "string",
+      "enum": ["normal", "high", "critical"]
+    },
+    "headline": {
+      "type": ["string", "null"]
+    },
+    "message": {
+      "type": ["string", "null"]
+    },
+    "bullets": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 5
+    },
+    "focus_symbols": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 4
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 6
+    },
+    "primary_action": {
+      "type": "string",
+      "enum": ["ignore", "watch", "review", "hedge", "trim", "add", "enter"]
+    },
+    "confidence_band": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "what_changed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 4
+    },
+    "why_it_matters": {
+      "type": ["string", "null"]
+    },
+    "watch_next": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 4
+    },
+    "what_not_to_do": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 4
+    },
+    "fragility": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 4
+    },
+    "recommendation_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 4
+    },
+    "market_summary_5m": {
+      "type": ["string", "null"]
+    },
+    "action_cards": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "symbol",
+          "setup_id",
+          "action",
+          "action_label",
+          "summary",
+          "why_now",
+          "confidence_band",
+          "watch_next",
+          "do_not",
+          "severity",
+          "title"
+        ],
+        "properties": {
+          "symbol": { "type": "string" },
+          "setup_id": { "type": ["string", "null"] },
+          "action": {
+            "type": "string",
+            "enum": ["ignore", "watch", "review", "hedge", "trim", "add", "enter"]
+          },
+          "action_label": { "type": ["string", "null"] },
+          "severity": {
+            "type": "string",
+            "enum": ["normal", "high", "critical"]
+          },
+          "title": { "type": ["string", "null"] },
+          "summary": { "type": "string" },
+          "why_now": { "type": "string" },
+          "confidence_band": {
+            "type": "string",
+            "enum": ["low", "medium", "high"]
+          },
+          "watch_next": {
+            "type": "array",
+            "items": { "type": "string" },
+            "maxItems": 3
+          },
+          "do_not": {
+            "type": "array",
+            "items": { "type": "string" },
+            "maxItems": 3
+          }
+        }
+      }
+    },
+    "final_action": {
+      "type": "string",
+      "enum": ["speak", "silent", "hold"]
+    },
+    "rationale": {
+      "type": "string"
+    }
+  }
+}

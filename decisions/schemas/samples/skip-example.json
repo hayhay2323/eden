@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "decision_id": "2026-04-18T11-55-00Z-HK-3690.HK-skip",
+  "timestamp": "2026-04-18T11:55:00Z",
+  "market": "HK",
+  "symbol": "3690.HK",
+  "action": "skip",
+  "direction": null,
+  "eden_session": {
+    "binary": "hk",
+    "tick_seq": 151,
+    "stress_composite": 0.52,
+    "wake_excerpt": "inference: 3690.HK cross-sector rotation conf=0.61",
+    "wake_context": [
+      "inference: 3690.HK cross-sector rotation conf=0.61",
+      "shared holders anomaly: 5 funds shifted"
+    ],
+    "supporting_evidence": ["5 fund shifts"],
+    "opposing_evidence": ["conf below 0.7 threshold", "peer 9618.HK flat"],
+    "missing_evidence": ["no broker queue confirmation"]
+  },
+  "claude": {
+    "reasoning": "Confidence 0.61 below threshold; fund shift is 1 of 3 needed signals; peer ambiguous. Insufficient conviction.",
+    "concerns": ["FOMO if this is early signal"],
+    "confidence": 0.35,
+    "prior_knowledge_used": [
+      "Conf>=0.7 required for entry (v2 discipline)"
+    ],
+    "alternatives_considered": ["observe-tier tracking without entry"],
+    "decision_rationale": "Discipline over FOMO; record as skip for Eden to learn which sub-threshold signals turn real"
+  },
+  "execution": null,
+  "outcome": null,
+  "retrospective": null,
+  "metadata": {
+    "backfilled": false,
+    "backfill_source": null,
+    "created_at": "2026-04-18T11:55:00Z",
+    "updated_at": null
+  }
+}

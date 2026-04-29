@@ -1,0 +1,16 @@
+{
+  "decision_id": "001-9868-SELL",
+  "at": "2026-04-23T01:55Z",
+  "symbol": "9868.HK",
+  "side": "SELL",
+  "qty": 100,
+  "order_id": "1231785431448690688",
+  "order_type": "MO",
+  "cost": 69.55,
+  "last": 63.10,
+  "expected_pnl_hkd": -645,
+  "why_eden": "Short 9868.HK enter vortex [review], 5-stage mod_stack confirms (base 1.0 × belief 1.04 × broker 1.001 × product 1.041 = 1.083), VOLUME ratio 7.2x, 5min_chg -55%, sector_wave dir=sell with 9868/2333/2142 leaders, FADING + GROWING contradicting (regime breaking)",
+  "why_longport_agrees": "capital_flow 24 連續分鐘 outflow，從 -358 累積到 -4143，且加速（最後 5 分鐘 -3358 -2160 -3082 -3564 -4143），機構撤離無回流跡象",
+  "structure_type": "directional_outflow_with_volume_capitulation",
+  "lesson_in_progress": "Eden 對自己持倉的反向 short 信號 + longport raw 完全對齊 = 高 conviction veto。停損優於 hope。"
+}

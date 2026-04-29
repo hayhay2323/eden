@@ -1,0 +1,39 @@
+{
+  "decision_id": "2026-04-22-003-CL-short",
+  "at": "2026-04-22T20:42:00+08:00",
+  "symbol": "CL.US",
+  "side": "Sell",
+  "quantity": 10,
+  "order_type": "LO",
+  "submitted_price": 82.00,
+  "time_in_force": "Day",
+  "outside_rth": "ANY_TIME",
+  "longport_order_id": "1231586142340546560",
+  "eden_source": {
+    "setup_id": "pf:CL.US:short:mid30m",
+    "confidence": 1.0,
+    "action": "review",
+    "cycles_persisted": 4,
+    "active_structures_tilt": "5 long : 9 short → bearish bias",
+    "planner": "do(inst_flow := +0.50) U=+0.49 (bleeding but still positive inst_flow push, consistent with selling defensives)",
+    "cluster_flip_context": "能源 turning_point → conflicted（energy outperform narrative 減弱，risk-on 降溫 → defensives 本該反彈，但 Eden 仍 short = 高信心反向）"
+  },
+  "operator_reasoning": "CL short 是 4 個 cycle 持續 top 5 conf=1 的信號，是目前最穩定 thesis。消費防禦股被 short 跟 planner inst_flow push 方向一致（機構資金進 risk-on，不進 defensives）。上 cycle 學到「持久性 > 偶現高 conviction」，CL 是最好的例子。",
+  "quote_at_decision": {
+    "last_done": 81.81,
+    "pre_market_last": 81.83,
+    "prev_close": 83.53,
+    "yesterday_change_pct": -2.06,
+    "regular_high": 84.14,
+    "regular_low": 81.79
+  },
+  "risk_flags": [
+    "短多頭連續下跌股，可能反彈風險",
+    "pre-market 流動性低（turnover 135k），LO $82 可能要等 RTH open 才 fill",
+    "short 消費股在降息預期環境 historically 風險 / defensives catch bid",
+    "LO $82 高於 pre-market last 81.83 — 等價於限價出售在 pre-market 略偏高，可能吃到反彈 fill"
+  ],
+  "exit_plan": "跟 Eden：setup 從 active_structures 消失 / 翻向 long → 平倉。無硬 stop-loss。觀察：CL 若在 21:30 開盤後 cluster 翻向 bullish 或 energy sector 翻強重奪 turning_point → 提前退出。",
+  "notional_usd": 820,
+  "status": "WORKING"
+}

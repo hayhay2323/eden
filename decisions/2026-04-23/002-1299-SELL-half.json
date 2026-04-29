@@ -1,0 +1,23 @@
+{
+  "decision_id": "002-1299-SELL-half",
+  "at": "2026-04-23T05:13Z",
+  "symbol": "1299.HK",
+  "side": "SELL",
+  "qty": 200,
+  "remaining_qty": 200,
+  "order_id": "1231840412776300544",
+  "order_type": "MO",
+  "cost": 83.35,
+  "last": 81.95,
+  "expected_pnl_hkd_this_lot": -280,
+  "why_eden": "Cycle 3 RegimeChanged 1299.HK CoherentBullish → Conflicted (warning). Cycle 4 RegimeChanged 1299.HK Conflicted → CoherentBearish (confirmation, 2 cycle persistence per v0.22 reversal regime rule). ICE Broker rotation: B2845 new at Ask pos 1 (selling) while B8448 + B5447 still at Bid (institutional support partial).",
+  "why_longport_agrees": "capital_flow 5+ hours sustained outflow (max -8400 HKD/min, currently -2000 HKD/min residual). intraday range 81.80-82.70 entirely below prev_close 83.20. -1.5% on day, -1.7% from cost.",
+  "structure_type": "regime_state_progression_with_broker_rotation",
+  "size_decision": "half (200 of 400) — conservative because reversal regime can whipsaw (yesterday 1299 bounced -42 → +30) and ICE still has bid support. Lock half loss, leave half for potential reversal.",
+  "rule_chain_validation": [
+    "v0.21 (regime gate): SELL allowed in reversal_prone (defensive)",
+    "v0.22 (wait 2 cycle confirm): SATISFIED across cycle 3 → cycle 4 RegimeChanged sequence",
+    "v0.12 (持倉防禦 raw stack): broker rotation + capital outflow = qualifying multi-channel evidence"
+  ],
+  "lesson_in_progress": "Eden RegimeChanged events (CoherentBullish/CoherentBearish/Conflicted state transitions) are a CLEANER warning surface than mod_stack — visible 1-2 cycles before mod_stack翻向. Should grep this every cycle for held positions."
+}

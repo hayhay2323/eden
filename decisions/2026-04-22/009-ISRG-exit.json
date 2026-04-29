@@ -1,0 +1,29 @@
+{
+  "decision_id": "2026-04-22-009-ISRG-exit",
+  "at": "2026-04-22T22:55:19+08:00",
+  "symbol": "ISRG.US",
+  "side": "Sell",
+  "quantity": 2,
+  "order_type": "MO",
+  "longport_order_id": "1231619281179934720",
+  "linked_entry_id": "2026-04-22-008-ISRG-long",
+  "status": "FILLED",
+  "executed_price": 486.11,
+  "entry_price": 487.12,
+  "realized_pnl_usd": -2.02,
+  "realized_pnl_pct": -0.21,
+  "hold_duration_min": 14,
+  "trigger": "ISRG consecutive gap = 3 cycles (#61, 62, 63 all gone from active_structures). Revised 3-cycle exit rule fire per design. 雖然 entry 時 cross-check 也 confirm，但出場 rule 跟 entry rule 獨立。",
+  "eden_state_at_exit": {
+    "tick": 1200,
+    "consecutive_gap_cycles": 3,
+    "isrg_in_active_structures": false,
+    "bull_bear_ratio": "1916/583=3.29"
+  },
+  "lessons": [
+    "First realized LOSS of session — clean small loss via rule-driven exit",
+    "ISRG 的 lifecycle pattern: 4-cycle entry build → 1-cycle gap → 3-cycle sustain → 3-cycle gap → exit. 總 hold 14 min",
+    "Eden 4-cycle persistence + cross-check STRONG CONFIRM 組合仍然無法預測每筆都賺 — edge 是 statistical 不是 deterministic",
+    "rule 執行的 discipline: 即使 cross-check 當時強 confirm + 持有期間小虧，仍按 rule exit，不 hope-and-hold"
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "decision_id": "2026-04-22-006-MSTR-exit",
+  "at": "2026-04-22T21:43:22+08:00",
+  "symbol": "MSTR.US",
+  "side": "Sell",
+  "quantity": 5,
+  "order_type": "MO",
+  "time_in_force": "Day",
+  "outside_rth": "RTH_ONLY",
+  "longport_order_id": "1231601173769760768",
+  "linked_entry_id": "2026-04-22-005-MSTR-long",
+  "status": "FILLED",
+  "executed_price": 179.032,
+  "executed_quantity": 5,
+  "entry_price": 177.06,
+  "realized_pnl_usd": 9.86,
+  "realized_pnl_pct": 1.11,
+  "hold_duration_min": 10,
+  "trigger": "MSTR 從 active_structures 消失 3 個 cycle 連續（#32, #33, #34），觸發 revised 3-cycle gap exit rule。雖然價格還在漲（+1.17% unrealized 當下），但 Eden 已不 support thesis — 依 rule 平倉。",
+  "eden_state_at_exit": {
+    "tick": 869,
+    "consecutive_gap_cycles": 3,
+    "in_last_4_cycles": "0 of 4",
+    "mstr_in_active_structures": false,
+    "bull_bear_ratio": "923/583=1.58",
+    "planner": "do(inst_flow := +0.50) U=0.56",
+    "world_state": "stress=0.13, synchrony=0.69"
+  },
+  "exit_philosophy": "嚴守 rule 而非 greed。+1.17% 在手，若 hold 等 Eden 回來: (a) Eden 可能不回 + MSTR 反向 → 虧；(b) Eden 回 + MSTR 繼續漲 → 不知哪個多。依 rule exit = consistent 操作紀律 = 長期勝率。",
+  "lessons": [
+    "第一筆 live round-trip: entry + exit 全 fill in 10 min",
+    "+1.11% realized profit — Eden-driven decision 首次產生正 P&L",
+    "Rule 勝 emotion: 價格在漲但 Eden 撤 thesis，依 rule 平倉是正確操作紀律",
+    "Pattern: Eden 4-cycle persistence 入場 → 10 min 後 exit，這是 Eden setup 的 natural holding window 之一"
+  ]
+}

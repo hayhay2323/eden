@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "decision_id": "2026-04-15T16-46-00Z-US-KC.US-entry",
+  "timestamp": "2026-04-15T16:46:00Z",
+  "market": "US",
+  "symbol": "KC.US",
+  "action": "entry",
+  "direction": "short",
+  "eden_session": {
+    "binary": "us",
+    "tick_seq": 39,
+    "stress_composite": null,
+    "wake_excerpt": "KC.US Short qualifying case (conf=1.0, sf=0.75, rrc=stale_symbol_confirmation)",
+    "wake_context": [
+      "Eden US restart tick 39, scorecard 0/0 pre-first-resolution",
+      "position_in_range 66.7% (not at day low)"
+    ],
+    "supporting_evidence": [
+      "confidence 1.0",
+      "support_fraction 0.75",
+      "position_in_range 66.7% (valid timing — not at day low)"
+    ],
+    "opposing_evidence": [
+      "rrc=stale_symbol_confirmation (soft block, overridable in v2)"
+    ],
+    "missing_evidence": []
+  },
+  "claude": {
+    "reasoning": "v2 discipline qualifies: conf>=0.7, sf>=0.67, rrc allowed override. Position_in_range shows Short not at day low so timing valid. Session 1 had 120 rounds of 0-enter streak; this is first actual trade.",
+    "concerns": [
+      "Fresh restart, scorecard 0/0 — no realized baseline yet"
+    ],
+    "confidence": 0.85,
+    "prior_knowledge_used": [
+      "v2 discipline rules (conf>=0.7 + sf>=0.67 + soft-block rrc override)",
+      "size $3k fixed"
+    ],
+    "alternatives_considered": [],
+    "decision_rationale": "All v2 gates pass + first qualifier after 120-round streak — execute per discipline"
+  },
+  "execution": {
+    "price": "16.65",
+    "size_bps": null,
+    "size_notional_hkd": null,
+    "size_notional_usd": 2997,
+    "linked_entry_id": null,
+    "broker_order_id": "1229110611837726720",
+    "paper_or_real": "real"
+  },
+  "outcome": null,
+  "retrospective": null,
+  "metadata": {
+    "backfilled": true,
+    "backfill_source": "docs/operator_session_us_2026-04-15_v2.md#R1",
+    "created_at": "2026-04-18T00:00:00Z",
+    "updated_at": null
+  }
+}

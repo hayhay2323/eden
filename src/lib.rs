@@ -1,0 +1,41 @@
+pub mod action;
+pub mod agent;
+pub mod api;
+pub mod bridges;
+pub mod cases;
+pub mod cli;
+pub mod core;
+pub mod dreaming;
+pub mod external;
+pub mod graph;
+pub mod hk;
+pub mod live_snapshot;
+pub mod math;
+pub mod ontology;
+pub mod persistence;
+pub mod pipeline;
+pub mod temporal;
+pub mod us;
+
+pub use api::{default_bind_addr, serve, ApiKeyCipher, ApiKeyRevocationStore};
+pub use core::market_snapshot::{
+    CanonicalBrokerLevel, CanonicalBrokerQueues, CanonicalCalcIndex, CanonicalCandle,
+    CanonicalCapitalDistribution, CanonicalCapitalFlowPoint, CanonicalDepthLevel,
+    CanonicalExtendedSessionQuote, CanonicalIntradayPoint, CanonicalMarketSnapshot,
+    CanonicalMarketStatus, CanonicalMarketTemperature, CanonicalOptionSurface, CanonicalOrderBook,
+    CanonicalQuote, CanonicalTrade, CanonicalTradeDirection, CanonicalTradeSession,
+};
+pub use core::settings::ApiInfraConfig;
+
+pub use ontology::{
+    AgentEventImpact, AgentKnowledgeEvent, AgentKnowledgeLink, AgentKnowledgeNodeRef,
+    AgentMacroEvent, AgentMacroEventCandidate, AtomicPredicate, AtomicPredicateKind, BackwardCause,
+    BackwardEvidenceItem, BackwardInvestigation, BackwardReasoningSnapshot, CaseCluster,
+    CaseReasoningProfile, CausalContestState, CompositeState, CompositeStateKind, DecisionLineage,
+    DerivedSignal, EntityState, Event, EvidencePolarity, EvidenceRef, EvidenceRefKind,
+    GoverningLawKind, Hypothesis, HypothesisTrack, HypothesisTrackStatus, InvalidationCondition,
+    InvestigationSelection, KnowledgeEventAttributes, KnowledgeEventKind, KnowledgeRelation,
+    LawActivation, MechanismCandidate, MechanismCandidateKind, Observation, PropagationPath,
+    PropagationStep, ProvenanceMetadata, ProvenanceSource, ReasoningEvidence,
+    ReasoningEvidenceKind, ReasoningScope, TacticalSetup, WorldLayer, WorldStateSnapshot,
+};

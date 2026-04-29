@@ -1,0 +1,50 @@
+{
+  "decision_id": "2026-04-22-007-inherited-US-cleanup",
+  "at": "2026-04-22T21:49:17+08:00",
+  "action": "bulk_exit_inherited_US_positions",
+  "rationale": "3 個 US inherited positions (SNAP/HUBS/DUOL) 在 Eden active_structures 上無任何支持 + wake.reasons 無提及 = Eden thesis 早已消失 (> 3-cycle gap)。統一依 operator rule 清倉。",
+  "positions_closed": [
+    {
+      "symbol": "HUBS.US",
+      "qty": 14,
+      "cost": 216.20,
+      "exit_price": 235.30,
+      "realized_pnl_usd": 267.40,
+      "realized_pct": 8.83,
+      "order_id": "1231602640220061696",
+      "original_entry_ref": "decisions/2026/04/15/164900Z-US-HUBS.US-entry.json (Apr 15 long entry, held 7 days)"
+    },
+    {
+      "symbol": "DUOL.US",
+      "qty": 31,
+      "cost": 96.67,
+      "exit_price": 104.30,
+      "realized_pnl_usd": 236.53,
+      "realized_pct": 7.89,
+      "order_id": "1231602658603696128"
+    },
+    {
+      "symbol": "SNAP.US",
+      "qty": 506,
+      "cost": 5.925,
+      "exit_price": 5.7908,
+      "realized_pnl_usd": -67.91,
+      "realized_pct": -2.27,
+      "order_id": "1231602664874188800"
+    }
+  ],
+  "batch_realized_pnl_usd": 436.02,
+  "session_running_total": 445.88,
+  "lessons": [
+    "HUBS 7 天持有 +8.83% — 這是原 Claude Code session 的 Eden-driven entry，證明「mid-horizon hold」策略在原 session 有效",
+    "DUOL +7.89% 同樣 — 兩個 winner 是 growth/software 類，可能跟 risk-on 環境的老 signal 對",
+    "SNAP -2.27% 是唯一虧損，low-price 股票 +0.1 跳動太敏感，paper 小 size 比例上虧更多",
+    "Eden active_structures 上對這 3 個 symbol 完全沒提 = Eden 已 effectively 撤除 thesis，清倉是 rule-driven decision"
+  ],
+  "remaining_positions_to_handle": [
+    "9868.HK XPENG — HK market closed, handle tomorrow 09:30 HKT",
+    "3908.HK CICC — same",
+    "3898.HK TIMES ELECTRIC — same",
+    "1299.HK AIA — same"
+  ]
+}

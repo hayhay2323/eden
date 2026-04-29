@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "decision_id": "2026-04-15T16-49-00Z-US-HUBS.US-entry",
+  "timestamp": "2026-04-15T16:49:00Z",
+  "market": "US",
+  "symbol": "HUBS.US",
+  "action": "entry",
+  "direction": "long",
+  "eden_session": {
+    "binary": "us",
+    "tick_seq": 195,
+    "stress_composite": null,
+    "wake_excerpt": "HUBS.US Long qualifying (conf=1, sf=0.75, rrc=stale_symbol_confirmation, pos_in_range 44.1%)",
+    "wake_context": [
+      "AHR 49.12% / excess 8.50pp / baseline 40.62% / ares 3288 (same tick as KC exit)"
+    ],
+    "supporting_evidence": [
+      "confidence 1.0",
+      "support_fraction 0.75",
+      "position_in_range 44.1% (mid-range — valid long timing)"
+    ],
+    "opposing_evidence": [
+      "rrc=stale_symbol_confirmation (soft block, overridable)"
+    ],
+    "missing_evidence": []
+  },
+  "claude": {
+    "reasoning": "v2 discipline qualifies: conf>=0.7, sf>=0.67, rrc allowed override. Mid-range timing valid for long entry.",
+    "concerns": [
+      "Just exited KC with -$5.40 on roster churn — same mechanism could whipsaw HUBS"
+    ],
+    "confidence": 0.7,
+    "prior_knowledge_used": [
+      "v2 discipline rules",
+      "size $3k fixed"
+    ],
+    "alternatives_considered": [
+      "skip given KC whipsaw just occurred",
+      "size smaller"
+    ],
+    "decision_rationale": "v2 rules apply uniformly — don't skip based on previous trade outcome. But flag concern for retrospective."
+  },
+  "execution": {
+    "price": "214.55",
+    "size_bps": null,
+    "size_notional_hkd": null,
+    "size_notional_usd": 3003.70,
+    "linked_entry_id": null,
+    "broker_order_id": "1229111467756756992",
+    "paper_or_real": "real"
+  },
+  "outcome": null,
+  "retrospective": null,
+  "metadata": {
+    "backfilled": true,
+    "backfill_source": "docs/operator_session_us_2026-04-15_v2.md#R2",
+    "created_at": "2026-04-18T00:00:00Z",
+    "updated_at": null
+  }
+}

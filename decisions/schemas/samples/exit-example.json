@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "decision_id": "2026-04-18T10-15-33Z-HK-0700.HK-exit",
+  "timestamp": "2026-04-18T10:15:33Z",
+  "market": "HK",
+  "symbol": "0700.HK",
+  "action": "exit",
+  "direction": null,
+  "eden_session": {
+    "binary": "hk",
+    "tick_seq": 87,
+    "stress_composite": 0.41,
+    "wake_excerpt": "backward: 0700.HK broker queue dominance fading",
+    "wake_context": [
+      "backward: 0700.HK broker queue dominance fading",
+      "stable: BOCI rotation now flat"
+    ],
+    "supporting_evidence": ["queue dominance drop"],
+    "opposing_evidence": [],
+    "missing_evidence": []
+  },
+  "claude": {
+    "reasoning": "Entry thesis (institutional deployment) confirmed via price move; queue dominance fading = signal peak. Follow exit-on-fade discipline.",
+    "concerns": [],
+    "confidence": 0.82,
+    "prior_knowledge_used": [
+      "Exit on momentum derivative (feedback memory)",
+      "Never use arbitrary % stops; use Eden signals"
+    ],
+    "alternatives_considered": ["hold for afternoon session"],
+    "decision_rationale": "Eden signal faded first — honor exit discipline even with small gain"
+  },
+  "execution": {
+    "price": "345.60",
+    "size_bps": 25,
+    "size_notional_hkd": 25000,
+    "size_notional_usd": null,
+    "linked_entry_id": "2026-04-18T09-31-47Z-HK-0700.HK-entry",
+    "broker_order_id": null,
+    "paper_or_real": "paper"
+  },
+  "outcome": {
+    "exit_timestamp": "2026-04-18T10:15:33Z",
+    "exit_price": "345.60",
+    "hold_duration_sec": 2626,
+    "pnl_bps": 82,
+    "pnl_abs_hkd": 204.5,
+    "pnl_abs_usd": null,
+    "closing_reason": "eden_signal_faded"
+  },
+  "retrospective": {
+    "what_worked": "T22 signal direction correct; broker queue dominance was effective early read",
+    "what_didnt": "Entry was 5 min early — T22 first fire without persistence confirmation",
+    "would_do_differently": "Wait one tick persistence after T22 first fire before entry",
+    "new_pattern_observed": "BOCI rotation leads JPM rotation by ~3 ticks — unnoticed before",
+    "eden_gap": "missing_evidence did not include 'peer_synchronization' — should be surfaced as opposing dimension"
+  },
+  "metadata": {
+    "backfilled": false,
+    "backfill_source": null,
+    "created_at": "2026-04-18T10:15:33Z",
+    "updated_at": null
+  }
+}

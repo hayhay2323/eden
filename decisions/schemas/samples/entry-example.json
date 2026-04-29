@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "decision_id": "2026-04-18T09-31-47Z-HK-0700.HK-entry",
+  "timestamp": "2026-04-18T09:31:47Z",
+  "market": "HK",
+  "symbol": "0700.HK",
+  "action": "entry",
+  "direction": "long",
+  "eden_session": {
+    "binary": "hk",
+    "tick_seq": 12,
+    "stress_composite": 0.48,
+    "wake_excerpt": "inference: 0700.HK broad institutional deployment conf=0.72",
+    "wake_context": [
+      "inference: 0700.HK broad institutional deployment conf=0.72",
+      "institution rotation: BOCI +0.21, JPM +0.18",
+      "hidden forces confirmed: 47 symbols"
+    ],
+    "supporting_evidence": ["BOCI rotation", "broker 157/26 buy skew"],
+    "opposing_evidence": ["peer 3690.HK no sync move"],
+    "missing_evidence": ["no matching option flow HK-side"]
+  },
+  "claude": {
+    "reasoning": "T22 chain at 0.72 + institutional rotation confirms buy side. Broker queue 157/26 is raw evidence of distribution to accumulation flip.",
+    "concerns": ["3690.HK lag suggests single-name story not sector"],
+    "confidence": 0.78,
+    "prior_knowledge_used": [
+      "HK edge in raw_microstructure (CLAUDE.md)",
+      "T22 conf>0.7 historically 65%+ hit"
+    ],
+    "alternatives_considered": ["wait for 3690.HK confirmation", "size half"],
+    "decision_rationale": "T22 signal + institutional rotation dual-confirm outweighs single-name concern; size reduced to half as concession"
+  },
+  "execution": {
+    "price": "342.80",
+    "size_bps": 25,
+    "size_notional_hkd": 25000,
+    "size_notional_usd": null,
+    "linked_entry_id": null,
+    "broker_order_id": null,
+    "paper_or_real": "paper"
+  },
+  "outcome": null,
+  "retrospective": null,
+  "metadata": {
+    "backfilled": false,
+    "backfill_source": null,
+    "created_at": "2026-04-18T09:31:47Z",
+    "updated_at": null
+  }
+}

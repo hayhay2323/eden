@@ -1,0 +1,46 @@
+{
+  "decision_id": "003-MDB-SELL-T2",
+  "at": "2026-04-23T17:01Z",
+  "symbol": "MDB.US",
+  "side": "SELL",
+  "qty": 8,
+  "order_id": "1232013638672351232",
+  "order_type": "MO",
+  "approx_entry": 255.10,
+  "tier": "T2",
+  "target_price": 250.10,
+  "stop_price": 259.60,
+  "horizon_ts": "2026-04-23T19:45Z",
+  "why_eden": {
+    "surfaces": [
+      "mod_stack(pf:MDB.US:short:mid30m final=0.855, 150+ occurrences <=0.92 all session)",
+      "sym_regime(bias=0 bearish, action=enter, repeated 5+ cycles)",
+      "hub(CMCSA cluster peer, max_streak=75)"
+    ],
+    "regime_bucket": "stress=2|sync=2|bias=4|act=2|turn=3",
+    "self_doubt": null,
+    "note": "Eden was generating short signals all session. Operator had long-side bias and missed first 3.5hr of signal. Late entry at 17:01 UTC (3.5hr after first signal). capital_flow confirms sustained outflow."
+  },
+  "why_longport": {
+    "quote_at_entry": "255.10 (-5.2% from prev_close 269.54)",
+    "capital_flow_cumulative": "-2430 (accelerating from 13:30 UTC, outflow entire session)",
+    "depth": "thin (4 asks at 255.09 / 1 bid at 254.63)",
+    "day_range": "250.50 - 258.49"
+  },
+  "structure_type": "sustained_capital_outflow_with_belief_downmod",
+  "size_decision": "Tier 2 ($2,044 USD) — late entry reduces conviction vs Tier 1. Signal valid but intraday momentum mostly captured.",
+  "lesson_in_progress": "Eden SHORT signal (mod_stack <=0.92) was firing from session open. Operator long-side bias caused 3.5hr miss. v0.3 must include SHORT watchlist scanning in pre-market recon.",
+  "outcome": {
+    "exit_order_id": "1232020004052955136",
+    "exit_ts": "2026-04-23T17:26Z",
+    "approx_exit": 253.90,
+    "cost_price": 254.76,
+    "exit_reason": "raw_microstructure_fade_confirmed",
+    "exit_reason_detail": "Eden sector_wave flipped GROWING→FADING + capital_flow cumulative outflow went flat (24min delta only -$91 vs prior -$3-5K/min pace). mod_stack not flipped yet but raw microstructure confirms momentum exhaustion. Price bounced +1.36% from day low 250.50; target 250.10 missed by $0.40.",
+    "pnl_gross_usd": 6.88,
+    "pnl_bps": 34,
+    "realized_return_pct": 0.34,
+    "hold_duration_sec": 1500,
+    "notes": "First US validation trade closed in profit. SHORT thesis valid: MDB -5.2% intraday from 269.54 to 253.9, day low 250.5 (-7.1% peak). Entry late (+3.5hr after first Eden signal) reduced capture to 0.34% vs theoretical ~2% if entered at session open. v0.3 lesson: pre-market SHORT scanning required."
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "decision_id": "2026-04-22-010-MSTR-long-v2",
+  "at": "2026-04-22T23:06:20+08:00",
+  "symbol": "MSTR.US",
+  "side": "Buy",
+  "quantity": 10,
+  "order_type": "MO",
+  "longport_order_id": "1231622053384159232",
+  "status": "FILLED",
+  "executed_price": 179.20,
+  "notional_usd": 1792.00,
+  "size_vs_previous": "2x (5 sh → 10 sh) — scaling up per user directive to act without limits",
+  "thesis": "No 4-cycle rule required. Bet based on session-long pattern recognition: (1) MSTR 是本 session proven winner pattern (+$10 / 10 min @ 5 sh first trade) (2) Crypto long cluster 今晚反覆出現 6+ 次最 persistent theme (3) MSTR 從 $183.25 intraday high 回到 $179 = 可能 bounce opportunity (4) 整晚熟練度已跟 MSTR volatility 對上.",
+  "quote_at_decision": {
+    "last_done": 179.22,
+    "prev_close": 163.97,
+    "pct_from_prev": 9.30,
+    "intraday_high": 183.25,
+    "distance_from_high_pct": -2.20
+  },
+  "what_breaks_this": [
+    "bull/bear 3.48 是 session 高 = 可能頂部 rollover, MSTR 大型跌",
+    "Eden 本 cycle 沒 MSTR conf=1 enter — signal 比第一次進弱",
+    "Session end melt-up could 反轉 → crypto-high-beta 先倒"
+  ],
+  "exit_plan": "跟 MSTR 第一次 round-trip：3-cycle gap 或 intraday high/low break."
+}

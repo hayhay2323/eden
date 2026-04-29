@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "session_date": "2026-04-18",
+  "market": "HK",
+  "eden_session_stats": {
+    "first_tick": 1,
+    "last_tick": 197,
+    "total_ticks": 197,
+    "binary_version": "e18c34c"
+  },
+  "decisions_summary": {
+    "total": 3,
+    "entries": 1,
+    "exits": 1,
+    "skips": 1,
+    "size_changes": 0,
+    "net_pnl_bps": 82,
+    "hit_rate": 1.0
+  },
+  "recurring_themes": [
+    {
+      "theme": "institutional_rotation_as_confirmation",
+      "occurrence_count": 2,
+      "decision_ids": [
+        "2026-04-18T09-31-47Z-HK-0700.HK-entry",
+        "2026-04-18T10-15-33Z-HK-0700.HK-exit"
+      ]
+    }
+  ],
+  "eden_gap_patterns": [
+    {
+      "gap": "peer_synchronization missing from missing_evidence surface",
+      "occurrence_count": 1,
+      "decision_ids": ["2026-04-18T10-15-33Z-HK-0700.HK-exit"]
+    }
+  ],
+  "session_reflection": "Single clean setup on 0700.HK demonstrated T22 + institutional rotation as viable dual-confirm. Skip on 3690.HK was correct — sub-threshold signal did not materialize. Recurring pattern: peer_synchronization should be first-class in Eden's opposing_evidence surface.",
+  "metadata": {
+    "created_at": "2026-04-18T16:00:00Z",
+    "backfilled": false,
+    "backfill_source": null
+  }
+}

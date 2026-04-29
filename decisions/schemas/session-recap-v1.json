@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Eden Session Recap v1",
+  "description": "End-of-session aggregate across all decisions in a single day. Cross-references decision files + summarizes recurring themes and eden_gap patterns.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "session_date",
+    "market",
+    "eden_session_stats",
+    "decisions_summary",
+    "recurring_themes",
+    "eden_gap_patterns",
+    "metadata"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "session_date": { "type": "string", "format": "date" },
+    "market": { "type": "string", "enum": ["HK", "US"] },
+    "eden_session_stats": {
+      "type": "object",
+      "required": ["first_tick", "last_tick", "total_ticks"],
+      "additionalProperties": false,
+      "properties": {
+        "first_tick": { "type": "integer", "minimum": 0 },
+        "last_tick": { "type": "integer", "minimum": 0 },
+        "total_ticks": { "type": "integer", "minimum": 0 },
+        "binary_version": { "type": ["string", "null"] }
+      }
+    },
+    "decisions_summary": {
+      "type": "object",
+      "required": ["total", "entries", "exits", "skips"],
+      "additionalProperties": false,
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "entries": { "type": "integer", "minimum": 0 },
+        "exits": { "type": "integer", "minimum": 0 },
+        "skips": { "type": "integer", "minimum": 0 },
+        "size_changes": { "type": "integer", "minimum": 0 },
+        "net_pnl_bps": { "type": ["number", "null"] },
+        "hit_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+      }
+    },
+    "recurring_themes": {
+      "type": "array",
+      "description": "Patterns that appeared multiple times across decisions today",
+      "items": {
+        "type": "object",
+        "required": ["theme", "occurrence_count", "decision_ids"],
+        "additionalProperties": false,
+        "properties": {
+          "theme": { "type": "string" },
+          "occurrence_count": { "type": "integer", "minimum": 1 },
+          "decision_ids": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "eden_gap_patterns": {
+      "type": "array",
+      "description": "Unique eden_gap values across today's retrospectives, ranked by recurrence",
+      "items": {
+        "type": "object",
+        "required": ["gap", "occurrence_count", "decision_ids"],
+        "additionalProperties": false,
+        "properties": {
+          "gap": { "type": "string" },
+          "occurrence_count": { "type": "integer", "minimum": 1 },
+          "decision_ids": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "session_reflection": { "type": "string" },
+    "metadata": {
+      "type": "object",
+      "required": ["created_at"],
+      "additionalProperties": false,
+      "properties": {
+        "created_at": { "type": "string", "format": "date-time" },
+        "backfilled": { "type": "boolean" },
+        "backfill_source": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
