@@ -508,7 +508,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 }
                 counter = counter.wrapping_add(1);
-                if counter % 10_000 == 0 {
+                if counter == 1 || counter % 1_000 == 0 {
                     eprintln!(
                         "[us pressure-bus] drained {} events (pending={}, dropped={})",
                         counter,
