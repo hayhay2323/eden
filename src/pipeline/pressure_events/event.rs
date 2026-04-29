@@ -6,7 +6,7 @@
 //! into zero or more `PressureEvent`s.
 
 use chrono::{DateTime, Utc};
-use longport::quote::{PushEvent, PushEventDetail};
+use longport::quote::{PushEvent, PushEventDetail, TradeDirection};
 use rust_decimal::Decimal;
 
 #[derive(Debug, Clone)]
@@ -86,7 +86,11 @@ pub fn demux_push_event(evt: &PushEvent) -> Vec<PressureEvent> {
                 symbol: symbol.clone(),
                 price: t.price,
                 volume: Decimal::from(t.volume),
-                side: TradeSide::Unknown,
+                side: match t.direction {
+                    TradeDirection::Up => TradeSide::Buy,
+                    TradeDirection::Down => TradeSide::Sell,
+                    TradeDirection::Neutral => TradeSide::Unknown,
+                },
                 ts,
             })
             .collect(),

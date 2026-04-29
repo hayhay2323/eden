@@ -47,21 +47,39 @@ pub fn spawn_aggregator(
                     .map(|s| (s.orderbook_value, s.structure_value))
                     .unwrap_or((rust_decimal::Decimal::ZERO, rust_decimal::Decimal::ZERO))
             };
+            let (cf_value, mo_value, vol_value) = {
+                let map = states.tradeflow.read();
+                map.get(&symbol)
+                    .map(|s| (s.capital_flow_value, s.momentum_value, s.volume_value))
+                    .unwrap_or((0.0, 0.0, 0.0))
+            };
             let prior = loopy_bp::prior_from_pressure_channels(
                 Some(ob_value.to_f64().unwrap_or(0.0)),
-                None,
-                None,
-                None,
-                None,
+                Some(cf_value),
+                None, // Institutional — HK-only (broker queue)
+                Some(mo_value),
+                Some(vol_value),
                 Some(st_value.to_f64().unwrap_or(0.0)),
             );
+            let prior_snap = prior.clone();
             substrate.observe_symbol(&symbol, prior, &[]);
             observe_count = observe_count.wrapping_add(1);
             if observe_count == 1 || observe_count % 25 == 0 {
                 let snap = substrate.posterior_snapshot();
                 eprintln!(
-                    "[pressure-agg] observe_symbol fired {} times (latest={}, posterior generation={})",
-                    observe_count, symbol, snap.generation
+                    "[pressure-agg] obs={} sym={} prior=[{:.3},{:.3},{:.3}] obs?={} cf={:.3} mo={:.3} vol={:.3} ob={:.3} st={:.3} gen={}",
+                    observe_count,
+                    symbol,
+                    prior_snap.belief[0],
+                    prior_snap.belief[1],
+                    prior_snap.belief[2],
+                    prior_snap.observed,
+                    cf_value,
+                    mo_value,
+                    vol_value,
+                    ob_value.to_f64().unwrap_or(0.0),
+                    st_value.to_f64().unwrap_or(0.0),
+                    snap.generation,
                 );
             }
         }

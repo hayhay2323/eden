@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -16,7 +17,11 @@ use crate::pipeline::dimensions;
 use super::aggregator::AggregatorHandle;
 use super::bus::EventBusHandle;
 use super::channel_state::SharedChannelStates;
-use super::event::PressureEvent;
+use super::event::{PressureEvent, TradeSide};
+
+/// EMA smoothing factor for trade-flow channels. α=0.05 ≈ 20-trade
+/// half-life, ~5-30 s of memory for a 1-10 Hz push rate. Tunable.
+const TRADE_EMA_ALPHA: f64 = 0.05;
 
 /// Capacity of each per-channel sub-bus. The dispatcher uses
 /// `try_send` so when a worker falls behind the event is dropped on
@@ -28,6 +33,7 @@ const SUB_BUS_CAP: usize = 20_000;
 pub struct WorkerPoolHandles {
     pub dispatcher: JoinHandle<()>,
     pub orderbook: JoinHandle<()>,
+    pub trade: JoinHandle<()>,
 }
 
 pub fn spawn_worker_pool(
@@ -36,10 +42,11 @@ pub fn spawn_worker_pool(
     aggregator: AggregatorHandle,
 ) -> WorkerPoolHandles {
     let (depth_tx, depth_rx) = mpsc::channel::<PressureEvent>(SUB_BUS_CAP);
-    // Trade/Broker/Quote sub-buses are reserved for Phases C2..C6;
-    // create them now so the dispatcher's pattern is fixed and adding
-    // a worker later is a one-line change.
-    let (trade_tx, _trade_rx) = mpsc::channel::<PressureEvent>(SUB_BUS_CAP);
+    let (trade_tx, trade_rx) = mpsc::channel::<PressureEvent>(SUB_BUS_CAP);
+    // Broker + Quote sub-buses are reserved for HK-specific work / future
+    // sub-channels; senders kept alive in the dispatcher closure so the
+    // dispatcher's match arms compile, receivers dropped here so events
+    // bound to those channels are silently shed.
     let (broker_tx, _broker_rx) = mpsc::channel::<PressureEvent>(SUB_BUS_CAP);
     let (quote_tx, _quote_rx) = mpsc::channel::<PressureEvent>(SUB_BUS_CAP);
 
@@ -68,11 +75,13 @@ pub fn spawn_worker_pool(
         }
     });
 
-    let orderbook = spawn_orderbook_worker(depth_rx, states, aggregator);
+    let orderbook = spawn_orderbook_worker(depth_rx, Arc::clone(&states), aggregator.clone());
+    let trade = spawn_trade_worker(trade_rx, states, aggregator);
 
     WorkerPoolHandles {
         dispatcher,
         orderbook,
+        trade,
     }
 }
 
@@ -106,6 +115,95 @@ fn spawn_orderbook_worker(
                 s.structure_value = new_st;
                 ob_changed || st_changed
             };
+            if changed {
+                aggregator.notify_symbol_changed(symbol);
+            }
+        }
+    })
+}
+
+/// Trade-driven worker: drains Trade events, updates per-symbol EMA
+/// state, recomputes 3 channels (CapitalFlow / Momentum / Volume),
+/// notifies aggregator on material change.
+///
+/// Channel formulas (push-only approximations, NOT bit-identical to
+/// REST-driven tick-bound versions):
+///   - CapitalFlow ≈ tanh(ema_signed_volume / scale_norm)
+///   - Momentum    ≈ tanh(ema_price_flow / price_norm)
+///   - Volume      ≈ clamp((current_volume / ema_volume) - 1, -1, 1)
+fn spawn_trade_worker(
+    mut rx: mpsc::Receiver<PressureEvent>,
+    states: SharedChannelStates,
+    aggregator: AggregatorHandle,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(evt) = rx.recv().await {
+            let PressureEvent::Trade {
+                symbol,
+                price,
+                volume,
+                side,
+                ts,
+            } = evt
+            else {
+                continue;
+            };
+            let price_f = price.to_f64().unwrap_or(0.0);
+            let volume_f = volume.to_f64().unwrap_or(0.0);
+            let direction_sign = match side {
+                TradeSide::Buy => 1.0,
+                TradeSide::Sell => -1.0,
+                TradeSide::Unknown => 0.0,
+            };
+
+            let changed = {
+                let mut map = states.tradeflow.write();
+                let s = map.entry(symbol.clone()).or_default();
+                let alpha = TRADE_EMA_ALPHA;
+                let prev_price = s.last_price.and_then(|p| p.to_f64()).unwrap_or(price_f);
+                let dprice = price_f - prev_price;
+
+                // Update EMAs.
+                s.ema_signed_volume =
+                    (1.0 - alpha) * s.ema_signed_volume + alpha * (direction_sign * volume_f);
+                s.ema_price_flow =
+                    (1.0 - alpha) * s.ema_price_flow + alpha * (dprice * volume_f);
+                let prev_ema_volume = if s.ema_volume > 0.0 {
+                    s.ema_volume
+                } else {
+                    volume_f.max(1.0)
+                };
+                s.ema_volume = (1.0 - alpha) * s.ema_volume + alpha * volume_f;
+
+                // Channel values.
+                // CapitalFlow: scale by 10× volume_ema so a single trade
+                // at the same volume direction gives a strong signal,
+                // saturating via tanh.
+                let cf_scale = (10.0 * prev_ema_volume).max(1.0);
+                let new_cf = (s.ema_signed_volume / cf_scale).tanh();
+                // Momentum: scale by ema_volume × small price (1 % of
+                // price as natural unit) so a 1 % price change with one
+                // ema-volume trade saturates.
+                let price_norm_unit = (price_f * 0.01).max(1e-3);
+                let mo_scale = (prev_ema_volume * price_norm_unit).max(1e-3);
+                let new_mo = (s.ema_price_flow / mo_scale).tanh();
+                // Volume: ratio (current / ema) − 1, clamped.
+                let new_vol_raw = (volume_f / prev_ema_volume) - 1.0;
+                let new_vol = new_vol_raw.clamp(-1.0, 1.0);
+
+                let cf_changed = (s.capital_flow_value - new_cf).abs() > 0.005;
+                let mo_changed = (s.momentum_value - new_mo).abs() > 0.005;
+                let vol_changed = (s.volume_value - new_vol).abs() > 0.05;
+
+                s.last_price = Some(price);
+                s.last_updated = Some(ts);
+                s.capital_flow_value = new_cf;
+                s.momentum_value = new_mo;
+                s.volume_value = new_vol;
+
+                cf_changed || mo_changed || vol_changed
+            };
+
             if changed {
                 aggregator.notify_symbol_changed(symbol);
             }
