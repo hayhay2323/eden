@@ -230,6 +230,17 @@ pub async fn run() {
     >::spawn("hk:sector_kinematics", |events: Vec<
         eden::pipeline::sector_kinematics::SectorKinematicsEvent,
     >| eden::pipeline::sector_kinematics::write_events("hk", &events));
+
+    // Production BP substrate: event-driven async residual scheduler
+    // backed by Arc<DashMap> shared graph state, with wait-free
+    // posterior reads via ArcSwap. The sync + shadow substrates were
+    // deleted 2026-04-29 once the event substrate's per-tick fixpoint
+    // semantics were restored (inbox-clear on prior change).
+    let belief_substrate: std::sync::Arc<dyn eden::pipeline::event_driven_bp::BeliefSubstrate> =
+        std::sync::Arc::new(
+            eden::pipeline::event_driven_bp::EventDrivenSubstrate::default(),
+        );
+
     let mut previous_visual_frame: Option<eden::pipeline::visual_graph_frame::VisualGraphFrame> =
         None;
     // Per-symbol prior tick top-of-book for queue stability counting
@@ -2361,20 +2372,26 @@ pub async fn run() {
                     runtime_trace
                         .record_planned(stage_plan, RuntimeStage::BpBuildInputs)
                         .expect("HK runtime stage is declared in canonical plan");
+                    use eden::pipeline::event_driven_bp::BeliefSubstrate as _;
                     let bp_run_start = Instant::now();
-                    let bp_result = eden::pipeline::loopy_bp::run_with_messages(&priors, &edges);
+                    belief_substrate.observe_tick(&priors, &edges, tick as u64);
                     let bp_run_elapsed = bp_run_start.elapsed();
+                    let view = belief_substrate.posterior_snapshot();
                     runtime_trace
                         .record_planned(stage_plan, RuntimeStage::BpRun)
                         .expect("HK runtime stage is declared in canonical plan");
                     let bp_message_trace_write_start = Instant::now();
-                    let bp_trace_rows = eden::pipeline::loopy_bp::build_message_trace_rows(
-                        "hk", tick, &priors, &edges, &bp_result, now,
+                    // bp_message_trace now uses the substrate's posterior view
+                    // (beliefs only) — message-level detail was deleted with
+                    // sync substrate; trace is now a per-tick belief snapshot
+                    // keyed by tick + symbol.
+                    let bp_trace_rows = eden::pipeline::loopy_bp::build_belief_only_trace_rows(
+                        "hk", tick as u64, &priors, &edges, &view.beliefs, now,
                     );
                     let _ = bp_message_trace_writer.try_send_batch(bp_trace_rows);
                     let bp_message_trace_write_elapsed = bp_message_trace_write_start.elapsed();
-                    let iterations = bp_result.iterations;
-                    let converged = bp_result.converged;
+                    let iterations = view.iterations;
+                    let converged = view.converged;
                     let mut encoded_tick_frame =
                         eden::pipeline::encoded_tick_frame::EncodedTickFrame::from_pressure_field(
                             "hk",
@@ -2383,7 +2400,7 @@ pub async fn run() {
                             &pressure_field,
                         );
                     encoded_tick_frame.attach_subkg_registry(&subkg_registry);
-                    encoded_tick_frame.attach_bp_state(&priors, &bp_result.beliefs, &edges);
+                    encoded_tick_frame.attach_bp_state(&priors, &view.beliefs, &edges);
                     eden::core::runtime_artifacts::record_artifact_result(
                         &mut artifact_write_errors,
                         "encoded_tick_frame",
@@ -2412,7 +2429,7 @@ pub async fn run() {
                     let rows = eden::pipeline::loopy_bp::build_marginal_rows(
                         "hk",
                         &priors,
-                        &bp_result.beliefs,
+                        &view.beliefs,
                         iterations,
                         converged,
                         now,
@@ -2422,7 +2439,7 @@ pub async fn run() {
                     runtime_trace
                         .record_planned(stage_plan, RuntimeStage::BpMarginalsWrite)
                         .expect("HK runtime stage is declared in canonical plan");
-                    let beliefs = bp_result.beliefs;
+                    let beliefs = view.beliefs.clone();
                     // V2: BP posterior is single source of truth for
                     // setup.confidence. No post-BP belief/history
                     // modulation — those signals already entered BP via

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::ontology::TacticalSetup;
-use crate::pipeline::loopy_bp::{BpInputEdge, NodePrior};
+use crate::pipeline::loopy_bp::{GraphEdge, NodePrior};
 
 /// Snapshot of the BP posterior at one moment in substrate time.
 ///
@@ -56,7 +56,7 @@ pub trait BeliefSubstrate: Send + Sync {
     /// synchronously and stashes the resulting posterior; event
     /// substrate (Phase C) seeds residual-queue updates and returns
     /// immediately.
-    fn observe_tick(&self, priors: &HashMap<String, NodePrior>, edges: &[BpInputEdge], tick: u64);
+    fn observe_tick(&self, priors: &HashMap<String, NodePrior>, edges: &[GraphEdge], tick: u64);
 
     /// Read the current posterior. For sync substrate this is the
     /// just-computed state. For event substrate this is the latest

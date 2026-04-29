@@ -485,6 +485,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     >::spawn("us:sector_kinematics", |events: Vec<
         crate::pipeline::sector_kinematics::SectorKinematicsEvent,
     >| crate::pipeline::sector_kinematics::write_events("us", &events));
+
+    // Production BP substrate: event-driven (sync + shadow deleted 2026-04-29).
+    let belief_substrate: std::sync::Arc<dyn crate::pipeline::event_driven_bp::BeliefSubstrate> =
+        std::sync::Arc::new(
+            crate::pipeline::event_driven_bp::EventDrivenSubstrate::default(),
+        );
+
     let mut previous_visual_frame: Option<crate::pipeline::visual_graph_frame::VisualGraphFrame> =
         None;
     let mut kinematics_tracker = crate::pipeline::structural_kinematics::KinematicsTracker::new();
@@ -3347,21 +3354,22 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         runtime_trace
                             .record_planned(stage_plan, RuntimeStage::BpBuildInputs)
                             .expect("US runtime stage is declared in canonical plan");
+                        use crate::pipeline::event_driven_bp::BeliefSubstrate as _;
                         let bp_run_start = Instant::now();
-                        let bp_result =
-                            crate::pipeline::loopy_bp::run_with_messages(&priors, &edges);
+                        belief_substrate.observe_tick(&priors, &edges, tick as u64);
                         let bp_run_elapsed = bp_run_start.elapsed();
+                        let view = belief_substrate.posterior_snapshot();
                         runtime_trace
                             .record_planned(stage_plan, RuntimeStage::BpRun)
                             .expect("US runtime stage is declared in canonical plan");
                         let bp_message_trace_write_start = Instant::now();
-                        let bp_trace_rows = crate::pipeline::loopy_bp::build_message_trace_rows(
-                            "us", tick, &priors, &edges, &bp_result, now_utc,
+                        let bp_trace_rows = crate::pipeline::loopy_bp::build_belief_only_trace_rows(
+                            "us", tick as u64, &priors, &edges, &view.beliefs, now_utc,
                         );
                         let _ = bp_message_trace_writer.try_send_batch(bp_trace_rows);
                         let bp_message_trace_write_elapsed = bp_message_trace_write_start.elapsed();
-                        let iterations = bp_result.iterations;
-                        let converged = bp_result.converged;
+                        let iterations = view.iterations;
+                        let converged = view.converged;
                         let visual_frame =
                             crate::pipeline::visual_graph_frame::build_visual_graph_frame(
                                 "us",
@@ -3369,7 +3377,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 &subkg_registry,
                                 &edges,
                                 &priors,
-                                &bp_result.beliefs,
+                                &view.beliefs,
                                 now_utc,
                             );
                         if let Some(previous) = previous_visual_frame.as_ref() {
@@ -3388,7 +3396,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         let rows = crate::pipeline::loopy_bp::build_marginal_rows(
                             "us",
                             &priors,
-                            &bp_result.beliefs,
+                            &view.beliefs,
                             iterations,
                             converged,
                             now_utc,
@@ -3398,7 +3406,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         runtime_trace
                             .record_planned(stage_plan, RuntimeStage::BpMarginalsWrite)
                             .expect("US runtime stage is declared in canonical plan");
-                        let beliefs = bp_result.beliefs;
+                        let beliefs = view.beliefs.clone();
                         // V2: BP posterior is the single source of truth.
                         // No post-BP belief/history modulation — those
                         // signals already entered BP via NodeId values.

@@ -322,6 +322,10 @@ pub fn observe_from_subkg(kg: &crate::pipeline::symbol_sub_kg::SymbolSubKG) -> N
 
 /// Edge potential: phi(x_i, x_j) = if x_i == x_j { 1 + α·w } else { 1 - α·w/2 }.
 /// Pure numerical bias toward agreement scaled by similarity weight.
+pub(crate) fn edge_potential_value(weight: f64, x_i: usize, x_j: usize) -> f64 {
+    edge_potential(weight, x_i, x_j)
+}
+
 fn edge_potential(weight: f64, x_i: usize, x_j: usize) -> f64 {
     let aw = EDGE_AGREEMENT_STRENGTH * weight;
     if x_i == x_j {
@@ -722,6 +726,71 @@ pub fn build_message_trace_rows(
             kind: BpTraceKind::Posterior,
             iterations: result.iterations,
             converged: result.converged,
+            symbol: Some(symbol.clone()),
+            from_symbol: None,
+            to_symbol: None,
+            edge_weight: None,
+            observed: priors.get(symbol).map(|p| p.observed),
+            p_bull: post[STATE_BULL],
+            p_bear: post[STATE_BEAR],
+            p_neutral: post[STATE_NEUTRAL],
+        });
+    }
+
+    rows
+}
+
+/// Belief-only variant of `build_message_trace_rows`. Used after the
+/// sync substrate deletion (2026-04-29): the event substrate exposes
+/// per-symbol beliefs via `PosteriorView` but does not surface
+/// message-level history (those live inside the worker pool's
+/// inboxes and are not snapshotable cheaply). Trace rows therefore
+/// carry the prior + posterior layers only — sufficient for
+/// visual_graph_frame and operator inspection workflows.
+pub fn build_belief_only_trace_rows(
+    market: &str,
+    tick: u64,
+    priors: &HashMap<String, NodePrior>,
+    edges: &[GraphEdge],
+    beliefs: &HashMap<String, [f64; N_STATES]>,
+    ts: DateTime<Utc>,
+) -> Vec<BpMessageTraceRow> {
+    let mut rows = Vec::with_capacity(priors.len() + beliefs.len());
+    let _ = edges;
+
+    let mut prior_symbols: Vec<&String> = priors.keys().collect();
+    prior_symbols.sort();
+    for symbol in prior_symbols {
+        let prior = priors.get(symbol).expect("symbol from key set");
+        rows.push(BpMessageTraceRow {
+            ts,
+            market: market.to_string(),
+            tick,
+            kind: BpTraceKind::Prior,
+            iterations: 0,
+            converged: true,
+            symbol: Some(symbol.clone()),
+            from_symbol: None,
+            to_symbol: None,
+            edge_weight: None,
+            observed: Some(prior.observed),
+            p_bull: prior.belief[STATE_BULL],
+            p_bear: prior.belief[STATE_BEAR],
+            p_neutral: prior.belief[STATE_NEUTRAL],
+        });
+    }
+
+    let mut posterior_symbols: Vec<&String> = beliefs.keys().collect();
+    posterior_symbols.sort();
+    for symbol in posterior_symbols {
+        let post = beliefs.get(symbol).expect("symbol from belief set");
+        rows.push(BpMessageTraceRow {
+            ts,
+            market: market.to_string(),
+            tick,
+            kind: BpTraceKind::Posterior,
+            iterations: 0,
+            converged: true,
             symbol: Some(symbol.clone()),
             from_symbol: None,
             to_symbol: None,
