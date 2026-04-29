@@ -41,6 +41,7 @@ pub mod outcome_feedback;
 pub mod perception;
 pub mod predicate_engine;
 pub mod pressure;
+pub mod pressure_events;
 pub mod raw_events;
 pub mod raw_expectation;
 pub mod reasoning;

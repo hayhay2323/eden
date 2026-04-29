@@ -241,6 +241,32 @@ pub async fn run() {
             eden::pipeline::event_driven_bp::EventDrivenSubstrate::default(),
         );
 
+    // 2026-04-29 Phase B: pressure-event bus + drainer (no-op counter
+    // until Phase C wires per-channel workers).
+    let pressure_event_bus = std::sync::Arc::new(
+        eden::pipeline::pressure_events::spawn_bus(),
+    );
+    {
+        let bus = std::sync::Arc::clone(&pressure_event_bus);
+        tokio::spawn(async move {
+            let mut counter = 0u64;
+            loop {
+                if bus.pop().await.is_none() {
+                    break;
+                }
+                counter = counter.wrapping_add(1);
+                if counter % 10_000 == 0 {
+                    eprintln!(
+                        "[hk pressure-bus] drained {} events (pending={}, dropped={})",
+                        counter,
+                        bus.pending_count(),
+                        bus.dropped_count(),
+                    );
+                }
+            }
+        });
+    }
+
     let mut previous_visual_frame: Option<eden::pipeline::visual_graph_frame::VisualGraphFrame> =
         None;
     // Per-symbol prior tick top-of-book for queue stability counting
@@ -568,6 +594,7 @@ pub async fn run() {
                 live: &mut live,
                 rest: &mut rest,
                 rest_updated: &mut rest_updated,
+                pressure_event_bus: Some(std::sync::Arc::clone(&pressure_event_bus)),
             };
             match runtime
                 .begin_tick(

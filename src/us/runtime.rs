@@ -492,6 +492,34 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             crate::pipeline::event_driven_bp::EventDrivenSubstrate::default(),
         );
 
+    // 2026-04-29 Phase B: pressure-event bus. Push handler demuxes
+    // each PushEvent into PressureEvent variants and publishes here;
+    // per-channel workers (Phase C) drain it. Phase B drainer below
+    // is a no-op counter to verify the wiring.
+    let pressure_event_bus = std::sync::Arc::new(
+        crate::pipeline::pressure_events::spawn_bus(),
+    );
+    {
+        let bus = std::sync::Arc::clone(&pressure_event_bus);
+        tokio::spawn(async move {
+            let mut counter = 0u64;
+            loop {
+                if bus.pop().await.is_none() {
+                    break;
+                }
+                counter = counter.wrapping_add(1);
+                if counter % 10_000 == 0 {
+                    eprintln!(
+                        "[us pressure-bus] drained {} events (pending={}, dropped={})",
+                        counter,
+                        bus.pending_count(),
+                        bus.dropped_count(),
+                    );
+                }
+            }
+        });
+    }
+
     let mut previous_visual_frame: Option<crate::pipeline::visual_graph_frame::VisualGraphFrame> =
         None;
     let mut kinematics_tracker = crate::pipeline::structural_kinematics::KinematicsTracker::new();
@@ -785,6 +813,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let mut tick_state = UsTickState {
                 live: &mut live,
                 rest: &mut rest,
+                pressure_event_bus: Some(std::sync::Arc::clone(&pressure_event_bus)),
             };
             match runtime
                 .begin_tick(

@@ -186,10 +186,22 @@ pub(super) struct HkTickState<'a> {
     pub(super) live: &'a mut LiveState,
     pub(super) rest: &'a mut RestSnapshot,
     pub(super) rest_updated: &'a mut bool,
+    /// Optional sub-tick pressure-event bus. Mirrors US runtime —
+    /// every push is demuxed into PressureEvents and published before
+    /// being applied to live state.
+    pub(super) pressure_event_bus:
+        Option<std::sync::Arc<crate::pipeline::pressure_events::EventBusHandle>>,
 }
 
 impl TickState<Vec<PushEvent>, RestSnapshot> for HkTickState<'_> {
     fn apply_push(&mut self, events: Vec<PushEvent>) {
+        if let Some(bus) = self.pressure_event_bus.as_ref() {
+            for evt in &events {
+                for pe in crate::pipeline::pressure_events::demux_push_event(evt) {
+                    bus.publish(pe);
+                }
+            }
+        }
         self.live.apply_batch(events);
     }
 

@@ -171,6 +171,12 @@ impl UsRestSnapshot {
 pub(crate) struct UsTickState<'a> {
     pub(crate) live: &'a mut UsLiveState,
     pub(crate) rest: &'a mut UsRestSnapshot,
+    /// Optional sub-tick pressure-event bus. When `Some`, every push
+    /// event is demuxed into per-channel `PressureEvent`s and published
+    /// to the bus before being applied to live state — this is the
+    /// hook that lets pressure channels recompute between ticks.
+    pub(crate) pressure_event_bus:
+        Option<std::sync::Arc<crate::pipeline::pressure_events::EventBusHandle>>,
 }
 
 pub(crate) fn merge_rest_quote(
@@ -215,6 +221,13 @@ pub(crate) fn merge_rest_quote(
 
 impl TickState<Vec<PushEvent>, UsRestSnapshot> for UsTickState<'_> {
     fn apply_push(&mut self, events: Vec<PushEvent>) {
+        if let Some(bus) = self.pressure_event_bus.as_ref() {
+            for evt in &events {
+                for pe in crate::pipeline::pressure_events::demux_push_event(evt) {
+                    bus.publish(pe);
+                }
+            }
+        }
         self.live.apply_batch(events);
     }
 
