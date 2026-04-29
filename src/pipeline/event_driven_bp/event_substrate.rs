@@ -174,6 +174,68 @@ impl EventDrivenSubstrate {
     pub fn dropped_message_count(&self) -> u64 {
         self.queue.dropped_count()
     }
+
+    /// Per-symbol prior update. Shared between `observe_tick` and
+    /// `observe_symbol`. When `adj_neighbours` is `Some`, that vector
+    /// is installed as the node's neighbour cache; when `None`, the
+    /// existing cached neighbours are reused (event-driven path).
+    /// Returns whether the prior actually changed.
+    fn observe_symbol_inner(
+        &self,
+        symbol: &str,
+        prior: NodePrior,
+        adj_neighbours: Option<Vec<(String, f64)>>,
+    ) -> bool {
+        let entry = self
+            .nodes
+            .entry(symbol.to_string())
+            .or_insert_with(|| Arc::new(NodeState::new()));
+        let state = Arc::clone(entry.value());
+        drop(entry);
+
+        let mut lite = state.snapshot_lite();
+        let prior_changed = lite.prior != prior.belief || lite.observed != prior.observed;
+        lite.prior = prior.belief;
+        lite.observed = prior.observed;
+        if prior_changed {
+            lite.belief = prior.belief;
+            if !lite.observed && lite.belief.iter().all(|v| v.abs() < 1e-9) {
+                let uniform = 1.0 / N_STATES as f64;
+                lite.belief = [uniform; N_STATES];
+            }
+        }
+        state.store_lite(lite);
+
+        let neighbours = match adj_neighbours.as_ref() {
+            Some(ns) => ns.clone(),
+            None => state.aux.lock().neighbours.clone(),
+        };
+
+        {
+            let mut aux = state.aux.lock();
+            if adj_neighbours.is_some() {
+                aux.neighbours = neighbours.clone();
+            }
+            if prior_changed {
+                aux.clear_inbox();
+            }
+        }
+
+        if prior_changed {
+            let belief = state.snapshot_lite().belief;
+            for (k, weight) in &neighbours {
+                let msg = compute_outgoing_message(&belief, *weight);
+                self.queue.push(EdgeUpdate {
+                    from: symbol.to_string(),
+                    to: k.clone(),
+                    message: msg,
+                    residual: 1.0,
+                });
+            }
+        }
+
+        prior_changed
+    }
 }
 
 /// Build the worker process function. Each call: pop pulls an
@@ -297,81 +359,44 @@ impl BeliefSubstrate for EventDrivenSubstrate {
         edges: &[GraphEdge],
         _tick: u64,
     ) {
-        // 1. Refresh node priors and rebuild neighbour lists from edges.
-        // 2. For nodes whose prior changed, push initial outgoing
-        //    messages to all neighbours into the queue.
-
-        // Build edge adjacency once; reuse during seeding.
+        // Build edge adjacency once and delegate per-symbol work to
+        // observe_symbol_inner so observe_tick and observe_symbol share
+        // identical seeding semantics.
         let mut adj: HashMap<String, Vec<(String, f64)>> = HashMap::new();
         for edge in edges {
             adj.entry(edge.from.clone())
                 .or_default()
                 .push((edge.to.clone(), edge.weight));
-            // Treat as bidirectional (matches sync path).
             adj.entry(edge.to.clone())
                 .or_default()
                 .push((edge.from.clone(), edge.weight));
         }
-
         for (sym, prior) in priors {
-            let entry = self
-                .nodes
-                .entry(sym.clone())
-                .or_insert_with(|| Arc::new(NodeState::new()));
-            let state = Arc::clone(entry.value());
-            drop(entry);
-
-            // Update prior in lite snapshot.
-            let mut lite = state.snapshot_lite();
-            let prior_changed = lite.prior != prior.belief || lite.observed != prior.observed;
-            lite.prior = prior.belief;
-            lite.observed = prior.observed;
-            if prior_changed {
-                // Reset belief to the fresh prior. Without this the
-                // belief carries the previous tick's posterior, and
-                // the inbox-cleared re-seed below would damp new
-                // messages against stale state.
-                lite.belief = prior.belief;
-                if !lite.observed && lite.belief.iter().all(|v| v.abs() < 1e-9) {
-                    let uniform = 1.0 / N_STATES as f64;
-                    lite.belief = [uniform; N_STATES];
-                }
-            }
-            state.store_lite(lite);
-
-            // Refresh neighbour list (cheap: same Vec built per tick;
-            // can optimise later by caching adjacency hashes).
             let neighbours = adj.get(sym).cloned().unwrap_or_default();
-            {
-                let mut aux = state.aux.lock();
-                aux.neighbours = neighbours.clone();
-                if prior_changed {
-                    // Clear stale messages from the previous tick's
-                    // priors. Event-driven BP's per-tick fixpoint is
-                    // recovered by re-seeding from the fresh prior
-                    // below; carrying over inbox slots would damp
-                    // new messages against obsolete remnants and
-                    // produce a different fixed point than sync BP
-                    // (observed in 2026-04-29 live HK shadow run:
-                    // KL pass dropped 35 % → 14 % over 30 ticks).
-                    aux.clear_inbox();
-                }
-            }
-
-            if prior_changed {
-                // Seed outgoing messages from this node to every neighbour.
-                let belief = state.snapshot_lite().belief;
-                for (k, weight) in &neighbours {
-                    let msg = compute_outgoing_message(&belief, *weight);
-                    self.queue.push(EdgeUpdate {
-                        from: sym.clone(),
-                        to: k.clone(),
-                        message: msg,
-                        residual: 1.0, // Force initial propagation.
-                    });
-                }
-            }
+            self.observe_symbol_inner(sym, prior.clone(), Some(neighbours));
         }
+    }
+
+    fn observe_symbol(
+        &self,
+        symbol: &str,
+        prior: NodePrior,
+        neighbours: &[GraphEdge],
+    ) {
+        let adj: Vec<(String, f64)> = neighbours
+            .iter()
+            .filter_map(|e| {
+                if e.from == symbol {
+                    Some((e.to.clone(), e.weight))
+                } else if e.to == symbol {
+                    Some((e.from.clone(), e.weight))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let pass = if adj.is_empty() { None } else { Some(adj) };
+        self.observe_symbol_inner(symbol, prior, pass);
     }
 
     fn posterior_snapshot(&self) -> Arc<PosteriorView> {
@@ -479,5 +504,56 @@ mod tests {
         let view = substrate.posterior_snapshot();
         assert!(view.beliefs.contains_key("A"));
         assert!(view.beliefs.contains_key("B"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn observe_symbol_propagates_to_cached_neighbours() {
+        let substrate = EventDrivenSubstrate::new(EventConfig {
+            workers: 2,
+            residual_threshold: 1e-6,
+            publish_interval_ms: 5,
+            message_damping: 0.3,
+        });
+        let mut priors = HashMap::new();
+        priors.insert("A".to_string(), NodePrior::default());
+        priors.insert("B".to_string(), NodePrior::default());
+        let edges = vec![GraphEdge {
+            from: "A".to_string(),
+            to: "B".to_string(),
+            weight: 0.5,
+            kind: BpEdgeKind::StockToStock,
+        }];
+        // Tick once to populate neighbour cache.
+        substrate.observe_tick(&priors, &edges, 1);
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        substrate.drain_pending();
+        let gen_before = substrate.posterior_snapshot().generation;
+
+        // Observe A only — B should still receive a propagated message
+        // because A's cached neighbour list still contains B.
+        let a_prior = NodePrior {
+            belief: [0.7, 0.2, 0.1],
+            observed: true,
+        };
+        substrate.observe_symbol("A", a_prior, &[]);
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        substrate.drain_pending();
+
+        let view_after = substrate.posterior_snapshot();
+        assert!(
+            view_after.generation > gen_before,
+            "generation must advance after observe_symbol (was {} now {})",
+            gen_before,
+            view_after.generation
+        );
+        let belief_b = view_after
+            .beliefs
+            .get("B")
+            .expect("B must be present in posterior");
+        assert!(
+            belief_b[0] > 1.0 / 3.0 + 1e-6,
+            "B's bull mass should rise after A propagates a bullish prior; got {:?}",
+            belief_b
+        );
     }
 }

@@ -58,6 +58,24 @@ pub trait BeliefSubstrate: Send + Sync {
     /// immediately.
     fn observe_tick(&self, priors: &HashMap<String, NodePrior>, edges: &[GraphEdge], tick: u64);
 
+    /// Observe a single symbol's prior change. Cheaper than
+    /// `observe_tick` when only one symbol's state has moved (e.g.
+    /// event-driven path: an orderbook depth update touches just that
+    /// symbol's OrderBook channel). Implementations seed residual queue
+    /// updates from this symbol to every neighbour using the cached
+    /// neighbour list — caller MUST have called `observe_tick` at least
+    /// once with the full edge set so neighbours are populated.
+    ///
+    /// `neighbours` lets the caller pass the latest edges-for-this-symbol
+    /// snapshot if available; pass an empty slice to use whatever was
+    /// cached during the last `observe_tick`.
+    fn observe_symbol(
+        &self,
+        symbol: &str,
+        prior: NodePrior,
+        neighbours: &[GraphEdge],
+    );
+
     /// Read the current posterior. For sync substrate this is the
     /// just-computed state. For event substrate this is the latest
     /// converged-or-still-converging snapshot at query time. Cheap
