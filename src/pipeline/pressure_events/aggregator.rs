@@ -36,6 +36,14 @@ impl AggregatorHandle {
 
 const NOTIFY_QUEUE_CAP: usize = 50_000;
 
+/// Per-symbol cooldown between substrate.observe_symbol calls.
+/// Without this, sub-tick channel updates fire faster than BP workers
+/// can converge — the substrate ends up in permanent mid-fixpoint state
+/// and tick latency spikes to 22 min/tick. 100 ms gives BP ~10 iter
+/// per (5749-edge graph × 6-degree) before next reset, enough for
+/// loopy convergence per tick. Tunable.
+const OBSERVE_SYMBOL_COOLDOWN: std::time::Duration = std::time::Duration::from_millis(100);
+
 pub fn spawn_aggregator(
     states: SharedChannelStates,
     substrate: Arc<dyn BeliefSubstrate>,
@@ -43,6 +51,7 @@ pub fn spawn_aggregator(
 ) -> AggregatorHandle {
     let (tx, mut rx) = mpsc::channel::<String>(NOTIFY_QUEUE_CAP);
     tokio::spawn(async move {
+        let mut last_observed: std::collections::HashMap<String, std::time::Instant> = std::collections::HashMap::new();
         let mut observe_count: u64 = 0;
         while let Some(symbol) = rx.recv().await {
             let (ob_value, st_value) = {
@@ -72,6 +81,16 @@ pub fn spawn_aggregator(
             if !prior.observed {
                 continue;
             }
+            // Per-symbol cooldown: skip if we observed this symbol
+            // very recently, regardless of whether channel state has
+            // changed. Lets BP workers reach (or approach) convergence
+            // between observations.
+            if let Some(last) = last_observed.get(&symbol) {
+                if last.elapsed() < OBSERVE_SYMBOL_COOLDOWN {
+                    continue;
+                }
+            }
+            last_observed.insert(symbol.clone(), std::time::Instant::now());
             let prior_snap = prior.clone();
             substrate.observe_symbol(&symbol, prior, &[]);
             observe_count = observe_count.wrapping_add(1);
