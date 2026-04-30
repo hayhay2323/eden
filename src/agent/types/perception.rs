@@ -31,6 +31,23 @@ pub struct EdenPerception {
     /// before, here's what followed".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signature_replays: Vec<crate::pipeline::signature_replay::SignatureReplay>,
+    /// Symbols moving in pre-market / post-market sessions. Catalyst
+    /// signals that show up before regular-session perception begins.
+    /// Populated when live snapshot has fresh `pre_market_quote` data
+    /// from Longport — currently a skeleton field; reader returns
+    /// empty until snapshot-level ingestion is wired (P2 follow-up).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pre_market_movers: Vec<PreMarketMove>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PreMarketMove {
+    pub symbol: String,
+    pub session: String, // "pre_market" | "post_market" | "overnight"
+    pub last_done: f64,
+    pub prev_close: f64,
+    pub change_pct: f64,
+    pub volume: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -181,6 +198,7 @@ mod tests {
             regime: None,
             belief_kinetics: vec![],
             signature_replays: vec![],
+            pre_market_movers: vec![],
         };
         let json = serde_json::to_string(&original).expect("serialise");
         let recovered: EdenPerception = serde_json::from_str(&json).expect("deserialise");
@@ -260,6 +278,14 @@ mod tests {
                 n_5tick: 3,
                 mean_forward_belief_30tick: 0.12,
                 n_30tick: 2,
+            }],
+            pre_market_movers: vec![PreMarketMove {
+                symbol: "QCOM.US".to_string(),
+                session: "post_market".to_string(),
+                last_done: 179.74,
+                prev_close: 156.0,
+                change_pct: 0.152,
+                volume: 5_782_670,
             }],
         };
         let json = serde_json::to_string(&original).expect("serialise");

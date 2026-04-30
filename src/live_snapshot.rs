@@ -3859,6 +3859,9 @@ pub fn read_perception_streams(
         // observations + computes replays in one shot — the perception
         // builder here just shows whatever has accumulated by now.
         signature_replays: Vec::new(),
+        // P2 skeleton — populated when snapshot builder integrates
+        // pre/post-market quote data. Empty until then.
+        pre_market_movers: Vec::new(),
     }
 }
 
