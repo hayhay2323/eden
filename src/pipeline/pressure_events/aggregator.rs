@@ -111,27 +111,18 @@ pub fn spawn_aggregator(
                             TacticalDirection::Short => post[STATE_BEAR],
                         };
                         if let Ok(sub_conf) = Decimal::try_from(p_target.clamp(0.0, 1.0)) {
-                            let delta = sub_conf - s.tick_confidence;
-                            // Print on any meaningful drift (≥0.01).
-                            // 0.01 is barely-noisy; 0.05 was missing
-                            // most of the actual sub-tick evolution.
-                            if delta.abs() >= Decimal::new(1, 2) {
-                                eprintln!(
-                                    "[setup-trace] sym={} dir={:?} tick_conf={:.3} sub_conf={:.3} delta={:+.3} hyp={} gen={}",
-                                    symbol,
-                                    s.direction,
-                                    s.tick_confidence,
-                                    sub_conf,
-                                    delta,
-                                    s.hypothesis_id,
-                                    snap.generation,
-                                );
-                            }
+                            let _ = sub_conf - s.tick_confidence;
+                            // 2026-05-01: setup-trace verbose logging
+                            // disabled — was Phase D diagnostic, now noise.
+                            // Re-enable behind debug feature flag if needed.
                         }
                     }
                 }
             }
-            if observe_count == 1 || observe_count % 25 == 0 {
+            // 2026-05-01: pressure-agg verbose log throttled
+            // 25 → 500 ticks. Was hundreds of lines/sec — operator
+            // can't follow. Sampling 1/500 still gives sanity check.
+            if observe_count == 1 || observe_count % 500 == 0 {
                 let snap = substrate.posterior_snapshot();
                 eprintln!(
                     "[pressure-agg] obs={} sym={} prior=[{:.3},{:.3},{:.3}] obs?={} cf={:.3} mo={:.3} vol={:.3} ob={:.3} st={:.3} gen={}",

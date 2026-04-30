@@ -1,3 +1,9 @@
+// 2026-05-01: DEPRECATED. Produces legacy agent_recommendations.json
+// using 1990s breadth + sector-synchrony heuristics. Does NOT consume
+// eden's emergence/contrast/lead-lag/surprise streams. Use
+// `agent/perception.rs` (AgentPerceptionReport, data/agent_perception.json)
+// for the canonical Y-facing surface. Retained for backwards-compat
+// with existing consumers (frontend, scripts) only.
 use super::*;
 mod decision_model;
 mod market;

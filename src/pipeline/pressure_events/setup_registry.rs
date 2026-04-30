@@ -72,14 +72,9 @@ impl SetupRegistry {
         }
         let unique_symbols = by_symbol.len();
         *self.by_symbol.write() = by_symbol;
-        eprintln!(
-            "[setup-registry] refresh: total_setups={} registered={} symbols={} skipped_scope={} skipped_dir={}",
-            setups.len(),
-            total,
-            unique_symbols,
-            skipped_scope,
-            skipped_dir,
-        );
+        // 2026-05-01: setup-registry refresh log silenced (was every
+        // refresh — noise). State queryable via the registry's read API.
+        let _ = (setups.len(), total, unique_symbols, skipped_scope, skipped_dir);
     }
 
     pub fn get(&self, symbol: &str) -> Option<Vec<RegisteredSetup>> {

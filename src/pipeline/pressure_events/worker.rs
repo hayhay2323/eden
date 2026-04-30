@@ -70,7 +70,8 @@ pub fn spawn_worker_pool(
             };
             counts[idx] += 1;
             let total: u64 = counts.iter().sum();
-            if total == 1 || total % 50 == 0 {
+            // 2026-05-01: throttled 50 → 10000. Was 1000s/sec — noise.
+            if total == 1 || total % 10000 == 0 {
                 eprintln!(
                     "[pressure-dispatch] total={} depth={} trade={} broker={} quote={}",
                     total, counts[0], counts[1], counts[2], counts[3],
