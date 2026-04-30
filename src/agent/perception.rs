@@ -47,6 +47,7 @@ mod tests {
             belief_kinetics: vec![],
             signature_replays: vec![],
             pre_market_movers: vec![],
+            catalysts: vec![],
         };
         let snapshot = AgentSnapshot {
             tick: 42,

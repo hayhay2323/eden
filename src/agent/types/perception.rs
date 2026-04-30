@@ -38,6 +38,32 @@ pub struct EdenPerception {
     /// empty until snapshot-level ingestion is wired (P2 follow-up).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pre_market_movers: Vec<PreMarketMove>,
+    /// External catalysts known for current trading window: scheduled
+    /// earnings, macro events (Fed/CPI/FOMC), policy gates, news
+    /// flagged by external feeds. Lets Y see "NXPI has earnings tomorrow
+    /// after-close" alongside the perception data.
+    /// Skeleton field — reader returns empty until external feeds wired.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub catalysts: Vec<Catalyst>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Catalyst {
+    /// Symbol affected. None = market-wide event (e.g. FOMC, CPI).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// Catalyst kind: "earnings" | "fomc" | "cpi" | "policy" | "news" | "split" | other.
+    pub kind: String,
+    /// Human-readable description.
+    pub description: String,
+    /// When the catalyst is expected (ISO 8601). Past = already
+    /// happened, Y should down-weight; future = upcoming, Y should
+    /// pre-position.
+    pub scheduled_at: String,
+    /// Source: "earnings_calendar" | "manual" | "news_feed" | etc.
+    pub source: String,
+    /// Importance/severity 1-5 (5 = market-moving).
+    pub importance: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -199,6 +225,7 @@ mod tests {
             belief_kinetics: vec![],
             signature_replays: vec![],
             pre_market_movers: vec![],
+            catalysts: vec![],
         };
         let json = serde_json::to_string(&original).expect("serialise");
         let recovered: EdenPerception = serde_json::from_str(&json).expect("deserialise");
@@ -286,6 +313,14 @@ mod tests {
                 prev_close: 156.0,
                 change_pct: 0.152,
                 volume: 5_782_670,
+            }],
+            catalysts: vec![Catalyst {
+                symbol: Some("NXPI.US".to_string()),
+                kind: "earnings".to_string(),
+                description: "Q1 earnings after-close".to_string(),
+                scheduled_at: "2026-05-01T20:00:00Z".to_string(),
+                source: "earnings_calendar".to_string(),
+                importance: 4,
             }],
         };
         let json = serde_json::to_string(&original).expect("serialise");

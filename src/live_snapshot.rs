@@ -3862,6 +3862,9 @@ pub fn read_perception_streams(
         // P2 skeleton — populated when snapshot builder integrates
         // pre/post-market quote data. Empty until then.
         pre_market_movers: Vec::new(),
+        // P3 skeleton — populated when external feeds (earnings calendar,
+        // news, macro events) wired. Empty until then.
+        catalysts: Vec::new(),
     }
 }
 
