@@ -8,6 +8,8 @@ mod conversation;
 mod investigation;
 #[path = "types/judgment.rs"]
 mod judgment;
+#[path = "types/perception.rs"]
+mod perception;
 #[path = "types/recommendation.rs"]
 mod recommendation;
 #[path = "types/snapshot.rs"]
@@ -19,6 +21,7 @@ pub use alert::*;
 pub use conversation::*;
 pub use investigation::*;
 pub use judgment::*;
+pub use perception::*;
 pub use recommendation::*;
 pub use snapshot::*;
 pub use state::*;
