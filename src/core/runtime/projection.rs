@@ -94,6 +94,11 @@ pub fn write_projection_artifacts(
         "agent_recommendations"
     );
     push_artifact!(
+        paths.agent_perception_path.clone(),
+        &projection.agent_perception,
+        "agent_perception"
+    );
+    push_artifact!(
         paths.agent_scoreboard_path.clone(),
         &projection.agent_scoreboard,
         "agent_scoreboard"

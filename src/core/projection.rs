@@ -1,9 +1,9 @@
 use crate::agent::llm::{build_narration, AgentNarration};
 use crate::agent::{
     build_alert_scoreboard, build_briefing, build_eod_review, build_hk_agent_snapshot,
-    build_recommendations, build_session, build_us_agent_snapshot, build_watchlist,
-    AgentAlertScoreboard, AgentBriefing, AgentEodReview, AgentRecommendations, AgentSession,
-    AgentSnapshot, AgentWatchlist,
+    build_perception_report, build_recommendations, build_session, build_us_agent_snapshot,
+    build_watchlist, AgentAlertScoreboard, AgentBriefing, AgentEodReview, AgentPerceptionReport,
+    AgentRecommendations, AgentSession, AgentSnapshot, AgentWatchlist,
 };
 use crate::live_snapshot::LiveSnapshot;
 use crate::ontology::links::LinkSnapshot;
@@ -21,6 +21,7 @@ pub struct ProjectionBundle {
     pub agent_briefing: AgentBriefing,
     pub agent_session: AgentSession,
     pub agent_recommendations: AgentRecommendations,
+    pub agent_perception: AgentPerceptionReport,
     pub agent_watchlist: AgentWatchlist,
     pub agent_scoreboard: AgentAlertScoreboard,
     pub agent_eod_review: AgentEodReview,
@@ -83,6 +84,7 @@ pub fn project_hk(inputs: HkProjectionInputs<'_>) -> ProjectionBundle {
         inputs.previous_agent_session,
     );
     let agent_recommendations = build_recommendations(&agent_snapshot, Some(&agent_session));
+    let agent_perception = build_perception_report(&agent_snapshot);
     let agent_watchlist = build_watchlist(
         &agent_snapshot,
         Some(&agent_session),
@@ -110,6 +112,7 @@ pub fn project_hk(inputs: HkProjectionInputs<'_>) -> ProjectionBundle {
         agent_briefing,
         agent_session,
         agent_recommendations,
+        agent_perception,
         agent_watchlist,
         agent_scoreboard,
         agent_eod_review,
@@ -134,6 +137,7 @@ pub fn project_us(inputs: UsProjectionInputs<'_>) -> ProjectionBundle {
         inputs.previous_agent_session,
     );
     let agent_recommendations = build_recommendations(&agent_snapshot, Some(&agent_session));
+    let agent_perception = build_perception_report(&agent_snapshot);
     let agent_watchlist = build_watchlist(
         &agent_snapshot,
         Some(&agent_session),
@@ -161,6 +165,7 @@ pub fn project_us(inputs: UsProjectionInputs<'_>) -> ProjectionBundle {
         agent_briefing,
         agent_session,
         agent_recommendations,
+        agent_perception,
         agent_watchlist,
         agent_scoreboard,
         agent_eod_review,

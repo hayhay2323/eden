@@ -89,6 +89,7 @@ use macro_events::{
     build_macro_event_knowledge_links, build_world_monitor_macro_event_candidates,
     merge_macro_event_candidates, promote_macro_events,
 };
+pub use perception::{build_perception_report, AgentPerceptionReport};
 pub use recommendations::build_recommendations;
 use recommendations::{
     agent_bias_for_symbol, best_counterfactual_action, counterfactual_regret,
@@ -114,6 +115,7 @@ use views::{
     sync_recommendation_views,
 };
 pub mod llm;
+pub mod perception;
 mod types;
 pub use types::*;
 
