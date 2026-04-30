@@ -3392,3 +3392,160 @@ mod tests {
         assert_eq!(horizon_urgency_label(Urgency::Relaxed), "relaxed");
     }
 }
+
+/// Read the most recent NDJSON records from the tail of a file.
+///
+/// Reads at most `buffer_bytes` from the end of the file, drops any
+/// partial first or last line, parses remaining lines as `T` (skipping
+/// JSON parse errors), and returns the most recent `max_records`
+/// successfully parsed records (preserving file order, oldest first).
+///
+/// Returns empty `Vec` if file does not exist. This is intentional:
+/// fresh runtime has no perception streams yet — caller should treat
+/// missing files as "no perception data" rather than as errors.
+pub fn tail_records<T>(path: &std::path::Path, buffer_bytes: u64, max_records: usize) -> Vec<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
+    };
+    let metadata = match file.metadata() {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
+    let file_len = metadata.len();
+    let read_len = buffer_bytes.min(file_len);
+    let seek_from = file_len.saturating_sub(read_len);
+
+    if file.seek(SeekFrom::Start(seek_from)).is_err() {
+        return Vec::new();
+    }
+
+    let mut buf = Vec::with_capacity(read_len as usize);
+    if file.take(read_len).read_to_end(&mut buf).is_err() {
+        return Vec::new();
+    }
+
+    let text = match std::str::from_utf8(&buf) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+
+    let lines: Vec<&str> = text.split('\n').collect();
+    if lines.is_empty() {
+        return Vec::new();
+    }
+
+    // If we did not start at offset 0, the first line is potentially partial.
+    let start = if seek_from > 0 { 1 } else { 0 };
+
+    // Always drop the final element from the split: when the file ends with
+    // '\n' it's an empty trailing string; when it doesn't, it's a record
+    // currently being written by the producer (we'd rather drop one complete
+    // record on a non-newline-terminated tail than ingest a half-written one).
+    // NDJSON producers in this codebase always terminate records with '\n',
+    // so the dropped record is normally the empty trailing string.
+    let end = lines.len().saturating_sub(1);
+
+    if start >= end {
+        return Vec::new();
+    }
+
+    let parsed: Vec<T> = lines[start..end]
+        .iter()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            serde_json::from_str::<T>(trimmed).ok()
+        })
+        .collect();
+
+    if parsed.len() <= max_records {
+        parsed
+    } else {
+        parsed.into_iter().rev().take(max_records).rev().collect()
+    }
+}
+
+#[cfg(test)]
+mod perception_reader_tests {
+    use super::*;
+    use serde::Deserialize;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct ToyRecord {
+        id: u32,
+        value: String,
+    }
+
+    fn make_ndjson(records: &[(u32, &str)]) -> NamedTempFile {
+        let mut f = NamedTempFile::new().expect("temp file");
+        for (id, value) in records {
+            writeln!(f, r#"{{"id":{id},"value":"{value}"}}"#).expect("write");
+        }
+        f
+    }
+
+    #[test]
+    fn tail_records_returns_empty_when_file_missing() {
+        let path = std::path::PathBuf::from("/nonexistent/path/zzz.ndjson");
+        let out: Vec<ToyRecord> = tail_records(&path, 1024, 10);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn tail_records_reads_all_when_file_smaller_than_buffer() {
+        let f = make_ndjson(&[(1, "a"), (2, "b"), (3, "c")]);
+        let out: Vec<ToyRecord> = tail_records(f.path(), 4096, 10);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].id, 1);
+        assert_eq!(out[2].value, "c");
+    }
+
+    #[test]
+    fn tail_records_caps_at_max_records() {
+        let f = make_ndjson(&[(1, "a"), (2, "b"), (3, "c"), (4, "d"), (5, "e")]);
+        let out: Vec<ToyRecord> = tail_records(f.path(), 4096, 2);
+        // Most recent 2: ids 4 and 5
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].id, 4);
+        assert_eq!(out[1].id, 5);
+    }
+
+    #[test]
+    fn tail_records_skips_partial_first_line_in_buffer() {
+        // Build a file where the buffer window cuts mid-line.
+        let mut f = NamedTempFile::new().expect("temp file");
+        // First record is long; next two are short. With small buffer we'll
+        // read mid-way through the first record and must drop it.
+        let long_value = "x".repeat(500);
+        writeln!(f, r#"{{"id":1,"value":"{}"}}"#, long_value).expect("write");
+        writeln!(f, r#"{{"id":2,"value":"b"}}"#).expect("write");
+        writeln!(f, r#"{{"id":3,"value":"c"}}"#).expect("write");
+        let out: Vec<ToyRecord> = tail_records(f.path(), 64, 10);
+        // Must NOT include id=1 (partial). Must include id=2 and id=3.
+        assert!(out.iter().all(|r| r.id != 1));
+        assert!(out.iter().any(|r| r.id == 2));
+        assert!(out.iter().any(|r| r.id == 3));
+    }
+
+    #[test]
+    fn tail_records_skips_unparseable_lines() {
+        let mut f = NamedTempFile::new().expect("temp file");
+        writeln!(f, r#"{{"id":1,"value":"a"}}"#).expect("write");
+        writeln!(f, "not valid json").expect("write");
+        writeln!(f, r#"{{"id":3,"value":"c"}}"#).expect("write");
+        let out: Vec<ToyRecord> = tail_records(f.path(), 4096, 10);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].id, 1);
+        assert_eq!(out[1].id, 3);
+    }
+}
