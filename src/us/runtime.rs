@@ -3459,6 +3459,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             .record_planned(stage_plan, RuntimeStage::BpMarginalsWrite)
                             .expect("US runtime stage is declared in canonical plan");
                         let beliefs = view.beliefs.clone();
+                        // 2026-05-01: feed BP posterior into lead-lag tracker.
+                        // sub-KG ingest path produced constant-zero history
+                        // for most symbols (channel nodes rarely populated)
+                        // → no lead-lag events ever written. (p_bull - p_bear)
+                        // is always populated and captures eden's directional
+                        // belief — what lead-lag wants to correlate.
+                        us_lead_lag_tracker.ingest_from_beliefs(&beliefs);
                         // V2: BP posterior is the single source of truth.
                         // No post-BP belief/history modulation — those
                         // signals already entered BP via NodeId values.

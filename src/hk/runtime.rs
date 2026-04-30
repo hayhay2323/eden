@@ -2471,6 +2471,15 @@ pub async fn run() {
                         .record_planned(stage_plan, RuntimeStage::BpMarginalsWrite)
                         .expect("HK runtime stage is declared in canonical plan");
                     let beliefs = view.beliefs.clone();
+                    // 2026-05-01: feed BP posterior into lead-lag tracker.
+                    // The original ingest path reads sub-KG channel nodes
+                    // (PressureCapitalFlow / Momentum / Intent*) which are
+                    // rarely populated for most symbols → tracker history
+                    // becomes constant zero → no events ever written.
+                    // (p_bull - p_bear) is always populated and captures
+                    // eden's directional belief — exactly what lead-lag
+                    // wants to correlate across the master KG edges.
+                    hk_lead_lag_tracker.ingest_from_beliefs(&beliefs);
                     // V2: BP posterior is single source of truth for
                     // setup.confidence. No post-BP belief/history
                     // modulation — those signals already entered BP via

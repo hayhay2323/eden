@@ -90,6 +90,26 @@ impl LeadLagTracker {
             self.observe(sym, observe_scalar(kg));
         }
     }
+
+    /// Alternative ingest path that reads BP posterior beliefs instead of
+    /// sub-KG nodes. Use when sub-KG channel nodes (PressureCapitalFlow /
+    /// PressureMomentum / IntentAccumulation / IntentDistribution) are
+    /// rarely populated for most symbols — the original `ingest` then
+    /// observes a constant-zero series and `detect_lead_lag` produces
+    /// no events.
+    ///
+    /// Scalar = belief[STATE_BULL] - belief[STATE_BEAR] ∈ [-1, +1]:
+    /// directional belief signed by (bullish - bearish) marginal mass.
+    pub fn ingest_from_beliefs(
+        &mut self,
+        beliefs: &HashMap<String, [f64; crate::pipeline::loopy_bp::N_STATES]>,
+    ) {
+        for (sym, belief) in beliefs {
+            let scalar = belief[crate::pipeline::loopy_bp::STATE_BULL]
+                - belief[crate::pipeline::loopy_bp::STATE_BEAR];
+            self.observe(sym, scalar);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
