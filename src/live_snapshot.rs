@@ -3564,6 +3564,48 @@ pub fn read_sector_leaders(
     filtered
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct RawLeadLagRecord {
+    from_symbol: String,
+    to_symbol: String,
+    dominant_lag: i32,
+    correlation_at_lag: f64,
+    n_samples: usize,
+    direction: String,
+}
+
+const LEAD_LAG_MAX_RECORDS: usize = 200;
+
+pub fn read_causal_chains(
+    path: &std::path::Path,
+    cfg: &crate::agent::PerceptionFilterConfig,
+) -> Vec<crate::agent::LeadLagEdge> {
+    let raw: Vec<RawLeadLagRecord> = tail_records(path, PERCEPTION_TAIL_BYTES, LEAD_LAG_MAX_RECORDS);
+    let mut filtered: Vec<crate::agent::LeadLagEdge> = raw
+        .into_iter()
+        .filter(|rec| {
+            rec.correlation_at_lag.abs() >= cfg.min_chain_correlation
+                && rec.n_samples >= cfg.min_chain_samples
+        })
+        .map(|rec| crate::agent::LeadLagEdge {
+            leader: rec.from_symbol,
+            follower: rec.to_symbol,
+            lag_ticks: rec.dominant_lag,
+            correlation: rec.correlation_at_lag,
+            n_samples: rec.n_samples,
+            direction: rec.direction,
+        })
+        .collect();
+    filtered.sort_by(|a, b| {
+        b.correlation
+            .abs()
+            .partial_cmp(&a.correlation.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    filtered.truncate(cfg.max_chains);
+    filtered
+}
+
 #[cfg(test)]
 mod perception_reader_tests {
     use super::*;
@@ -3677,5 +3719,33 @@ mod perception_reader_tests {
         assert!((out[0].vs_sector_contrast - 7.5).abs() < 1e-9);
         assert_eq!(out[1].symbol, "d.HK");
         assert_eq!(out[2].symbol, "b.HK");
+    }
+
+    #[test]
+    fn read_causal_chains_filters_and_caps() {
+        let mut f = NamedTempFile::new().expect("temp file");
+        // pass: corr 0.89, n=17
+        writeln!(f, r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","from_symbol":"6883.HK","to_symbol":"2477.HK","edge_weight":1.0,"dominant_lag":3,"correlation_at_lag":0.89,"n_samples":17,"direction":"from_leads"}}"#).expect("write");
+        // filtered: corr 0.3 < 0.5
+        writeln!(f, r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","from_symbol":"a.HK","to_symbol":"b.HK","edge_weight":1.0,"dominant_lag":1,"correlation_at_lag":0.3,"n_samples":15,"direction":"from_leads"}}"#).expect("write");
+        // filtered: n=5 < 10
+        writeln!(f, r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","from_symbol":"c.HK","to_symbol":"d.HK","edge_weight":1.0,"dominant_lag":2,"correlation_at_lag":0.7,"n_samples":5,"direction":"from_leads"}}"#).expect("write");
+        // pass: corr -0.6 (abs >= 0.5), n=12
+        writeln!(f, r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","from_symbol":"e.HK","to_symbol":"f.HK","edge_weight":1.0,"dominant_lag":-2,"correlation_at_lag":-0.6,"n_samples":12,"direction":"to_leads"}}"#).expect("write");
+
+        let cfg = crate::agent::PerceptionFilterConfig::default();
+        let out = read_causal_chains(f.path(), &cfg);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].leader, "6883.HK", "highest abs correlation first");
+        assert!((out[0].correlation - 0.89).abs() < 1e-9);
+        assert!(out.iter().any(|c| c.leader == "e.HK"));
+    }
+
+    #[test]
+    fn read_causal_chains_returns_empty_when_file_missing() {
+        let cfg = crate::agent::PerceptionFilterConfig::default();
+        let path = std::path::PathBuf::from("/nonexistent/eden-lead-lag-hk.ndjson");
+        let out = read_causal_chains(&path, &cfg);
+        assert!(out.is_empty());
     }
 }
