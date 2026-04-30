@@ -44,6 +44,7 @@ mod tests {
             causal_chains: vec![],
             anomaly_alerts: vec![],
             regime: None,
+            belief_kinetics: vec![],
         };
         let snapshot = AgentSnapshot {
             tick: 42,

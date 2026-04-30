@@ -18,6 +18,26 @@ pub struct EdenPerception {
     pub anomaly_alerts: Vec<SurpriseAlert>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regime: Option<RegimePerception>,
+    /// Symbols whose BP belief (p_bull − p_bear) is changing fastest.
+    /// Sorted by abs(velocity) descending; positive = belief turning
+    /// bullish, negative = belief turning bearish. This is the
+    /// time-derivative signal that fixed-state perception lacks —
+    /// "where is eden's mind moving, not where it currently sits".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub belief_kinetics: Vec<BeliefKinetic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BeliefKinetic {
+    pub symbol: String,
+    /// Current (p_bull - p_bear), ∈ [-1, +1].
+    pub belief_now: f64,
+    /// Δ(p_bull - p_bear) over last tick.
+    pub velocity: f64,
+    /// Δvelocity over last tick (acceleration).
+    pub acceleration: f64,
+    /// How many ticks of consecutive same-sign velocity (momentum streak).
+    pub streak_ticks: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -101,6 +121,10 @@ pub struct PerceptionFilterConfig {
     pub max_chains: usize,
     pub min_anomaly_surprise_ratio: f64,
     pub max_anomalies: usize,
+    /// Minimum abs(velocity) to surface a symbol's belief kinetics.
+    /// belief is in [-1,+1], so 0.05 = 5% per-tick change is meaningful.
+    pub min_kinetic_velocity: f64,
+    pub max_kinetics: usize,
 }
 
 impl Default for PerceptionFilterConfig {
@@ -114,6 +138,8 @@ impl Default for PerceptionFilterConfig {
             max_chains: 30,
             min_anomaly_surprise_ratio: 1.5,
             max_anomalies: 15,
+            min_kinetic_velocity: 0.05,
+            max_kinetics: 15,
         }
     }
 }
@@ -147,6 +173,7 @@ mod tests {
             causal_chains: vec![],
             anomaly_alerts: vec![],
             regime: None,
+            belief_kinetics: vec![],
         };
         let json = serde_json::to_string(&original).expect("serialise");
         let recovered: EdenPerception = serde_json::from_str(&json).expect("deserialise");
@@ -211,6 +238,13 @@ mod tests {
                     mean_bull_bias_delta: 0.0,
                 }],
             }),
+            belief_kinetics: vec![BeliefKinetic {
+                symbol: "NXPI.US".to_string(),
+                belief_now: 0.42,
+                velocity: 0.08,
+                acceleration: 0.03,
+                streak_ticks: 2,
+            }],
         };
         let json = serde_json::to_string(&original).expect("serialise");
         let recovered: EdenPerception = serde_json::from_str(&json).expect("deserialise");

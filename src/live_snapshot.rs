@@ -3744,6 +3744,90 @@ pub fn read_regime_perception(path: &std::path::Path) -> Option<crate::agent::Re
 /// Orchestrator: tail-reads all 5 perception NDJSON streams from
 /// `dir` (typically ".run") and assembles an `EdenPerception` for the
 /// given tick / timestamp / market.
+/// Internal NDJSON record shape for `eden-bp-marginals-{market}.ndjson`.
+/// Reused by `read_belief_kinetics` to derive time derivatives without
+/// needing a stateful in-memory tracker.
+#[derive(Debug, serde::Deserialize)]
+struct RawBpMarginalRecord {
+    payload: RawBpMarginalPayload,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RawBpMarginalPayload {
+    symbol: String,
+    p_bull: f64,
+    p_bear: f64,
+    #[serde(default)]
+    observed: bool,
+}
+
+const KINETICS_TAIL_BYTES: u64 = 1024 * 1024; // 1 MB tail (richer history per symbol)
+const KINETICS_MAX_RECORDS: usize = 5000;
+
+/// Compute time derivatives of BP belief per symbol from the bp-marginals
+/// NDJSON stream. Stateless — reads recent history each call.
+///
+/// Per symbol we want the last 3 observations to derive (now, velocity,
+/// acceleration). Records in the file are append-only oldest→newest.
+pub fn read_belief_kinetics(
+    path: &std::path::Path,
+    cfg: &crate::agent::PerceptionFilterConfig,
+) -> Vec<crate::agent::BeliefKinetic> {
+    let raw: Vec<RawBpMarginalRecord> =
+        tail_records(path, KINETICS_TAIL_BYTES, KINETICS_MAX_RECORDS);
+    // Group by symbol, keep last 3 observations (oldest → newest).
+    let mut per_symbol: std::collections::HashMap<String, Vec<f64>> =
+        std::collections::HashMap::new();
+    for rec in raw {
+        if !rec.payload.observed {
+            continue;
+        }
+        let belief_signed = rec.payload.p_bull - rec.payload.p_bear;
+        let entry = per_symbol
+            .entry(rec.payload.symbol)
+            .or_default();
+        entry.push(belief_signed);
+        if entry.len() > 3 {
+            entry.remove(0);
+        }
+    }
+    let mut out: Vec<crate::agent::BeliefKinetic> = per_symbol
+        .into_iter()
+        .filter_map(|(symbol, history)| {
+            // Need at least 3 points for acceleration.
+            if history.len() < 3 {
+                return None;
+            }
+            let belief_now = history[2];
+            let velocity = history[2] - history[1];
+            let prev_velocity = history[1] - history[0];
+            let acceleration = velocity - prev_velocity;
+            if velocity.abs() < cfg.min_kinetic_velocity {
+                return None;
+            }
+            Some(crate::agent::BeliefKinetic {
+                symbol,
+                belief_now,
+                velocity,
+                acceleration,
+                streak_ticks: if velocity.signum() == prev_velocity.signum() {
+                    2
+                } else {
+                    1
+                },
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.velocity
+            .abs()
+            .partial_cmp(&a.velocity.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out.truncate(cfg.max_kinetics);
+    out
+}
+
 pub fn read_perception_streams(
     dir: &std::path::Path,
     market: &str,
@@ -3757,6 +3841,7 @@ pub fn read_perception_streams(
     let lead_lag_path = dir.join(format!("eden-lead-lag-{market}.ndjson"));
     let surprise_path = dir.join(format!("eden-surprise-{market}.ndjson"));
     let regime_path = dir.join(format!("eden-regime-analog-{market}.ndjson"));
+    let marginals_path = dir.join(format!("eden-bp-marginals-{market}.ndjson"));
 
     crate::agent::EdenPerception {
         schema_version: 1,
@@ -3768,6 +3853,7 @@ pub fn read_perception_streams(
         causal_chains: read_causal_chains(&lead_lag_path, cfg),
         anomaly_alerts: read_anomaly_alerts(&surprise_path, cfg),
         regime: read_regime_perception(&regime_path),
+        belief_kinetics: read_belief_kinetics(&marginals_path, cfg),
     }
 }
 
