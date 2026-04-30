@@ -2471,6 +2471,24 @@ pub async fn run() {
                         .record_planned(stage_plan, RuntimeStage::BpMarginalsWrite)
                         .expect("HK runtime stage is declared in canonical plan");
                     let beliefs = view.beliefs.clone();
+                    // 2026-05-01: P1a — predict-realize calibration loop.
+                    // Write current beliefs as naive-baseline predictions
+                    // for tick + horizon (random-walk null model). Then
+                    // realize the prediction made `horizon` ticks ago.
+                    // Skeleton — future predictors swap in without
+                    // changing the on-disk schema.
+                    let _ = eden::pipeline::prediction_calibration::write_predictions(
+                        "hk",
+                        tick as u64,
+                        &beliefs,
+                        eden::pipeline::prediction_calibration::PREDICTION_HORIZON_TICKS,
+                    );
+                    let _ = eden::pipeline::prediction_calibration::realize_predictions(
+                        "hk",
+                        tick as u64,
+                        &beliefs,
+                        eden::pipeline::prediction_calibration::PREDICTION_HORIZON_TICKS,
+                    );
                     // 2026-05-01: feed BP posterior into lead-lag tracker.
                     // The original ingest path reads sub-KG channel nodes
                     // (PressureCapitalFlow / Momentum / Intent*) which are

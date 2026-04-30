@@ -3459,6 +3459,22 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             .record_planned(stage_plan, RuntimeStage::BpMarginalsWrite)
                             .expect("US runtime stage is declared in canonical plan");
                         let beliefs = view.beliefs.clone();
+                        // 2026-05-01: P1a — predict-realize calibration.
+                        // Naive-baseline (random-walk) predictions for
+                        // tick + horizon, plus realize predictions made
+                        // `horizon` ticks ago against current beliefs.
+                        let _ = crate::pipeline::prediction_calibration::write_predictions(
+                            "us",
+                            tick as u64,
+                            &beliefs,
+                            crate::pipeline::prediction_calibration::PREDICTION_HORIZON_TICKS,
+                        );
+                        let _ = crate::pipeline::prediction_calibration::realize_predictions(
+                            "us",
+                            tick as u64,
+                            &beliefs,
+                            crate::pipeline::prediction_calibration::PREDICTION_HORIZON_TICKS,
+                        );
                         // 2026-05-01: feed BP posterior into lead-lag tracker.
                         // sub-KG ingest path produced constant-zero history
                         // for most symbols (channel nodes rarely populated)

@@ -40,6 +40,7 @@ pub mod outcome_feedback;
 // via NodeId::OutcomeMemory.
 pub mod perception;
 pub mod predicate_engine;
+pub mod prediction_calibration;
 pub mod pressure;
 pub mod pressure_events;
 pub mod raw_events;
