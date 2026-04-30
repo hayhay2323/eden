@@ -3501,7 +3501,13 @@ pub fn read_emergent_clusters(
     cfg: &crate::agent::PerceptionFilterConfig,
 ) -> Vec<crate::agent::EmergentCluster> {
     let raw: Vec<RawEmergenceRecord> = tail_records(path, PERCEPTION_TAIL_BYTES, EMERGENCE_MAX_RECORDS);
-    raw.into_iter()
+    // Dedup: keep latest record per cluster_key (later in file = newer).
+    let mut latest: std::collections::HashMap<String, RawEmergenceRecord> = std::collections::HashMap::new();
+    for rec in raw {
+        latest.insert(rec.cluster_key.clone(), rec);
+    }
+    latest
+        .into_values()
         .filter_map(|rec| {
             let total = rec.cluster_total_members.max(1);
             let sync_pct = rec.sync_member_count as f64 / total as f64;
@@ -3542,8 +3548,19 @@ pub fn read_sector_leaders(
     cfg: &crate::agent::PerceptionFilterConfig,
 ) -> Vec<crate::agent::SymbolContrast> {
     let raw: Vec<RawContrastRecord> = tail_records(path, PERCEPTION_TAIL_BYTES, CONTRAST_MAX_RECORDS);
-    let mut filtered: Vec<crate::agent::SymbolContrast> = raw
-        .into_iter()
+    // Dedup: keep record with highest contrast per (symbol, node_kind).
+    let mut best: std::collections::HashMap<(String, String), RawContrastRecord> = std::collections::HashMap::new();
+    for rec in raw {
+        let key = (rec.symbol.clone(), rec.node_kind.clone());
+        match best.get(&key) {
+            Some(prev) if prev.vs_sector_contrast >= rec.vs_sector_contrast => {}
+            _ => {
+                best.insert(key, rec);
+            }
+        }
+    }
+    let mut filtered: Vec<crate::agent::SymbolContrast> = best
+        .into_values()
         .filter(|rec| rec.vs_sector_contrast >= cfg.min_leader_contrast)
         .map(|rec| crate::agent::SymbolContrast {
             symbol: rec.symbol,
@@ -3581,8 +3598,14 @@ pub fn read_causal_chains(
     cfg: &crate::agent::PerceptionFilterConfig,
 ) -> Vec<crate::agent::LeadLagEdge> {
     let raw: Vec<RawLeadLagRecord> = tail_records(path, PERCEPTION_TAIL_BYTES, LEAD_LAG_MAX_RECORDS);
-    let mut filtered: Vec<crate::agent::LeadLagEdge> = raw
-        .into_iter()
+    // Dedup: keep latest record per (from, to, lag) tuple. Order in `raw` is
+    // oldest -> newest, so later inserts overwrite.
+    let mut latest: std::collections::HashMap<(String, String, i32), RawLeadLagRecord> = std::collections::HashMap::new();
+    for rec in raw {
+        latest.insert((rec.from_symbol.clone(), rec.to_symbol.clone(), rec.dominant_lag), rec);
+    }
+    let mut filtered: Vec<crate::agent::LeadLagEdge> = latest
+        .into_values()
         .filter(|rec| {
             rec.correlation_at_lag.abs() >= cfg.min_chain_correlation
                 && rec.n_samples >= cfg.min_chain_samples
@@ -3624,8 +3647,19 @@ pub fn read_anomaly_alerts(
     cfg: &crate::agent::PerceptionFilterConfig,
 ) -> Vec<crate::agent::SurpriseAlert> {
     let raw: Vec<RawSurpriseRecord> = tail_records(path, PERCEPTION_TAIL_BYTES, SURPRISE_MAX_RECORDS);
-    let mut filtered: Vec<crate::agent::SurpriseAlert> = raw
-        .into_iter()
+    // Dedup: keep record with highest total_surprise per (symbol, max_node).
+    let mut best: std::collections::HashMap<(String, String), RawSurpriseRecord> = std::collections::HashMap::new();
+    for rec in raw {
+        let key = (rec.symbol.clone(), rec.max_node.clone());
+        match best.get(&key) {
+            Some(prev) if prev.total_surprise >= rec.total_surprise => {}
+            _ => {
+                best.insert(key, rec);
+            }
+        }
+    }
+    let mut filtered: Vec<crate::agent::SurpriseAlert> = best
+        .into_values()
         .filter(|rec| {
             // Avoid divide-by-zero: floor < 1e-12 means no meaningful expectation;
             // pass through total_surprise > 0 to surface raw anomalies.
@@ -3921,6 +3955,63 @@ mod perception_reader_tests {
     fn read_regime_perception_returns_none_when_missing() {
         let path = std::path::PathBuf::from("/nonexistent/regime.ndjson");
         assert!(read_regime_perception(&path).is_none());
+    }
+
+    #[test]
+    fn read_emergent_clusters_dedups_by_cluster_key() {
+        let mut f = NamedTempFile::new().expect("temp file");
+        // Same sector twice — earlier (low sync), later (high sync). Latest wins.
+        writeln!(f, r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","cluster_key":"semiconductor","cluster_total_members":9,"sync_member_count":5,"sync_members":[],"lit_node_kinds":["Pressure"],"mean_activation_per_kind":{{"Pressure":0.4}},"strongest_member":"old","strongest_member_mean_activation":0.4}}"#).expect("write");
+        writeln!(f, r#"{{"ts":"2026-04-30T09:00:01Z","market":"hk","cluster_key":"semiconductor","cluster_total_members":9,"sync_member_count":9,"sync_members":[],"lit_node_kinds":["Pressure"],"mean_activation_per_kind":{{"Pressure":0.7}},"strongest_member":"new","strongest_member_mean_activation":0.79}}"#).expect("write");
+        let cfg = crate::agent::PerceptionFilterConfig::default();
+        let out = read_emergent_clusters(f.path(), &cfg);
+        assert_eq!(out.len(), 1, "must dedup to single cluster");
+        assert_eq!(out[0].sync_member_count, 9);
+        assert_eq!(out[0].strongest_member, "new");
+    }
+
+    #[test]
+    fn read_sector_leaders_dedups_by_symbol_node_kind_keeping_highest() {
+        let mut f = NamedTempFile::new().expect("temp file");
+        for c in &[5.0, 10.0, 7.0] {
+            writeln!(
+                f,
+                r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","symbol":"X.HK","node_kind":"Role","center_activation":1.0,"surround_mean":0.0,"surround_count":0,"contrast":1.0,"sector_id":"tech","sector_mean_activation":0.0,"vs_sector_contrast":{}}}"#,
+                c
+            ).expect("write");
+        }
+        let cfg = crate::agent::PerceptionFilterConfig::default();
+        let out = read_sector_leaders(f.path(), &cfg);
+        assert_eq!(out.len(), 1, "must dedup");
+        assert!((out[0].vs_sector_contrast - 10.0).abs() < 1e-9, "must keep highest");
+    }
+
+    #[test]
+    fn read_causal_chains_dedups_by_edge() {
+        let mut f = NamedTempFile::new().expect("temp file");
+        // Same edge twice; latest wins.
+        writeln!(f, r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","from_symbol":"A.HK","to_symbol":"B.HK","edge_weight":1.0,"dominant_lag":3,"correlation_at_lag":0.6,"n_samples":12,"direction":"from_leads"}}"#).expect("write");
+        writeln!(f, r#"{{"ts":"2026-04-30T09:00:01Z","market":"hk","from_symbol":"A.HK","to_symbol":"B.HK","edge_weight":1.0,"dominant_lag":3,"correlation_at_lag":0.85,"n_samples":15,"direction":"from_leads"}}"#).expect("write");
+        let cfg = crate::agent::PerceptionFilterConfig::default();
+        let out = read_causal_chains(f.path(), &cfg);
+        assert_eq!(out.len(), 1, "must dedup same edge");
+        assert!((out[0].correlation - 0.85).abs() < 1e-9, "must keep latest");
+    }
+
+    #[test]
+    fn read_anomaly_alerts_dedups_by_symbol_channel_keeping_highest() {
+        let mut f = NamedTempFile::new().expect("temp file");
+        for s in &[2.0, 5.0, 3.0] {
+            writeln!(
+                f,
+                r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","symbol":"X.HK","total_surprise":{},"floor":1.0,"max_node":"PressureMomentum","max_observed":1.0,"max_expected":-1.0,"max_squared_error":4.0}}"#,
+                s
+            ).expect("write");
+        }
+        let cfg = crate::agent::PerceptionFilterConfig::default();
+        let out = read_anomaly_alerts(f.path(), &cfg);
+        assert_eq!(out.len(), 1, "must dedup");
+        assert!((out[0].total_surprise - 5.0).abs() < 1e-9, "must keep highest");
     }
 
     #[test]
