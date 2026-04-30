@@ -455,6 +455,7 @@ impl PreparedRuntimeContext {
         receiver: mpsc::UnboundedReceiver<PushEvent>,
         channel_capacity: usize,
         batch_size: usize,
+        tap: Option<crate::core::runtime::telemetry::PushTap>,
     ) -> mpsc::Receiver<Vec<PushEvent>> {
         spawn_batched_push_forwarder(
             receiver,
@@ -462,6 +463,7 @@ impl PreparedRuntimeContext {
             batch_size,
             self.counters.clone(),
             self.config.clone(),
+            tap,
         )
     }
 

@@ -70,6 +70,7 @@ use persistence::{
 };
 use projection_runtime::{finalize_runtime_projection, write_projection_artifacts};
 use serde_json::json;
+pub use telemetry::PushTap;
 use telemetry::{
     emit_runtime_log, load_optional_string_override, load_string_override, load_u64_override,
     spawn_batched_push_forwarder, spawn_push_forwarder, RuntimeCounters,

@@ -91,11 +91,34 @@ pub trait BeliefSubstrate: Send + Sync {
     /// the count of setups touched.
     fn reconcile_direction(&self, setups: &mut [TacticalSetup]) -> usize;
 
-    /// Test-only hook. Sync impl: no-op (tick is synchronous so
-    /// observe-then-assert always sees the latest state). Event impl
-    /// (Phase C): blocks until the residual queue is empty and all
-    /// workers are idle. Architectural invariant tests will assert
-    /// this is called between `observe_tick` and `posterior_snapshot`
-    /// in production code that wants a strict ordering.
+    /// Force a posterior cache refresh. Publish-only: this never blocks
+    /// and never waits for workers. The published `PosteriorView`
+    /// reflects whatever progress the substrate's workers have made by
+    /// the time of call — possibly mid-fixpoint.
+    ///
+    /// For barrier semantics (wait until the residual queue is empty
+    /// and workers are idle, *then* publish), call
+    /// [`Self::wait_until_quiescent`] — that's the hook production
+    /// tick loops should use between `observe_tick` and
+    /// `posterior_snapshot` so `apply_posterior_confidence` reads the
+    /// converged posterior.
     fn drain_pending(&self);
+
+    /// Spin-wait until the substrate is quiescent (residual queue
+    /// empty, all workers idle) or `budget` elapses, then refresh
+    /// the published posterior. Returns `true` if quiescence was
+    /// reached before the budget expired.
+    ///
+    /// Default impl: `drain_pending` + return `true` (synchronous
+    /// substrates are quiescent by definition the moment `observe_*`
+    /// returns).
+    fn wait_until_quiescent(
+        &self,
+        _budget: std::time::Duration,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+        Box::pin(async move {
+            self.drain_pending();
+            true
+        })
+    }
 }

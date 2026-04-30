@@ -403,6 +403,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         mut runtime,
         mut push_rx,
         mut rest_rx,
+        pressure_event_bus,
         mut tick,
         debounce,
         mut bootstrap_pending,
@@ -499,9 +500,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // aggregator, which derives a sub-tick NodePrior and calls
     // BeliefSubstrate::observe_symbol so BP propagates the change
     // between ticks.
-    let pressure_event_bus = std::sync::Arc::new(
-        crate::pipeline::pressure_events::spawn_bus(),
-    );
+    // C4 fix: bus is now created in startup (before push forwarder) so
+    // the upstream tap can publish even when the bounded batch channel
+    // drops events; we receive it through `bootstrap.pressure_event_bus`.
     let pressure_channel_states = std::sync::Arc::new(
         crate::pipeline::pressure_events::ChannelStates::default(),
     );
@@ -812,7 +813,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let mut tick_state = UsTickState {
                 live: &mut live,
                 rest: &mut rest,
-                pressure_event_bus: Some(std::sync::Arc::clone(&pressure_event_bus)),
             };
             match runtime
                 .begin_tick(
@@ -3401,6 +3401,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         use crate::pipeline::event_driven_bp::BeliefSubstrate as _;
                         let bp_run_start = Instant::now();
                         belief_substrate.observe_tick(&priors, &edges, tick as u64);
+                        // C3 fix: barrier between observe_tick (fire-and-forget)
+                        // and posterior_snapshot — without this, downstream
+                        // reads see either the previous tick's posterior or a
+                        // freshly reset prior, never the converged tick-N
+                        // posterior.
+                        let _quiesced = belief_substrate
+                            .wait_until_quiescent(std::time::Duration::from_millis(50))
+                            .await;
                         let bp_run_elapsed = bp_run_start.elapsed();
                         let view = belief_substrate.posterior_snapshot();
                         runtime_trace

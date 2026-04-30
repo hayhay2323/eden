@@ -413,7 +413,7 @@ fn hk_us_runtime_order_is_symmetric_for_bp_fusion() {
             ("substrate evidence apply", "update_from_substrate_evidence"),
             ("lead-lag edge evidence", "lead_lag_index::detect_lead_lag"),
             ("BP input build", "loopy_bp::build_inputs"),
-            ("BP run", "loopy_bp::run"),
+            ("BP run", "belief_substrate.observe_tick"),
             (
                 "posterior confidence",
                 "loopy_bp::apply_posterior_confidence",
@@ -434,7 +434,7 @@ fn hk_us_runtime_order_is_symmetric_for_bp_fusion() {
             ("substrate evidence apply", "update_from_substrate_evidence"),
             ("lead-lag edge evidence", "lead_lag_index::detect_lead_lag"),
             ("BP input build", "loopy_bp::build_inputs"),
-            ("BP run", "loopy_bp::run"),
+            ("BP run", "belief_substrate.observe_tick"),
             (
                 "posterior confidence",
                 "loopy_bp::apply_posterior_confidence",
@@ -527,8 +527,9 @@ fn bp_message_trace_exports_priors_messages_and_posteriors() {
     for path in ["src/hk/runtime.rs", "src/us/runtime.rs"] {
         let runtime = read(path);
         assert!(
-            runtime.contains("build_message_trace_rows") && runtime.contains("write_message_trace"),
-            "{path} must write BP message trace rows alongside BP marginals",
+            runtime.contains("build_belief_only_trace_rows")
+                && runtime.contains("write_message_trace"),
+            "{path} must write BP belief trace rows alongside BP marginals",
         );
     }
 }

@@ -13,9 +13,12 @@
 //! and push them back. The queue empties when residuals fall below
 //! `residual_threshold`.
 //!
-//! Phase D will run a [`ShadowSubstrate`] that delegates posterior
-//! reads to the sync substrate while feeding both with the same
-//! observations, emitting per-tick KL parity rows for cutover gating.
+//! Cutover (2026-04-29) deleted the sync + shadow substrates; this
+//! module is now the only `BeliefSubstrate` impl. Quiescence semantics
+//! are exposed via [`EventDrivenSubstrate::wait_until_quiescent`] —
+//! runtime callers that need a converged posterior view (e.g. before
+//! reading `posterior_snapshot()` for setup confidence application)
+//! must invoke it between `observe_tick` and `posterior_snapshot`.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -108,6 +111,10 @@ impl EventDrivenSubstrate {
             let nodes = Arc::clone(&nodes);
             let posterior = Arc::clone(&posterior);
             let generation = Arc::clone(&generation);
+            let queue = Arc::clone(&queue);
+            let pool_iterations = Arc::clone(&pool.iterations);
+            let pool_idle = Arc::clone(&pool.idle);
+            let pool_workers = pool.workers;
             let interval = std::time::Duration::from_millis(config.publish_interval_ms);
             tokio::spawn(async move {
                 let mut ticker = tokio::time::interval(interval);
@@ -124,10 +131,13 @@ impl EventDrivenSubstrate {
                         .map(|kv| (kv.key().clone(), kv.value().lite.load().belief))
                         .collect();
                     let g = generation.fetch_add(1, Ordering::Relaxed) + 1;
+                    let iters = pool_iterations.load(Ordering::Relaxed);
+                    let converged = queue.is_empty()
+                        && pool_idle.load(Ordering::Relaxed) == pool_workers;
                     posterior.store(Arc::new(PosteriorView {
                         beliefs,
-                        iterations: 0,
-                        converged: false,
+                        iterations: iters as usize,
+                        converged,
                         generation: g,
                         last_updated: Utc::now(),
                     }));
@@ -173,6 +183,45 @@ impl EventDrivenSubstrate {
     /// load shedding.
     pub fn dropped_message_count(&self) -> u64 {
         self.queue.dropped_count()
+    }
+
+    /// Cumulative count of `EdgeUpdate`s processed by workers since
+    /// pool start. Diff against a prior snapshot to recover the
+    /// per-tick iteration count (for logging / convergence diagnostics).
+    pub fn iterations_total(&self) -> u64 {
+        self.pool
+            .as_ref()
+            .map(|p| p.iterations.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    /// True when the residual queue is empty and every worker is idle.
+    /// Cheap (two atomic loads). Use as the predicate inside
+    /// [`Self::wait_until_quiescent`] or for ad-hoc readiness checks.
+    pub fn is_quiescent(&self) -> bool {
+        let workers = self.pool.as_ref().map(|p| p.workers).unwrap_or(0);
+        let idle = self
+            .pool
+            .as_ref()
+            .map(|p| p.idle.load(Ordering::Relaxed))
+            .unwrap_or(0);
+        self.queue.is_empty() && idle == workers
+    }
+
+    async fn wait_until_quiescent_impl(&self, budget: std::time::Duration) -> bool {
+        let poll_interval = std::time::Duration::from_millis(1);
+        let deadline = std::time::Instant::now() + budget;
+        loop {
+            if self.is_quiescent() {
+                BeliefSubstrate::drain_pending(self);
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                BeliefSubstrate::drain_pending(self);
+                return false;
+            }
+            tokio::time::sleep(poll_interval).await;
+        }
     }
 
     /// Per-symbol prior update. Shared between `observe_tick` and
@@ -422,28 +471,29 @@ impl BeliefSubstrate for EventDrivenSubstrate {
         sub_kg_emergence::reconcile_direction_with_bp(setups, &view.beliefs)
     }
 
+    fn wait_until_quiescent(
+        &self,
+        budget: std::time::Duration,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + '_>> {
+        Box::pin(self.wait_until_quiescent_impl(budget))
+    }
+
     fn drain_pending(&self) {
-        // Publish-only — never blocks. The whole point of event-driven
-        // BP is that workers run continuously in the background and
-        // posterior reads are wait-free. A blocking drain would force
-        // sync-style barrier semantics on an async substrate, which is
-        // exactly the architecture we replaced.
-        //
-        // What this DOES: refresh the ArcSwap posterior cache from
-        // current DashMap node states. Cheap; lock-free per node via
-        // arc-swap; reflects whatever progress workers have made by
-        // the time of call.
-        //
-        // What it does NOT do: wait for the residual queue to drain or
-        // for workers to go idle. Production reads (`posterior_snapshot`)
-        // accept eventual consistency; tests that need a converged
-        // snapshot should use `wait_until_quiescent` (test-only helper)
-        // or push observations and yield in a tokio runtime.
+        // Publish-only — never blocks. Refreshes the ArcSwap posterior
+        // cache from current DashMap node states. For barrier semantics
+        // (wait until queue is empty + workers idle, then publish), use
+        // `wait_until_quiescent` instead — that method is the
+        // production hook for tick-correct reads.
         let workers = self.pool.as_ref().map(|p| p.workers).unwrap_or(0);
         let idle_count = self
             .pool
             .as_ref()
             .map(|p| p.idle.load(Ordering::Relaxed))
+            .unwrap_or(0);
+        let iters = self
+            .pool
+            .as_ref()
+            .map(|p| p.iterations.load(Ordering::Relaxed))
             .unwrap_or(0);
         let beliefs: HashMap<String, [f64; N_STATES]> = self
             .nodes
@@ -454,7 +504,7 @@ impl BeliefSubstrate for EventDrivenSubstrate {
         let converged = self.queue.is_empty() && idle_count == workers;
         self.posterior.store(Arc::new(PosteriorView {
             beliefs,
-            iterations: 0,
+            iterations: iters as usize,
             converged,
             generation: g,
             last_updated: Utc::now(),

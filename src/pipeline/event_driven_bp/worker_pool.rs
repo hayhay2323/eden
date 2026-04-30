@@ -4,7 +4,7 @@
 //! outgoing updates back into the queue. This is the canonical
 //! Residual BP scheduler shape — see Elidan/McGraw/Koller 2006 §4.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -23,6 +23,10 @@ pub struct WorkerPoolHandle {
     /// Number of workers currently waiting on the queue (idle). When
     /// `idle == workers && queue.is_empty()` the pool is quiescent.
     pub idle: Arc<AtomicUsize>,
+    /// Cumulative count of `EdgeUpdate`s processed since pool start.
+    /// Drives `PosteriorView.iterations`; runtime callers diff against
+    /// the pre-tick value to recover per-tick iteration count.
+    pub iterations: Arc<AtomicU64>,
     pub workers: usize,
 }
 
@@ -57,11 +61,13 @@ where
 {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let idle = Arc::new(AtomicUsize::new(workers));
+    let iterations = Arc::new(AtomicU64::new(0));
     let process_fn = Arc::new(process_fn);
     for _ in 0..workers {
         let nodes = Arc::clone(&nodes);
         let queue = Arc::clone(&queue);
         let idle = Arc::clone(&idle);
+        let iterations = Arc::clone(&iterations);
         let process_fn = Arc::clone(&process_fn);
         let mut shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
@@ -77,6 +83,7 @@ where
                 };
                 idle.fetch_sub(1, Ordering::Relaxed);
                 let outgoing = (process_fn)(&nodes, &update);
+                iterations.fetch_add(1, Ordering::Relaxed);
                 for u in outgoing {
                     queue.push(u);
                 }
@@ -87,6 +94,7 @@ where
     WorkerPoolHandle {
         shutdown_tx,
         idle,
+        iterations,
         workers,
     }
 }

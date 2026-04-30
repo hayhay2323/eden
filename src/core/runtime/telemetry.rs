@@ -165,22 +165,38 @@ pub fn spawn_push_forwarder(
     push_rx
 }
 
+/// Push-event tap. Called once per `PushEvent` *before* batching, so
+/// the tap sees every event the longport receiver yields — including
+/// events that the bounded batch channel later drops. The C4 fix wires
+/// the pressure-event bus through this tap so sub-tick channels keep
+/// recomputing under ingest backpressure.
+pub type PushTap = Box<dyn Fn(&PushEvent) + Send + Sync + 'static>;
+
 pub fn spawn_batched_push_forwarder(
     mut receiver: mpsc::UnboundedReceiver<PushEvent>,
     capacity: usize,
     batch_size: usize,
     counters: RuntimeCounters,
     config: RuntimeInfraConfig,
+    tap: Option<PushTap>,
 ) -> mpsc::Receiver<Vec<PushEvent>> {
     let (push_tx, push_rx) = mpsc::channel::<Vec<PushEvent>>(capacity);
     tokio::spawn(async move {
         let mut dropped_push_events = 0u64;
         while let Some(event) = receiver.recv().await {
+            if let Some(tap_fn) = tap.as_ref() {
+                tap_fn(&event);
+            }
             let mut batch = Vec::with_capacity(batch_size);
             batch.push(event);
             while batch.len() < batch_size {
                 match receiver.try_recv() {
-                    Ok(event) => batch.push(event),
+                    Ok(event) => {
+                        if let Some(tap_fn) = tap.as_ref() {
+                            tap_fn(&event);
+                        }
+                        batch.push(event);
+                    }
                     Err(_) => break,
                 }
             }

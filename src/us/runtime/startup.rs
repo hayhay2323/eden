@@ -28,6 +28,12 @@ pub(super) struct UsRuntimeBootstrap {
     pub(super) runtime: PreparedRuntimeContext,
     pub(super) push_rx: tokio::sync::mpsc::Receiver<Vec<PushEvent>>,
     pub(super) rest_rx: tokio::sync::mpsc::Receiver<UsRestSnapshot>,
+    /// Pressure-event bus instantiated before the push forwarder so the
+    /// upstream tap can publish PressureEvents directly from the
+    /// longport receiver — bypassing the bounded batch channel that
+    /// drops events when the tick loop falls behind (C4 fix).
+    pub(super) pressure_event_bus:
+        std::sync::Arc<crate::pipeline::pressure_events::EventBusHandle>,
     pub(super) tick: u64,
     pub(super) debounce: std::time::Duration,
     pub(super) bootstrap_pending: bool,
@@ -298,10 +304,23 @@ pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dy
         }),
     );
 
+    // C4 fix: build the pressure-event bus BEFORE the push forwarder so
+    // the forwarder's tap can demux every longport event into the bus —
+    // even events whose batches the bounded push channel later drops.
+    let pressure_event_bus = std::sync::Arc::new(
+        crate::pipeline::pressure_events::spawn_bus(),
+    );
+    let bus_for_tap = std::sync::Arc::clone(&pressure_event_bus);
+    let tap: crate::core::runtime::PushTap = Box::new(move |evt: &PushEvent| {
+        for pe in crate::pipeline::pressure_events::demux_push_event(evt) {
+            bus_for_tap.publish(pe);
+        }
+    });
     let push_rx = runtime.spawn_batched_push_forwarder(
         receiver,
         US_PUSH_BATCH_CHANNEL_CAP,
         US_PUSH_BATCH_SIZE,
+        Some(tap),
     );
     eprintln!("[us][startup] spawned batched push forwarder");
 
@@ -368,6 +387,7 @@ pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dy
         runtime,
         push_rx,
         rest_rx,
+        pressure_event_bus,
         tick: restored_tick,
         debounce,
         bootstrap_pending,
