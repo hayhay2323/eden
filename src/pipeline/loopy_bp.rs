@@ -390,7 +390,14 @@ pub fn prior_from_pressure_channels(
     // remaining channels are added as supportive evidence with smaller
     // weights so the dominant tick-bound prior (CapitalFlow/Momentum-led)
     // continues to drive the magnitude when those are wired.
-    let direction_raw = cf + 0.5 * mo + 0.3 * ob + 0.3 * inst + 0.2 * vol + 0.2 * st;
+    //
+    // 2026-04-30: vol channel removed from direction_raw — it computes
+    // (volume / ema_volume) - 1, which is a SIZE anomaly, NOT a
+    // directional signal. Including it as 0.2*vol biased priors toward
+    // bear whenever a small odd-lot print happened to be the most
+    // recent trade. cf already encodes signed volume direction.
+    let _ = vol; // vol is a size anomaly, not directional; retained in signature for back-compat
+    let direction_raw = cf + 0.5 * mo + 0.3 * ob + 0.3 * inst + 0.2 * st;
     let base_magnitude = (direction_raw.abs() / 2.0).min(1.0);
     if base_magnitude < PRIOR_MAGNITUDE_FLOOR {
         return NodePrior::default();
@@ -1433,6 +1440,40 @@ mod tests {
             calm_gap > noisy_gap,
             "low entropy must concentrate more than high entropy (calm gap {calm_gap} vs noisy gap {noisy_gap})",
         );
+    }
+
+    #[test]
+    fn vol_alone_does_not_drive_direction() {
+        // Only vol = -1 (max negative size anomaly), all other channels zero.
+        let prior = prior_from_pressure_channels(
+            Some(0.0),  // ob
+            Some(0.0),  // cf
+            Some(0.0),  // institutional
+            Some(0.0),  // mo
+            Some(-1.0), // vol — should NOT drive direction
+            Some(0.0),  // st
+        );
+        // With vol no longer in direction_raw and all other channels at zero,
+        // base_magnitude will be 0 and prior should be unobserved.
+        assert!(!prior.observed, "lone vol-only signal must not produce observed prior");
+    }
+
+    #[test]
+    fn cf_drives_direction() {
+        // cf = +1 should produce bullish prior.
+        let prior = prior_from_pressure_channels(
+            Some(0.0),  // ob
+            Some(1.0),  // cf — strong positive
+            Some(0.0),  // institutional
+            Some(0.0),  // mo
+            Some(0.0),  // vol
+            Some(0.0),  // st
+        );
+        assert!(prior.observed, "strong cf should produce observed prior");
+        // belief[STATE_BULL] should be highest
+        let p_bull = prior.belief[STATE_BULL];
+        let p_bear = prior.belief[STATE_BEAR];
+        assert!(p_bull > p_bear, "cf=+1 must produce bullish belief; got bull={} bear={}", p_bull, p_bear);
     }
 
     #[test]

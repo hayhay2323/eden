@@ -23,6 +23,11 @@ use super::event::{PressureEvent, TradeSide};
 /// half-life, ~5-30 s of memory for a 1-10 Hz push rate. Tunable.
 const TRADE_EMA_ALPHA: f64 = 0.05;
 
+/// Trades below this share count are odd-lot / dust opportunistic prints
+/// that carry no directional information. Skipping them prevents the
+/// vol channel saturating to ±1 on a single 71-share match.
+const TRADE_MIN_VOLUME: f64 = 100.0;
+
 /// Capacity of each per-channel sub-bus. The dispatcher uses
 /// `try_send` so when a worker falls behind the event is dropped on
 /// that channel — pressure freshness is recoverable on the next
@@ -150,6 +155,9 @@ fn spawn_trade_worker(
             };
             let price_f = price.to_f64().unwrap_or(0.0);
             let volume_f = volume.to_f64().unwrap_or(0.0);
+            if volume_f < TRADE_MIN_VOLUME {
+                continue;
+            }
             let direction_sign = match side {
                 TradeSide::Buy => 1.0,
                 TradeSide::Sell => -1.0,
