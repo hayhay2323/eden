@@ -42,6 +42,7 @@ pub mod perception;
 pub mod predicate_engine;
 pub mod prediction_calibration;
 pub mod pressure;
+pub mod signature_replay;
 pub mod pressure_events;
 pub mod raw_events;
 pub mod raw_expectation;

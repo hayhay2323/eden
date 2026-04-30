@@ -3854,6 +3854,11 @@ pub fn read_perception_streams(
         anomaly_alerts: read_anomaly_alerts(&surprise_path, cfg),
         regime: read_regime_perception(&regime_path),
         belief_kinetics: read_belief_kinetics(&marginals_path, cfg),
+        // Reader returns empty if no observations have accumulated yet.
+        // The post-BP runtime hook (observe_and_replay) writes
+        // observations + computes replays in one shot — the perception
+        // builder here just shows whatever has accumulated by now.
+        signature_replays: Vec::new(),
     }
 }
 

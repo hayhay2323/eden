@@ -45,6 +45,7 @@ mod tests {
             anomaly_alerts: vec![],
             regime: None,
             belief_kinetics: vec![],
+            signature_replays: vec![],
         };
         let snapshot = AgentSnapshot {
             tick: 42,

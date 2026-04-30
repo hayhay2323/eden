@@ -3475,6 +3475,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             &beliefs,
                             crate::pipeline::prediction_calibration::PREDICTION_HORIZON_TICKS,
                         );
+                        // 2026-05-01: P1b — signature replay accumulator.
+                        let _us_signature_replays =
+                            crate::pipeline::signature_replay::observe_and_replay(
+                                "us",
+                                tick as u64,
+                                &beliefs,
+                                20,
+                            );
                         // 2026-05-01: feed BP posterior into lead-lag tracker.
                         // sub-KG ingest path produced constant-zero history
                         // for most symbols (channel nodes rarely populated)

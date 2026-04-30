@@ -25,6 +25,12 @@ pub struct EdenPerception {
     /// "where is eden's mind moving, not where it currently sits".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub belief_kinetics: Vec<BeliefKinetic>,
+    /// Pattern memory replay: when current sub-graph signature matches
+    /// past instances, what was the average forward-belief change at
+    /// horizons +5 / +30 ticks? Surfaces "this state has happened
+    /// before, here's what followed".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signature_replays: Vec<crate::pipeline::signature_replay::SignatureReplay>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -174,6 +180,7 @@ mod tests {
             anomaly_alerts: vec![],
             regime: None,
             belief_kinetics: vec![],
+            signature_replays: vec![],
         };
         let json = serde_json::to_string(&original).expect("serialise");
         let recovered: EdenPerception = serde_json::from_str(&json).expect("deserialise");
@@ -244,6 +251,15 @@ mod tests {
                 velocity: 0.08,
                 acceleration: 0.03,
                 streak_ticks: 2,
+            }],
+            signature_replays: vec![crate::pipeline::signature_replay::SignatureReplay {
+                symbol: "NXPI.US".to_string(),
+                signature_hash: "deadbeef".to_string(),
+                historical_visits: 3,
+                mean_forward_belief_5tick: 0.05,
+                n_5tick: 3,
+                mean_forward_belief_30tick: 0.12,
+                n_30tick: 2,
             }],
         };
         let json = serde_json::to_string(&original).expect("serialise");

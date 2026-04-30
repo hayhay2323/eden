@@ -2489,6 +2489,16 @@ pub async fn run() {
                         &beliefs,
                         eden::pipeline::prediction_calibration::PREDICTION_HORIZON_TICKS,
                     );
+                    // 2026-05-01: P1b — signature replay. Observe current
+                    // (signature, belief) pairs for future replay; lookup
+                    // historical occurrences for current symbols.
+                    let _hk_signature_replays =
+                        eden::pipeline::signature_replay::observe_and_replay(
+                            "hk",
+                            tick as u64,
+                            &beliefs,
+                            20,
+                        );
                     // 2026-05-01: feed BP posterior into lead-lag tracker.
                     // The original ingest path reads sub-KG channel nodes
                     // (PressureCapitalFlow / Momentum / Intent*) which are
