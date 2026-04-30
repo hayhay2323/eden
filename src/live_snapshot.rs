@@ -3524,6 +3524,46 @@ pub fn read_emergent_clusters(
         .collect()
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct RawContrastRecord {
+    symbol: String,
+    #[serde(default)]
+    sector_id: Option<String>,
+    center_activation: f64,
+    sector_mean_activation: f64,
+    vs_sector_contrast: f64,
+    node_kind: String,
+}
+
+const CONTRAST_MAX_RECORDS: usize = 100;
+
+pub fn read_sector_leaders(
+    path: &std::path::Path,
+    cfg: &crate::agent::PerceptionFilterConfig,
+) -> Vec<crate::agent::SymbolContrast> {
+    let raw: Vec<RawContrastRecord> = tail_records(path, PERCEPTION_TAIL_BYTES, CONTRAST_MAX_RECORDS);
+    let mut filtered: Vec<crate::agent::SymbolContrast> = raw
+        .into_iter()
+        .filter(|rec| rec.vs_sector_contrast >= cfg.min_leader_contrast)
+        .map(|rec| crate::agent::SymbolContrast {
+            symbol: rec.symbol,
+            sector: rec.sector_id,
+            center_activation: rec.center_activation,
+            sector_mean: rec.sector_mean_activation,
+            vs_sector_contrast: rec.vs_sector_contrast,
+            node_kind: rec.node_kind,
+            persistence_ticks: None,
+        })
+        .collect();
+    filtered.sort_by(|a, b| {
+        b.vs_sector_contrast
+            .partial_cmp(&a.vs_sector_contrast)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    filtered.truncate(cfg.max_leaders);
+    filtered
+}
+
 #[cfg(test)]
 mod perception_reader_tests {
     use super::*;
@@ -3616,5 +3656,26 @@ mod perception_reader_tests {
         assert!(out.iter().any(|c| c.sector == "semiconductor"));
         assert!(out.iter().any(|c| c.sector == "tech"));
         assert!(!out.iter().any(|c| c.sector == "toys"));
+    }
+
+    #[test]
+    fn read_sector_leaders_filters_and_caps() {
+        let mut f = NamedTempFile::new().expect("temp file");
+        for (sym, contrast) in &[("a", 7.5), ("b", 4.0), ("c", 2.0), ("d", 6.0), ("e", 1.0)] {
+            writeln!(
+                f,
+                r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","symbol":"{}.HK","node_kind":"Role","center_activation":10.0,"surround_mean":1.0,"surround_count":20,"contrast":9.0,"sector_id":"semiconductor","sector_mean_activation":3.0,"vs_sector_contrast":{}}}"#,
+                sym, contrast
+            ).expect("write");
+        }
+        let mut cfg = crate::agent::PerceptionFilterConfig::default();
+        cfg.max_leaders = 3;
+        let out = read_sector_leaders(f.path(), &cfg);
+        // Only a (7.5), d (6.0), b (4.0) pass min_leader_contrast (3.0); c & e filtered
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].symbol, "a.HK");
+        assert!((out[0].vs_sector_contrast - 7.5).abs() < 1e-9);
+        assert_eq!(out[1].symbol, "d.HK");
+        assert_eq!(out[2].symbol, "b.HK");
     }
 }
