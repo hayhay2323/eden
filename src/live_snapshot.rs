@@ -3473,6 +3473,57 @@ where
     }
 }
 
+/// Internal NDJSON record shape for `eden-emergence-{market}.ndjson`.
+/// Mirrors `pipeline::sub_kg_emergence::EmergenceClusterEvent` minus
+/// internal fields. We use a private deserialise-only struct rather
+/// than depending on the producer struct so the reader is decoupled
+/// from upstream schema changes.
+#[derive(Debug, serde::Deserialize)]
+struct RawEmergenceRecord {
+    cluster_key: String,
+    cluster_total_members: u32,
+    sync_member_count: u32,
+    #[serde(default)]
+    sync_members: Vec<String>,
+    #[serde(default)]
+    mean_activation_per_kind: std::collections::HashMap<String, f64>,
+    strongest_member: String,
+    strongest_member_mean_activation: f64,
+}
+
+const PERCEPTION_TAIL_BYTES: u64 = 256 * 1024;
+const EMERGENCE_MAX_RECORDS: usize = 30;
+
+/// Read recent emergence cluster records from the NDJSON stream and
+/// surface those passing the filter as `EmergentCluster`s.
+pub fn read_emergent_clusters(
+    path: &std::path::Path,
+    cfg: &crate::agent::PerceptionFilterConfig,
+) -> Vec<crate::agent::EmergentCluster> {
+    let raw: Vec<RawEmergenceRecord> = tail_records(path, PERCEPTION_TAIL_BYTES, EMERGENCE_MAX_RECORDS);
+    raw.into_iter()
+        .filter_map(|rec| {
+            let total = rec.cluster_total_members.max(1);
+            let sync_pct = rec.sync_member_count as f64 / total as f64;
+            if sync_pct < cfg.min_cluster_sync_pct {
+                return None;
+            }
+            Some(crate::agent::EmergentCluster {
+                sector: rec.cluster_key,
+                total_members: rec.cluster_total_members,
+                sync_member_count: rec.sync_member_count,
+                sync_ratio: format!("{}/{}", rec.sync_member_count, rec.cluster_total_members),
+                sync_pct,
+                strongest_member: rec.strongest_member,
+                strongest_activation: rec.strongest_member_mean_activation,
+                mean_activation_intent: rec.mean_activation_per_kind.get("Intent").copied().unwrap_or(0.0),
+                mean_activation_pressure: rec.mean_activation_per_kind.get("Pressure").copied().unwrap_or(0.0),
+                members: rec.sync_members,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod perception_reader_tests {
     use super::*;
@@ -3547,5 +3598,23 @@ mod perception_reader_tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].id, 1);
         assert_eq!(out[1].id, 3);
+    }
+
+    #[test]
+    fn read_emergent_clusters_filters_by_sync_pct() {
+        let mut f = NamedTempFile::new().expect("temp file");
+        // 9/9 sync (100%) — included
+        writeln!(f, r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","cluster_key":"semiconductor","cluster_total_members":9,"sync_member_count":9,"sync_members":["981.HK"],"lit_node_kinds":["Pressure","Intent"],"mean_activation_per_kind":{{"Intent":0.5,"Pressure":0.7}},"strongest_member":"6809.HK","strongest_member_mean_activation":0.79}}"#).expect("write");
+        // 3/10 sync (30%) — filtered out (below 70%)
+        writeln!(f, r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","cluster_key":"toys","cluster_total_members":10,"sync_member_count":3,"sync_members":["x"],"lit_node_kinds":["Intent"],"mean_activation_per_kind":{{"Intent":0.3}},"strongest_member":"x","strongest_member_mean_activation":0.3}}"#).expect("write");
+        // 8/10 sync (80%) — included
+        writeln!(f, r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","cluster_key":"tech","cluster_total_members":10,"sync_member_count":8,"sync_members":["a","b"],"lit_node_kinds":["Pressure"],"mean_activation_per_kind":{{"Pressure":0.6}},"strongest_member":"a","strongest_member_mean_activation":0.6}}"#).expect("write");
+
+        let cfg = crate::agent::PerceptionFilterConfig::default();
+        let out = read_emergent_clusters(f.path(), &cfg);
+        assert_eq!(out.len(), 2, "expected only sync >= 70%");
+        assert!(out.iter().any(|c| c.sector == "semiconductor"));
+        assert!(out.iter().any(|c| c.sector == "tech"));
+        assert!(!out.iter().any(|c| c.sector == "toys"));
     }
 }
