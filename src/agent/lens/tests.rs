@@ -38,6 +38,7 @@ fn base_snapshot(symbols: Vec<AgentSymbolState>) -> AgentSnapshot {
         },
         world_state: None,
         backward_reasoning: None,
+        perception: None,
         notices: vec![],
         active_structures: vec![],
         recent_transitions: vec![],

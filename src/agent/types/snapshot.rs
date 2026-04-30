@@ -12,6 +12,12 @@ pub struct AgentSnapshot {
     pub world_state: Option<WorldStateSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backward_reasoning: Option<BackwardReasoningSnapshot>,
+    /// L4 perception report — eden's currently-perceived market state
+    /// (emergence, contrast, lead-lag, surprise, regime). When present,
+    /// Y consumes this in preference to the heuristic recommendation.
+    /// Optional for backwards compat with older serialised snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perception: Option<EdenPerception>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notices: Vec<AgentNotice>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

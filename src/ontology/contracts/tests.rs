@@ -332,6 +332,7 @@ fn fixture_agent_snapshot() -> AgentSnapshot {
             vortices: vec![],
         }),
         backward_reasoning: None,
+        perception: None,
         notices: vec![],
         active_structures: vec![],
         recent_transitions: vec![],

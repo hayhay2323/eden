@@ -226,6 +226,7 @@ pub fn build_hk_agent_snapshot(
         wake,
         world_state: Some(world_state),
         backward_reasoning: Some(latest.backward_reasoning.clone()),
+        perception: None,
         notices,
         active_structures,
         recent_transitions,

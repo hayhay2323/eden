@@ -276,6 +276,7 @@ pub fn build_us_agent_snapshot(
         wake,
         world_state: Some(world_state),
         backward_reasoning: None,
+        perception: None,
         notices,
         active_structures,
         recent_transitions,

@@ -106,6 +106,7 @@ fn build_narration_emits_dominant_lenses_from_action_cards() {
         },
         world_state: None,
         backward_reasoning: None,
+        perception: None,
         notices: vec![],
         active_structures: vec![],
         recent_transitions: vec![],

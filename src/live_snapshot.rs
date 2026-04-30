@@ -3707,6 +3707,36 @@ pub fn read_regime_perception(path: &std::path::Path) -> Option<crate::agent::Re
     })
 }
 
+/// Orchestrator: tail-reads all 5 perception NDJSON streams from
+/// `dir` (typically ".run") and assembles an `EdenPerception` for the
+/// given tick / timestamp / market.
+pub fn read_perception_streams(
+    dir: &std::path::Path,
+    market: &str,
+    tick: u64,
+    timestamp: &str,
+    live_market: LiveMarket,
+    cfg: &crate::agent::PerceptionFilterConfig,
+) -> crate::agent::EdenPerception {
+    let emergence_path = dir.join(format!("eden-emergence-{market}.ndjson"));
+    let contrast_path = dir.join(format!("eden-contrast-{market}.ndjson"));
+    let lead_lag_path = dir.join(format!("eden-lead-lag-{market}.ndjson"));
+    let surprise_path = dir.join(format!("eden-surprise-{market}.ndjson"));
+    let regime_path = dir.join(format!("eden-regime-analog-{market}.ndjson"));
+
+    crate::agent::EdenPerception {
+        schema_version: 1,
+        market: live_market,
+        tick,
+        timestamp: timestamp.to_string(),
+        emergent_clusters: read_emergent_clusters(&emergence_path, cfg),
+        sector_leaders: read_sector_leaders(&contrast_path, cfg),
+        causal_chains: read_causal_chains(&lead_lag_path, cfg),
+        anomaly_alerts: read_anomaly_alerts(&surprise_path, cfg),
+        regime: read_regime_perception(&regime_path),
+    }
+}
+
 #[cfg(test)]
 mod perception_reader_tests {
     use super::*;
@@ -3891,5 +3921,51 @@ mod perception_reader_tests {
     fn read_regime_perception_returns_none_when_missing() {
         let path = std::path::PathBuf::from("/nonexistent/regime.ndjson");
         assert!(read_regime_perception(&path).is_none());
+    }
+
+    #[test]
+    fn read_perception_streams_assembles_full_perception() {
+        let dir = tempfile::tempdir().expect("dir");
+        let market = "hk";
+        // Write minimal records to each stream
+        std::fs::write(
+            dir.path().join(format!("eden-emergence-{market}.ndjson")),
+            r#"{"ts":"2026-04-30T09:00:00Z","market":"hk","cluster_key":"semiconductor","cluster_total_members":9,"sync_member_count":9,"sync_members":["981.HK"],"lit_node_kinds":["Pressure","Intent"],"mean_activation_per_kind":{"Intent":0.5,"Pressure":0.7},"strongest_member":"6809.HK","strongest_member_mean_activation":0.79}
+"#,
+        ).expect("write emergence");
+        std::fs::write(
+            dir.path().join(format!("eden-contrast-{market}.ndjson")),
+            r#"{"ts":"2026-04-30T09:00:00Z","market":"hk","symbol":"6869.HK","node_kind":"Role","center_activation":13.68,"surround_mean":1.45,"surround_count":38,"contrast":12.21,"sector_id":"semiconductor","sector_mean_activation":5.85,"vs_sector_contrast":7.82}
+"#,
+        ).expect("write contrast");
+        std::fs::write(
+            dir.path().join(format!("eden-surprise-{market}.ndjson")),
+            r#"{"ts":"2026-04-30T09:00:00Z","market":"hk","symbol":"strong.HK","total_surprise":3.0,"floor":1.5,"max_node":"PressureStructure","max_observed":0.5,"max_expected":2.0,"max_squared_error":2.25}
+"#,
+        ).expect("write surprise");
+        std::fs::write(
+            dir.path().join(format!("eden-regime-analog-{market}.ndjson")),
+            r#"{"ts":"2026-04-30T09:00:00Z","market":"hk","current_tick":29,"current_bucket":"stress=4","historical_visits":188,"last_seen_ts":null,"last_seen_tick":null,"outcomes":{}}
+"#,
+        ).expect("write regime");
+        // Lead-lag intentionally absent (mirrors current stale state)
+
+        let cfg = crate::agent::PerceptionFilterConfig::default();
+        let out = read_perception_streams(
+            dir.path(),
+            market,
+            42,
+            "2026-04-30T09:00:00Z",
+            LiveMarket::Hk,
+            &cfg,
+        );
+        assert_eq!(out.tick, 42);
+        assert_eq!(out.market, LiveMarket::Hk);
+        assert_eq!(out.emergent_clusters.len(), 1);
+        assert_eq!(out.sector_leaders.len(), 1);
+        assert_eq!(out.causal_chains.len(), 0, "lead-lag absent");
+        assert_eq!(out.anomaly_alerts.len(), 1);
+        assert!(out.regime.is_some());
+        assert_eq!(out.schema_version, 1);
     }
 }
