@@ -3606,6 +3606,62 @@ pub fn read_causal_chains(
     filtered
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct RawSurpriseRecord {
+    symbol: String,
+    total_surprise: f64,
+    floor: f64,
+    max_node: String,
+    max_observed: f64,
+    max_expected: f64,
+    max_squared_error: f64,
+}
+
+const SURPRISE_MAX_RECORDS: usize = 100;
+
+pub fn read_anomaly_alerts(
+    path: &std::path::Path,
+    cfg: &crate::agent::PerceptionFilterConfig,
+) -> Vec<crate::agent::SurpriseAlert> {
+    let raw: Vec<RawSurpriseRecord> = tail_records(path, PERCEPTION_TAIL_BYTES, SURPRISE_MAX_RECORDS);
+    let mut filtered: Vec<crate::agent::SurpriseAlert> = raw
+        .into_iter()
+        .filter(|rec| {
+            // Avoid divide-by-zero: floor < 1e-12 means no meaningful expectation;
+            // pass through total_surprise > 0 to surface raw anomalies.
+            if rec.floor < 1e-12 {
+                rec.total_surprise > 0.0
+            } else {
+                rec.total_surprise / rec.floor >= cfg.min_anomaly_surprise_ratio
+            }
+        })
+        .map(|rec| {
+            let deviation_kind = if rec.max_observed < rec.max_expected {
+                "below_expected".to_string()
+            } else {
+                "above_expected".to_string()
+            };
+            crate::agent::SurpriseAlert {
+                symbol: rec.symbol,
+                channel: rec.max_node,
+                observed: rec.max_observed,
+                expected: rec.max_expected,
+                squared_error: rec.max_squared_error,
+                total_surprise: rec.total_surprise,
+                floor: rec.floor,
+                deviation_kind,
+            }
+        })
+        .collect();
+    filtered.sort_by(|a, b| {
+        let a_ratio = if a.floor < 1e-12 { a.total_surprise } else { a.total_surprise / a.floor };
+        let b_ratio = if b.floor < 1e-12 { b.total_surprise } else { b.total_surprise / b.floor };
+        b_ratio.partial_cmp(&a_ratio).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    filtered.truncate(cfg.max_anomalies);
+    filtered
+}
+
 #[cfg(test)]
 mod perception_reader_tests {
     use super::*;
@@ -3747,5 +3803,26 @@ mod perception_reader_tests {
         let path = std::path::PathBuf::from("/nonexistent/eden-lead-lag-hk.ndjson");
         let out = read_causal_chains(&path, &cfg);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn read_anomaly_alerts_filters_by_surprise_ratio() {
+        let mut f = NamedTempFile::new().expect("temp file");
+        // pass: total_surprise 1.46, floor 1.22 → ratio 1.20 < 1.5 → FILTERED
+        writeln!(f, r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","symbol":"borderline.HK","total_surprise":1.46,"floor":1.22,"max_node":"PressureStructure","max_observed":0.68,"max_expected":1.88,"max_squared_error":1.45}}"#).expect("write");
+        // pass: ratio 2.0
+        writeln!(f, r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","symbol":"strong.HK","total_surprise":3.0,"floor":1.5,"max_node":"PressureMomentum","max_observed":-2.0,"max_expected":1.0,"max_squared_error":9.0}}"#).expect("write");
+        // pass: ratio 1.5 exact
+        writeln!(f, r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","symbol":"edge.HK","total_surprise":3.0,"floor":2.0,"max_node":"IntentDistribution","max_observed":0.5,"max_expected":0.2,"max_squared_error":0.09}}"#).expect("write");
+
+        let cfg = crate::agent::PerceptionFilterConfig::default();
+        let out = read_anomaly_alerts(f.path(), &cfg);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().any(|a| a.symbol == "strong.HK"));
+        assert!(out.iter().any(|a| a.symbol == "edge.HK"));
+        let strong = out.iter().find(|a| a.symbol == "strong.HK").unwrap();
+        assert_eq!(strong.deviation_kind, "below_expected");
+        let edge = out.iter().find(|a| a.symbol == "edge.HK").unwrap();
+        assert_eq!(edge.deviation_kind, "above_expected");
     }
 }
