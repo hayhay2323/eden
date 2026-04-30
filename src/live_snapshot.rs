@@ -3662,6 +3662,51 @@ pub fn read_anomaly_alerts(
     filtered
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct RawRegimeRecord {
+    current_tick: u64,
+    current_bucket: String,
+    historical_visits: u32,
+    #[serde(default)]
+    last_seen_tick: Option<u64>,
+    #[serde(default)]
+    outcomes: std::collections::HashMap<String, RawRegimeOutcome>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RawRegimeOutcome {
+    n: u32,
+    mean_stress_delta: f64,
+    mean_synchrony_delta: f64,
+    mean_bull_bias_delta: f64,
+}
+
+pub fn read_regime_perception(path: &std::path::Path) -> Option<crate::agent::RegimePerception> {
+    let raw: Vec<RawRegimeRecord> = tail_records(path, PERCEPTION_TAIL_BYTES, 5);
+    let latest = raw.into_iter().last()?;
+    let mut forward: Vec<crate::agent::RegimeForward> = latest
+        .outcomes
+        .into_iter()
+        .filter_map(|(horizon, outcome)| {
+            let h: u32 = horizon.parse().ok()?;
+            Some(crate::agent::RegimeForward {
+                horizon_ticks: h,
+                n_samples: outcome.n,
+                mean_stress_delta: outcome.mean_stress_delta,
+                mean_synchrony_delta: outcome.mean_synchrony_delta,
+                mean_bull_bias_delta: outcome.mean_bull_bias_delta,
+            })
+        })
+        .collect();
+    forward.sort_by_key(|f| f.horizon_ticks);
+    Some(crate::agent::RegimePerception {
+        bucket: latest.current_bucket,
+        historical_visits: latest.historical_visits,
+        last_seen_tick: latest.last_seen_tick,
+        forward_outcomes: forward,
+    })
+}
+
 #[cfg(test)]
 mod perception_reader_tests {
     use super::*;
@@ -3824,5 +3869,27 @@ mod perception_reader_tests {
         assert_eq!(strong.deviation_kind, "below_expected");
         let edge = out.iter().find(|a| a.symbol == "edge.HK").unwrap();
         assert_eq!(edge.deviation_kind, "above_expected");
+    }
+
+    #[test]
+    fn read_regime_perception_returns_latest_record() {
+        let mut f = NamedTempFile::new().expect("temp file");
+        writeln!(f, r#"{{"ts":"2026-04-30T08:00:00Z","market":"hk","current_tick":1,"current_bucket":"old","historical_visits":0,"last_seen_ts":null,"last_seen_tick":null,"outcomes":{{}}}}"#).expect("write");
+        writeln!(f, r#"{{"ts":"2026-04-30T09:00:00Z","market":"hk","current_tick":29,"current_bucket":"stress=4|sync=4","historical_visits":188,"last_seen_ts":"2026-04-30T08:55:00Z","last_seen_tick":28,"outcomes":{{"5":{{"n":169,"mean_stress_delta":-0.003,"mean_synchrony_delta":-0.0006,"mean_bull_bias_delta":0.0}},"30":{{"n":89,"mean_stress_delta":-0.048,"mean_synchrony_delta":-0.0001,"mean_bull_bias_delta":0.0}}}}}}"#).expect("write");
+
+        let regime = read_regime_perception(f.path()).expect("regime present");
+        assert_eq!(regime.bucket, "stress=4|sync=4");
+        assert_eq!(regime.historical_visits, 188);
+        assert_eq!(regime.last_seen_tick, Some(28));
+        assert_eq!(regime.forward_outcomes.len(), 2);
+        let h5 = regime.forward_outcomes.iter().find(|f| f.horizon_ticks == 5).unwrap();
+        assert_eq!(h5.n_samples, 169);
+        assert!((h5.mean_stress_delta + 0.003).abs() < 1e-6);
+    }
+
+    #[test]
+    fn read_regime_perception_returns_none_when_missing() {
+        let path = std::path::PathBuf::from("/nonexistent/regime.ndjson");
+        assert!(read_regime_perception(&path).is_none());
     }
 }
