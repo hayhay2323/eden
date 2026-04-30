@@ -62,6 +62,7 @@ pub enum ArtifactKind {
     Session,
     Watchlist,
     Recommendations,
+    Perception,
     RecommendationJournal,
     Scoreboard,
     EodReview,
@@ -294,6 +295,14 @@ impl MarketRegistry {
             (MarketId::Us, ArtifactKind::Recommendations) => ArtifactSpec {
                 env_var: "EDEN_US_AGENT_RECOMMENDATIONS_PATH",
                 default_path: "data/us_agent_recommendations.json",
+            },
+            (MarketId::Hk, ArtifactKind::Perception) => ArtifactSpec {
+                env_var: "EDEN_AGENT_PERCEPTION_PATH",
+                default_path: "data/agent_perception.json",
+            },
+            (MarketId::Us, ArtifactKind::Perception) => ArtifactSpec {
+                env_var: "EDEN_US_AGENT_PERCEPTION_PATH",
+                default_path: "data/us_agent_perception.json",
             },
             (MarketId::Hk, ArtifactKind::RecommendationJournal) => ArtifactSpec {
                 env_var: "EDEN_AGENT_RECOMMENDATION_JOURNAL_PATH",

@@ -160,6 +160,7 @@ pub struct AgentArtifactPaths {
     pub agent_session_path: String,
     pub agent_watchlist_path: String,
     pub agent_recommendations_path: String,
+    pub agent_perception_path: String,
     pub agent_recommendation_journal_path: String,
     pub agent_scoreboard_path: String,
     pub agent_eod_review_path: String,
@@ -296,6 +297,10 @@ impl AgentArtifactPaths {
                 market,
                 ArtifactKind::Recommendations,
             ),
+            agent_perception_path: resolve_artifact_path(
+                market,
+                ArtifactKind::Perception,
+            ),
             agent_recommendation_journal_path: resolve_artifact_path(
                 market,
                 ArtifactKind::RecommendationJournal,
@@ -317,6 +322,7 @@ impl AgentArtifactPaths {
         ensure_snapshot_parent(&paths.agent_session_path).await;
         ensure_snapshot_parent(&paths.agent_watchlist_path).await;
         ensure_snapshot_parent(&paths.agent_recommendations_path).await;
+        ensure_snapshot_parent(&paths.agent_perception_path).await;
         ensure_snapshot_parent(&paths.agent_recommendation_journal_path).await;
         ensure_snapshot_parent(&paths.agent_scoreboard_path).await;
         ensure_snapshot_parent(&paths.agent_eod_review_path).await;
@@ -2803,6 +2809,7 @@ mod horizon_helper_tests {
                 agent_session_path: String::new(),
                 agent_watchlist_path: String::new(),
                 agent_recommendations_path: String::new(),
+                agent_perception_path: String::new(),
                 agent_recommendation_journal_path: String::new(),
                 agent_scoreboard_path: String::new(),
                 agent_eod_review_path: String::new(),
@@ -2899,6 +2906,7 @@ mod horizon_helper_tests {
                 agent_session_path: String::new(),
                 agent_watchlist_path: String::new(),
                 agent_recommendations_path: String::new(),
+                agent_perception_path: String::new(),
                 agent_recommendation_journal_path: String::new(),
                 agent_scoreboard_path: String::new(),
                 agent_eod_review_path: String::new(),
