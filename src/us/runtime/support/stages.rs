@@ -85,6 +85,7 @@ pub(crate) async fn run_us_projection_stage<S: AnalystService>(
     eden_ledger: &mut crate::persistence::case_realized_outcome::EdenLedgerAccumulator,
     intent_belief_field: &mut crate::pipeline::intent_belief::IntentBeliefField,
     outcome_credited_setup_ids: &mut std::collections::HashSet<String>,
+    stage_timer: &mut crate::core::runtime::TickStageTimer,
 ) {
     if let Some(ref store) = runtime.store {
         maybe_refresh_us_learning_feedback(
@@ -96,6 +97,7 @@ pub(crate) async fn run_us_projection_stage<S: AnalystService>(
         )
         .await;
     }
+    stage_timer.mark("S21b1_learning_feedback");
 
     let live_snapshot = &artifact_projection.live_snapshot;
     let agent_snapshot = &artifact_projection.agent_snapshot;
@@ -138,6 +140,7 @@ pub(crate) async fn run_us_projection_stage<S: AnalystService>(
             eprintln!("{}", summary.summary_line("us"));
         }
     }
+    stage_timer.mark("S21b2_outcomes_compute");
 
     runtime
         .publish_projection_with_followups_from_inputs(
@@ -166,6 +169,7 @@ pub(crate) async fn run_us_projection_stage<S: AnalystService>(
             (!realized_outcomes.is_empty()).then_some(realized_outcomes),
         )
         .await;
+    stage_timer.mark("S21b3_publish_followups");
 
     if let Some(ref store) = runtime.store {
         crate::core::runtime::settle_live_horizons_us(
@@ -177,6 +181,7 @@ pub(crate) async fn run_us_projection_stage<S: AnalystService>(
         )
         .await;
     }
+    stage_timer.mark("S21b4_settle_horizons");
 
     let symbol_state_records = live_snapshot
         .symbol_states
@@ -194,6 +199,7 @@ pub(crate) async fn run_us_projection_stage<S: AnalystService>(
             .persist_symbol_perception_states(crate::cases::CaseMarket::Us, symbol_state_records)
             .await;
     }
+    stage_timer.mark("S21b5_persist_perception_states");
 }
 
 #[cfg(feature = "persistence")]
@@ -204,6 +210,7 @@ pub(crate) async fn run_us_persistence_stage(
     live: &UsLiveState,
     rest: &UsRestSnapshot,
     tick_record: &UsTickRecord,
+    trades_this_tick: &HashMap<Symbol, Vec<longport::quote::Trade>>,
 ) {
     runtime.persist_us_tick(tick_record.clone()).await;
 
@@ -219,9 +226,13 @@ pub(crate) async fn run_us_persistence_stage(
         market_temperature: None,
         option_surfaces: rest.option_surfaces.clone(),
         quotes: live.quotes.clone(),
-        trades: HashMap::new(),
+        trades: trades_this_tick.clone(),
     };
-    let archive = crate::ontology::microstructure::TickArchive::from_raw(tick, &raw_snapshot);
+    let archive = crate::ontology::microstructure::TickArchive::from_raw_for_market(
+        "us",
+        tick,
+        &raw_snapshot,
+    );
     runtime.persist_market_tick_archive(archive).await;
 }
 

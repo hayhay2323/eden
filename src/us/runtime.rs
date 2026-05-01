@@ -4199,6 +4199,7 @@ pub async fn run() {
             &mut eden_ledger,
             &mut intent_belief_field,
             &mut outcome_credited_setup_ids,
+            &mut stage_timer,
         )
         .await;
         #[cfg(not(feature = "persistence"))]
@@ -4215,7 +4216,7 @@ pub async fn run() {
             tick_advance.received_update,
         );
 
-        stage_timer.mark("S21b_projection_stage");
+        stage_timer.mark("S21c_heartbeat_tail");
         let stage_top = stage_timer.top_n(5);
         if tick % 10 == 0 {
             let parts: Vec<String> = stage_top
