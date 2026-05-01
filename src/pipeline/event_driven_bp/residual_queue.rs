@@ -21,8 +21,7 @@
 //! relevant updates. Drops are counted in `dropped_count` and exposed
 //! for telemetry; a steady increase signals workers can't keep up.
 
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use ordered_float::OrderedFloat;
@@ -57,28 +56,87 @@ impl PartialEq for EdgeUpdate {
 
 impl Eq for EdgeUpdate {}
 
-impl Ord for EdgeUpdate {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Highest residual first — BinaryHeap is max-heap.
-        OrderedFloat(self.residual).cmp(&OrderedFloat(other.residual))
-    }
-}
+// `EdgeUpdate` is no longer ordered directly — the queue stores
+// `(OrderedFloat<f64>, seq)` keys in a `BTreeSet` for ordering. The
+// `PartialEq`/`Eq` impls remain in case downstream code wants to
+// compare residuals quickly.
 
-impl PartialOrd for EdgeUpdate {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// Shared priority heap + notify. Many producers, many consumers.
+/// Shared priority queue + notify. Many producers, many consumers.
+///
+/// Internal layout: a `BTreeSet` keyed by `(residual, seq)` provides
+/// O(log N) min and max access; a parallel `HashMap` from `seq` to
+/// `EdgeUpdate` carries the payload. The `seq` tiebreak makes
+/// duplicate residuals well-ordered without losing any update. Push
+/// and pop on a saturated queue are both O(log N), versus the prior
+/// `BinaryHeap` impl whose overflow path was O(N) (linear scan +
+/// drain + heapify) and serialized all producers under one mutex —
+/// see livelock observed at tick=6732 on 2026-05-01.
 pub struct ResidualQueue {
-    heap: Mutex<BinaryHeap<EdgeUpdate>>,
+    inner: Mutex<ResidualQueueInner>,
     notify: Notify,
     max_size: usize,
     /// Cumulative count of updates dropped due to overflow. Production
     /// telemetry — a non-zero value means workers fell behind and
     /// some low-residual messages were skipped.
     dropped_count: AtomicU64,
+}
+
+struct ResidualQueueInner {
+    /// Ordered set of `(residual, seq)` keys. `pop_first` / `pop_last`
+    /// are O(log N).
+    by_priority: BTreeSet<(OrderedFloat<f64>, u64)>,
+    /// Payloads keyed by sequence number. The set's tiebreak `u64`
+    /// is also the key here, so insertion is single-allocation.
+    by_seq: HashMap<u64, EdgeUpdate>,
+    /// Monotonic sequence counter — provides FIFO ordering for
+    /// updates with identical residuals and avoids `BTreeSet` key
+    /// collisions on duplicate priorities. Wraps after 2^64 pushes
+    /// (≈ 5 ⨉ 10^11 years at 1 push/ns).
+    next_seq: u64,
+}
+
+impl ResidualQueueInner {
+    fn new() -> Self {
+        Self {
+            by_priority: BTreeSet::new(),
+            by_seq: HashMap::new(),
+            next_seq: 0,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.by_priority.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.by_priority.is_empty()
+    }
+
+    /// Insert `update`; assumes the caller has already enforced
+    /// `max_size` (the function never evicts).
+    fn push_unbounded(&mut self, update: EdgeUpdate) {
+        let seq = self.next_seq;
+        self.next_seq = self.next_seq.wrapping_add(1);
+        self.by_priority.insert((OrderedFloat(update.residual), seq));
+        self.by_seq.insert(seq, update);
+    }
+
+    /// Remove and return the highest-residual update.
+    fn pop_max(&mut self) -> Option<EdgeUpdate> {
+        let (_, seq) = self.by_priority.pop_last()?;
+        self.by_seq.remove(&seq)
+    }
+
+    /// Remove and return the lowest-residual update.
+    fn pop_min(&mut self) -> Option<EdgeUpdate> {
+        let (_, seq) = self.by_priority.pop_first()?;
+        self.by_seq.remove(&seq)
+    }
+
+    /// Inspect the lowest residual without removing it.
+    fn min_residual(&self) -> Option<f64> {
+        self.by_priority.iter().next().map(|(r, _)| r.0)
+    }
 }
 
 impl Default for ResidualQueue {
@@ -94,7 +152,7 @@ impl ResidualQueue {
 
     pub fn with_max_size(max_size: usize) -> Self {
         Self {
-            heap: Mutex::new(BinaryHeap::new()),
+            inner: Mutex::new(ResidualQueueInner::new()),
             notify: Notify::new(),
             max_size: max_size.max(1),
             dropped_count: AtomicU64::new(0),
@@ -111,37 +169,33 @@ impl ResidualQueue {
     /// `dropped_count` is incremented so operators can observe load
     /// shedding.
     pub fn push(&self, update: EdgeUpdate) {
-        let mut heap = self.heap.lock();
-        if heap.len() < self.max_size {
-            heap.push(update);
-            drop(heap);
+        let mut inner = self.inner.lock();
+        if inner.len() < self.max_size {
+            inner.push_unbounded(update);
+            drop(inner);
             self.notify.notify_one();
             return;
         }
-        // Heap is full. Find the lowest-residual entry — `BinaryHeap`
-        // is a max-heap, so we have to scan. O(N) but bounded by
-        // max_size and only walked on overflow (cold path).
-        let (min_idx, min_residual) = heap
-            .iter()
-            .enumerate()
-            .map(|(i, e)| (i, OrderedFloat(e.residual)))
-            .min_by_key(|(_, r)| *r)
-            .map(|(i, r)| (i, r.0))
-            .expect("heap is non-empty here (max_size >= 1)");
+        // Saturated. O(log N) min lookup via BTreeSet's first key.
+        let min_residual = inner
+            .min_residual()
+            .expect("len() == max_size >= 1 implies at least one entry");
         if update.residual <= min_residual {
-            // Incoming update is no more informative than the
-            // smallest pending one — drop the incoming one instead
-            // of churning the heap.
-            self.dropped_count.fetch_add(1, AtomicOrdering::Relaxed);
+            // Incoming update is no more informative than the smallest
+            // pending one — drop the incoming one instead of evicting
+            // a still-useful entry.
+            self.dropped_count
+                .fetch_add(1, AtomicOrdering::Relaxed);
             return;
         }
-        // Rebuild heap minus the lowest-residual entry, then push new.
-        let mut keep: Vec<EdgeUpdate> = heap.drain().collect();
-        keep.swap_remove(min_idx);
-        keep.push(update);
-        *heap = BinaryHeap::from(keep);
-        self.dropped_count.fetch_add(1, AtomicOrdering::Relaxed);
-        drop(heap);
+        // Evict the lowest-residual entry (O(log N)) and insert the
+        // new one (O(log N)). Total overflow cost: O(log N), versus
+        // the prior O(N) drain + heapify.
+        inner.pop_min();
+        inner.push_unbounded(update);
+        self.dropped_count
+            .fetch_add(1, AtomicOrdering::Relaxed);
+        drop(inner);
         self.notify.notify_one();
     }
 
@@ -150,7 +204,7 @@ impl ResidualQueue {
     /// via `notify_waiters`.
     pub async fn pop(&self) -> EdgeUpdate {
         loop {
-            if let Some(u) = self.heap.lock().pop() {
+            if let Some(u) = self.inner.lock().pop_max() {
                 return u;
             }
             self.notify.notified().await;
@@ -160,15 +214,15 @@ impl ResidualQueue {
     /// Non-blocking variant. Returns `None` immediately if the queue
     /// is empty. Used by `drain_pending` and shutdown.
     pub fn try_pop(&self) -> Option<EdgeUpdate> {
-        self.heap.lock().pop()
+        self.inner.lock().pop_max()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.heap.lock().is_empty()
+        self.inner.lock().is_empty()
     }
 
     pub fn len(&self) -> usize {
-        self.heap.lock().len()
+        self.inner.lock().len()
     }
 
     pub fn max_size(&self) -> usize {
