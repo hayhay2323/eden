@@ -271,6 +271,95 @@ mod tests {
     }
 
     #[test]
+    fn overflow_rebuild_path_keeps_len_at_max_size() {
+        // Pins the structural contract: when incoming residual strictly
+        // exceeds the current min, push goes through the eviction-rebuild
+        // branch and the queue length stays at max_size. Any future fix
+        // that changes the overflow strategy must update this test.
+        let q = ResidualQueue::with_max_size(3);
+        q.push(update("A", "B", 0.10));
+        q.push(update("C", "D", 0.50));
+        q.push(update("E", "F", 0.30));
+        let len_before = q.len();
+        let drops_before = q.dropped_count();
+
+        q.push(update("G", "H", 0.20)); // 0.20 > min=0.10 → rebuild
+        q.push(update("I", "J", 0.40)); // 0.40 > min=0.20 → rebuild
+
+        assert_eq!(q.len(), len_before, "rebuild must keep len bounded");
+        assert_eq!(
+            q.dropped_count(),
+            drops_before + 2,
+            "every overflow push above min must register one eviction"
+        );
+    }
+
+    #[test]
+    fn overflow_push_must_not_be_linear_in_max_size() {
+        // Regression canary for the residual_queue cold-start livelock.
+        //
+        // When the heap is saturated and incoming residuals strictly
+        // exceed the current min on every push, the current
+        // implementation pays O(N) under `Mutex<BinaryHeap>` per push:
+        //   (1) O(N) linear scan to locate min (line 124)
+        //   (2) O(N) `heap.drain().collect()` into Vec (line 139)
+        //   (3) O(N) `BinaryHeap::from(keep)` Floyd heapify (line 142)
+        // The mutex is held the entire time, so producers serialize and
+        // consumers calling `pop` are starved.
+        //
+        // Empirically: PID 8729 froze at tick=6732 for 5+ minutes at
+        // 99.7% CPU under exactly this workload (cold-start BP residual
+        // bursts whose magnitudes exceed the persisted-state seed mins).
+        //
+        // This test fails on the O(N)-per-push implementation and passes
+        // on any O(log N)-per-push eviction strategy (e.g., min-max
+        // double-ended priority queue, BTreeMap keyed by residual).
+        const MAX_SIZE: usize = 2_048;
+        const OVERFLOW_PUSHES: usize = 20_000;
+        const BUDGET: std::time::Duration = std::time::Duration::from_secs(1);
+
+        let q = ResidualQueue::with_max_size(MAX_SIZE);
+        // Saturate at residual=0.0 so every subsequent push is strictly
+        // above the current min — guarantees rebuild branch on every
+        // overflow push.
+        for _ in 0..MAX_SIZE {
+            q.push(update("seed", "seed", 0.0));
+        }
+        assert_eq!(q.len(), MAX_SIZE, "saturation phase must fill heap");
+        let drops_after_seed = q.dropped_count();
+
+        let started = std::time::Instant::now();
+        for i in 0..OVERFLOW_PUSHES {
+            // Strictly increasing residuals → always > current min →
+            // always trigger eviction-rebuild branch (never early-drop).
+            let residual = 1.0 + (i as f64) * 1e-9;
+            q.push(update("hot", "hot", residual));
+        }
+        let elapsed = started.elapsed();
+
+        assert_eq!(q.len(), MAX_SIZE, "overflow path must keep len bounded");
+        assert_eq!(
+            q.dropped_count() - drops_after_seed,
+            OVERFLOW_PUSHES as u64,
+            "every overflow push at residual > min must register an eviction \
+             (proves rebuild branch was hit, not early-drop)"
+        );
+
+        // Threshold derivation: O(log N) per push at MAX_SIZE=2048 is
+        // ~11 comparisons; 20_000 pushes ≈ 220 K cmps, comfortably
+        // under 100 ms even in debug mode. The current O(N) impl runs
+        // ≈ 20_000 * 2_048 = 41 M element-ops + heap allocations,
+        // observed > 1 s in debug. A 1-second ceiling is far above any
+        // reasonable O(log N) fix and well below the broken baseline.
+        assert!(
+            elapsed < BUDGET,
+            "{OVERFLOW_PUSHES} overflow pushes at max_size={MAX_SIZE} took {elapsed:?} \
+             (budget {BUDGET:?}); indicates O(N)-per-push regression in \
+             ResidualQueue::push — see livelock observed at tick=6732 on 2026-05-01"
+        );
+    }
+
+    #[test]
     fn unbounded_via_default_max_size_doesnt_drop() {
         // Default max_size = DEFAULT_MAX_QUEUE_SIZE. Tiny synthetic
         // workload must not trigger any drops.

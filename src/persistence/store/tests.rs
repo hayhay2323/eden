@@ -95,7 +95,7 @@ async fn open_upgrades_from_recorded_legacy_schema_version() {
     EdenStore::apply_schema_migrations(&db, path.to_str().unwrap())
         .await
         .unwrap();
-    let store = EdenStore { db };
+    let store = EdenStore { db, sync_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())) };
     let version = EdenStore::stored_schema_version(&store.db).await.unwrap();
     assert_eq!(version, Some(schema::LATEST_SCHEMA_VERSION));
     store.write_tick(&sample_tick_record()).await.unwrap();
@@ -228,7 +228,7 @@ async fn open_backfills_workflow_payload_market_for_legacy_rows() {
             .unwrap();
     }
 
-    let store = EdenStore { db: db.clone() };
+    let store = EdenStore { db: db.clone(), sync_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())) };
     let record = ActionWorkflowRecord {
         workflow_id: "workflow:setup:AAPL.US:enter".into(),
         title: "Position AAPL.US".into(),
@@ -276,7 +276,7 @@ async fn open_backfills_workflow_payload_market_for_legacy_rows() {
         .await
         .unwrap();
 
-    let store = EdenStore { db };
+    let store = EdenStore { db, sync_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())) };
     let updated = store
         .action_workflow_by_id("workflow:setup:AAPL.US:enter")
         .await

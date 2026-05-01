@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use surrealdb::engine::local::{Db, RocksDb};
 use surrealdb::Surreal;
 use time::OffsetDateTime;
+use tokio::sync::Mutex;
 
 use super::action_workflow::{ActionWorkflowEventRecord, ActionWorkflowRecord};
 use super::schema;
@@ -27,6 +29,10 @@ mod write;
 #[derive(Clone, Debug)]
 pub struct EdenStore {
     db: Surreal<Db>,
+    // Serializes wholesale `DELETE WHERE market=… ; UPSERT *` syncs that
+    // share the same key range and trigger SurrealDB 2.x optimistic-lock
+    // "read or write conflict" failures when run concurrently.
+    sync_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,7 +51,10 @@ impl EdenStore {
         db.use_ns("eden").use_db("market").await?;
         Self::apply_schema_migrations(&db, path).await?;
         eprintln!("[store] ready {}", path);
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            sync_lock: Arc::new(Mutex::new(())),
+        })
     }
 
     async fn apply_schema_migrations(db: &Surreal<Db>, path: &str) -> Result<(), StoreError> {

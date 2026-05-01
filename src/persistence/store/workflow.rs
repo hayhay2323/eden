@@ -122,6 +122,7 @@ impl EdenStore {
         market: &str,
         records: &[SymbolPerceptionStateRecord],
     ) -> Result<(), StoreError> {
+        let _guard = self.sync_lock.lock().await;
         sync_market_state_checked(
             &self.db,
             "symbol_perception_state",

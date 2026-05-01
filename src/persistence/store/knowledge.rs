@@ -72,6 +72,7 @@ impl EdenStore {
         market: &str,
         records: &[MacroEventStateRecord],
     ) -> Result<(), StoreError> {
+        let _guard = self.sync_lock.lock().await;
         sync_market_state_checked(&self.db, "macro_event_state", market, records, |record| {
             &record.state_id
         })
@@ -83,6 +84,7 @@ impl EdenStore {
         market: &str,
         records: &[KnowledgeLinkStateRecord],
     ) -> Result<(), StoreError> {
+        let _guard = self.sync_lock.lock().await;
         sync_market_state_checked(
             &self.db,
             "knowledge_link_state",
@@ -138,6 +140,7 @@ impl EdenStore {
         market: &str,
         records: &[KnowledgeEventStateRecord],
     ) -> Result<(), StoreError> {
+        let _guard = self.sync_lock.lock().await;
         sync_market_state_checked(
             &self.db,
             "knowledge_event_state",
@@ -233,6 +236,7 @@ impl EdenStore {
         market: &str,
         records: &[KnowledgeNodeStateRecord],
     ) -> Result<(), StoreError> {
+        let _guard = self.sync_lock.lock().await;
         sync_market_state_checked(
             &self.db,
             "knowledge_node_state",
