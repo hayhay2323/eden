@@ -903,8 +903,10 @@ pub async fn run() {
         let tick_started_at = tick_advance.started_at;
         let tick_advance = tick_advance.advance;
         let now = tick_advance.now;
+        let mut stage_timer = crate::core::runtime::TickStageTimer::new();
         // S01 trade_tape_feed — T4 parity raw trade tape feed.
         let trades_this_tick = drain_live_trades_into_tape(&mut live, &mut raw_trade_tape);
+        stage_timer.mark("S01_trade_tape_feed");
 
         // S02 after_hours_branch — emit alive-snapshot heartbeat and skip
         // reasoning when the regular cash session is closed.
@@ -926,6 +928,7 @@ pub async fn run() {
 
         let canonical_market_snapshot = live.to_canonical_snapshot(&rest, now);
 
+        stage_timer.mark("S02_S03_canonical");
         // Build link-level observations
         // Build US dimensions (with VWAP from intraday)
         let dim_snapshot =
@@ -1134,6 +1137,7 @@ pub async fn run() {
 
         let mut reasoning = UsReasoningSnapshot::empty(now);
 
+        stage_timer.mark("S04_S06_perception_pressure");
         // Pressure field → tactical setups WITH shared reasoning insight.
         let mut vortex_setups = crate::pipeline::pressure::bridge::insights_to_tactical_setups(
             &vortex_insights,
@@ -1566,6 +1570,7 @@ pub async fn run() {
             );
         }
 
+        stage_timer.mark("S07_S13_setups_bp_hub");
         // Update state for next tick
         previous_setups = reasoning.tactical_setups.clone();
         previous_tracks = reasoning.hypothesis_tracks.clone();
@@ -1915,6 +1920,7 @@ pub async fn run() {
         });
         let mut us_setup_surface_dirty = false;
 
+        stage_timer.mark("S14_S19_state_workflow_projection");
         // T24 — US wake.reasons surface mirror. Parallel to HK's
         // post-projection surface block (src/hk/runtime.rs ~1240-1510).
         // Every data source below is already computed above but went only
@@ -4207,6 +4213,26 @@ pub async fn run() {
             tick_advance.received_update,
         );
 
+        stage_timer.mark("S20_S21_wake_persist_tail");
+        let stage_top = stage_timer.top_n(5);
+        if tick % 10 == 0 {
+            let parts: Vec<String> = stage_top
+                .iter()
+                .map(|(name, dur)| format!("{}={}ms", name, dur.as_millis()))
+                .collect();
+            eprintln!(
+                "[us tick {}] tick_ms={} stage_top={}",
+                tick,
+                tick_started_at.elapsed().as_millis(),
+                parts.join(",")
+            );
+        }
+        let stage_top_json: Vec<serde_json::Value> = stage_top
+            .iter()
+            .map(|(name, dur)| {
+                json!({ "stage": name, "ms": dur.as_millis() })
+            })
+            .collect();
         runtime.runtime_task_heartbeat(
             format!(
                 "us runtime tick {} · pushes={} · workflows={}",
@@ -4221,6 +4247,7 @@ pub async fn run() {
                 "received_push": tick_advance.received_push,
                 "received_update": tick_advance.received_update,
                 "tick_ms": tick_started_at.elapsed().as_millis(),
+                "stage_top5_ms": stage_top_json,
                 "quotes": live.quotes.len(),
                 "candlesticks": live.candlesticks.len(),
                 "tick_history_len": tick_history.len(),

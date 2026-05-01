@@ -30,6 +30,8 @@ mod connect_retry;
 mod persistence;
 #[path = "runtime/push_health.rs"]
 mod push_health;
+#[path = "runtime/stage_timer.rs"]
+mod stage_timer;
 #[path = "runtime/projection.rs"]
 mod projection_runtime;
 #[path = "runtime/telemetry.rs"]
@@ -75,6 +77,7 @@ use persistence::{
 use projection_runtime::{finalize_runtime_projection, write_projection_artifacts};
 use serde_json::json;
 pub use connect_retry::{connect_with_retry, RetryPolicy};
+pub use stage_timer::TickStageTimer;
 pub use push_health::{
     Clock as PushHealthClock, HealthStatus as PushHealthStatus,
     HealthTransition as PushHealthTransition, PushReceiverHealth, SystemClock as PushSystemClock,
