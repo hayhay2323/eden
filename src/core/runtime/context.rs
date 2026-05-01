@@ -1408,7 +1408,16 @@ impl PreparedRuntimeContext {
         source: &'static str,
         realized_outcomes: Option<Vec<CaseRealizedOutcomeRecord>>,
     ) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static BREAKDOWN_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let breakdown_count = BREAKDOWN_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let log_breakdown = breakdown_count.is_multiple_of(10);
+
+        let t0 = Instant::now();
         self.persist_knowledge_projection(knowledge_bundle).await;
+        let t_kb = t0.elapsed();
+
+        let t1 = Instant::now();
         if !setups.is_empty() {
             let hypothesis_by_id = hypotheses
                 .iter()
@@ -1430,6 +1439,9 @@ impl PreparedRuntimeContext {
             self.persist_horizon_evaluations(market, setups, recorded_at)
                 .await;
         }
+        let t_setups_horizons = t1.elapsed();
+
+        let t2 = Instant::now();
         self.persist_case_reasoning_assessments_for_cases(
             market,
             cases,
@@ -1439,8 +1451,26 @@ impl PreparedRuntimeContext {
             source,
         )
         .await;
+        let t_assessments = t2.elapsed();
+
+        let t3 = Instant::now();
+        let outcome_count = realized_outcomes.as_ref().map(|v| v.len()).unwrap_or(0);
         if let Some(records) = realized_outcomes {
             self.persist_hk_case_realized_outcomes(records).await;
+        }
+        let t_outcomes = t3.elapsed();
+
+        if log_breakdown {
+            eprintln!(
+                "[persist_followups_breakdown] kb={}ms setups+horizons={}ms assessments={}ms outcomes={}ms (n_setups={} n_cases={} n_outcomes={})",
+                t_kb.as_millis(),
+                t_setups_horizons.as_millis(),
+                t_assessments.as_millis(),
+                t_outcomes.as_millis(),
+                setups.len(),
+                cases.len(),
+                outcome_count,
+            );
         }
     }
 
