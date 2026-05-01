@@ -27,6 +27,23 @@ pub enum EvaluationStatus {
     /// Exit signal or operator action ended this horizon before `due_at`.
     /// Resolution is set at the moment of early exit.
     EarlyExited,
+    /// Settle could not run because the original entry-context setup
+    /// was no longer present (e.g. a `pf:*` setup whose hour-direction
+    /// flipped, leaving the old `setup_id` orphaned). After
+    /// `DEFAULT_SETTLE_ATTEMPTS` failed lookups we stop trying — the
+    /// record is preserved for audit but excluded from future settle
+    /// passes.
+    Expired,
+}
+
+/// Number of `settle_live_horizons_*` passes to wait for entry
+/// context to become available before declaring a record `Expired`.
+/// Settle runs roughly once per tick; at the production tick rate
+/// observed in May 2026 (~44 s/tick) this is ~75 minutes of grace.
+pub const DEFAULT_SETTLE_ATTEMPTS: u32 = 100;
+
+fn default_settle_attempts() -> u32 {
+    DEFAULT_SETTLE_ATTEMPTS
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -55,6 +72,41 @@ pub struct HorizonEvaluationRecord {
     /// records without this field deserialize as None.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolution: Option<crate::ontology::resolution::HorizonResolution>,
+    /// Remaining settle attempts before expiring a never-resolvable
+    /// record (typically a `pf:*` setup whose hour-direction flipped
+    /// and orphaned the original `setup_id`). Decremented on each
+    /// settle pass that cannot find entry context; on reaching zero
+    /// the record's `status` flips to `Expired` and it stops being
+    /// returned by `unresolved_horizons_for_market`. Legacy records
+    /// without this field deserialize at the default starting value.
+    #[serde(default = "default_settle_attempts")]
+    pub attempts_remaining: u32,
+}
+
+/// Decrement each record's `attempts_remaining` and expire any that
+/// fall to zero. Records already in a terminal status (`Resolved`,
+/// `EarlyExited`, `Expired`) are left untouched. Returns the count of
+/// records that newly transitioned to `Expired` so callers can emit
+/// one log per transition (instead of one per missed settle pass —
+/// the source of the 4 154 / session log spam observed pre-fix).
+pub fn decrement_attempts_or_expire(records: &mut [HorizonEvaluationRecord]) -> usize {
+    let mut newly_expired = 0usize;
+    for record in records.iter_mut() {
+        match record.status {
+            EvaluationStatus::Resolved
+            | EvaluationStatus::EarlyExited
+            | EvaluationStatus::Expired => continue,
+            EvaluationStatus::Pending | EvaluationStatus::Due => {}
+        }
+        if record.attempts_remaining > 1 {
+            record.attempts_remaining -= 1;
+        } else {
+            record.attempts_remaining = 0;
+            record.status = EvaluationStatus::Expired;
+            newly_expired += 1;
+        }
+    }
+    newly_expired
 }
 
 impl HorizonEvaluationRecord {
@@ -116,6 +168,7 @@ impl HorizonEvaluationRecord {
             status: EvaluationStatus::Pending,
             result: None,
             resolution: None,
+            attempts_remaining: DEFAULT_SETTLE_ATTEMPTS,
         });
         for sec in &case_horizon.secondary {
             records.push(HorizonEvaluationRecord {
@@ -128,6 +181,7 @@ impl HorizonEvaluationRecord {
                 status: EvaluationStatus::Pending,
                 result: None,
                 resolution: None,
+                attempts_remaining: DEFAULT_SETTLE_ATTEMPTS,
             });
         }
         records
@@ -169,6 +223,62 @@ mod tests {
     use rust_decimal_macros::dec;
     use time::macros::datetime;
 
+    fn pending_record(attempts: u32) -> HorizonEvaluationRecord {
+        HorizonEvaluationRecord {
+            record_id: "horizon-eval:test:Fast5m".into(),
+            setup_id: "test".into(),
+            market: "us".into(),
+            horizon: HorizonBucket::Fast5m,
+            primary: true,
+            due_at: datetime!(2099-12-31 23:59 UTC),
+            status: EvaluationStatus::Pending,
+            result: None,
+            resolution: None,
+            attempts_remaining: attempts,
+        }
+    }
+
+    #[test]
+    fn decrement_returns_zero_for_empty_slice() {
+        let mut records: Vec<HorizonEvaluationRecord> = Vec::new();
+        let expired = decrement_attempts_or_expire(&mut records);
+        assert_eq!(expired, 0);
+    }
+
+    #[test]
+    fn decrement_only_lowers_counter_when_above_one() {
+        let mut records = vec![pending_record(5), pending_record(2)];
+        let expired = decrement_attempts_or_expire(&mut records);
+        assert_eq!(expired, 0, "neither record should expire on this pass");
+        assert_eq!(records[0].attempts_remaining, 4);
+        assert_eq!(records[1].attempts_remaining, 1);
+        assert!(records.iter().all(|r| r.status == EvaluationStatus::Pending));
+    }
+
+    #[test]
+    fn decrement_expires_records_at_one_remaining() {
+        let mut records = vec![pending_record(1), pending_record(3)];
+        let expired = decrement_attempts_or_expire(&mut records);
+        assert_eq!(expired, 1, "the record at 1 must transition to Expired");
+        assert_eq!(records[0].status, EvaluationStatus::Expired);
+        assert_eq!(records[0].attempts_remaining, 0);
+        assert_eq!(records[1].status, EvaluationStatus::Pending);
+        assert_eq!(records[1].attempts_remaining, 2);
+    }
+
+    #[test]
+    fn decrement_leaves_terminal_records_alone() {
+        let mut already_expired = pending_record(0);
+        already_expired.status = EvaluationStatus::Expired;
+        let mut resolved = pending_record(50);
+        resolved.status = EvaluationStatus::Resolved;
+        let mut records = vec![already_expired.clone(), resolved.clone()];
+        let expired = decrement_attempts_or_expire(&mut records);
+        assert_eq!(expired, 0);
+        assert_eq!(records[0], already_expired, "Expired untouched");
+        assert_eq!(records[1], resolved, "Resolved untouched");
+    }
+
     #[test]
     fn record_roundtrip_pending() {
         let r = HorizonEvaluationRecord {
@@ -181,6 +291,7 @@ mod tests {
             status: EvaluationStatus::Pending,
             result: None,
             resolution: None,
+            attempts_remaining: DEFAULT_SETTLE_ATTEMPTS,
         };
         let json = serde_json::to_string(&r).unwrap();
         let parsed: HorizonEvaluationRecord = serde_json::from_str(&json).unwrap();
@@ -203,6 +314,7 @@ mod tests {
                 follow_through: dec!(0.85),
             }),
             resolution: None,
+            attempts_remaining: DEFAULT_SETTLE_ATTEMPTS,
         };
         let json = serde_json::to_string(&r).unwrap();
         let parsed: HorizonEvaluationRecord = serde_json::from_str(&json).unwrap();
@@ -233,6 +345,7 @@ mod tests {
                 rationale: "numeric_confirmed".into(),
                 trigger: None,
             }),
+            attempts_remaining: DEFAULT_SETTLE_ATTEMPTS,
         };
         let json = serde_json::to_string(&r).unwrap();
         let parsed: HorizonEvaluationRecord = serde_json::from_str(&json).unwrap();
@@ -365,6 +478,7 @@ mod tests {
             status: EvaluationStatus::Due,
             result: None,
             resolution: None,
+            attempts_remaining: DEFAULT_SETTLE_ATTEMPTS,
         };
         let result = HorizonResult {
             net_return: dec!(0.02),

@@ -1997,10 +1997,24 @@ pub async fn settle_live_horizons_hk(
             &entry_context_by_id,
             &persisted_entry_context_by_id,
         ) else {
-            eprintln!(
-                "[horizon][hk] missing entry context for {}; unresolved horizons remain pending",
-                setup_id
-            );
+            // Entry context missing (see US twin for rationale —
+            // applies symmetrically to HK orphaned setup_ids).
+            let newly_expired =
+                crate::persistence::horizon_evaluation::decrement_attempts_or_expire(records);
+            if newly_expired > 0 {
+                eprintln!(
+                    "[horizon][hk] expired {} horizons for {} after {} settle attempts \
+                     (entry context never recovered)",
+                    newly_expired,
+                    setup_id,
+                    crate::persistence::horizon_evaluation::DEFAULT_SETTLE_ATTEMPTS,
+                );
+            }
+            if let Err(error) = store.write_horizon_evaluations(records).await {
+                eprintln!(
+                    "[horizon][hk] failed to persist attempts decrement for {setup_id}: {error}"
+                );
+            }
             continue;
         };
         let outcome_history = match context_source {
@@ -2243,10 +2257,27 @@ pub async fn settle_live_horizons_us(
             &entry_context_by_id,
             &persisted_entry_context_by_id,
         ) else {
-            eprintln!(
-                "[horizon][us] missing entry context for {}; unresolved horizons remain pending",
-                setup_id
-            );
+            // Entry context missing — typical for `pf:*` setups whose
+            // hour-direction flipped, leaving the original setup_id
+            // orphaned. Decrement the per-record attempts counter and
+            // expire any that have run out. Logging only on transitions
+            // — see the 4 154 / session log spam observed pre-fix.
+            let newly_expired =
+                crate::persistence::horizon_evaluation::decrement_attempts_or_expire(records);
+            if newly_expired > 0 {
+                eprintln!(
+                    "[horizon][us] expired {} horizons for {} after {} settle attempts \
+                     (entry context never recovered)",
+                    newly_expired,
+                    setup_id,
+                    crate::persistence::horizon_evaluation::DEFAULT_SETTLE_ATTEMPTS,
+                );
+            }
+            if let Err(error) = store.write_horizon_evaluations(records).await {
+                eprintln!(
+                    "[horizon][us] failed to persist attempts decrement for {setup_id}: {error}"
+                );
+            }
             continue;
         };
         let outcome_history = match context_source {

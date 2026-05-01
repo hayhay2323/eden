@@ -504,6 +504,7 @@ async fn write_and_read_horizon_evaluation_records() {
         status: EvaluationStatus::Pending,
         result: None,
         resolution: None,
+        attempts_remaining: crate::persistence::horizon_evaluation::DEFAULT_SETTLE_ATTEMPTS,
     }];
 
     store
@@ -546,6 +547,7 @@ async fn sweep_pending_horizons_to_due_flips_overdue_records() {
         status: EvaluationStatus::Pending,
         result: None,
         resolution: None,
+        attempts_remaining: crate::persistence::horizon_evaluation::DEFAULT_SETTLE_ATTEMPTS,
     };
     let future_record = HorizonEvaluationRecord {
         record_id: "horizon-eval:future-setup:Fast5m".into(),
@@ -557,6 +559,7 @@ async fn sweep_pending_horizons_to_due_flips_overdue_records() {
         status: EvaluationStatus::Pending,
         result: None,
         resolution: None,
+        attempts_remaining: crate::persistence::horizon_evaluation::DEFAULT_SETTLE_ATTEMPTS,
     };
 
     store
