@@ -1494,6 +1494,12 @@ impl PreparedRuntimeContext {
         source: &'static str,
         realized_outcomes: Option<Vec<CaseRealizedOutcomeRecord>>,
     ) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static OUTER_BREAKDOWN_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let outer_count = OUTER_BREAKDOWN_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let log_outer = outer_count.is_multiple_of(10);
+
+        let t_build = Instant::now();
         let knowledge_bundle = self.build_knowledge_followup_bundle(
             live_market,
             tick_number,
@@ -1509,6 +1515,9 @@ impl PreparedRuntimeContext {
             backward_reasoning,
             active_positions,
         );
+        let build_ms = t_build.elapsed().as_millis();
+
+        let t_persist = Instant::now();
         self.persist_projection_followups(
             market,
             knowledge_bundle,
@@ -1520,6 +1529,23 @@ impl PreparedRuntimeContext {
             realized_outcomes,
         )
         .await;
+        let persist_ms = t_persist.elapsed().as_millis();
+
+        if log_outer {
+            eprintln!(
+                "[persist_followups_outer] build={build_ms}ms persist={persist_ms}ms \
+                 (n_macro_events={} n_decisions={} n_hyp={} n_setups={} n_cases={} \
+                  n_snap_links={} n_rec_links={} n_active_pos={})",
+                macro_events.len(),
+                decisions.len(),
+                hypotheses.len(),
+                setups.len(),
+                cases.len(),
+                snapshot_knowledge_links.len(),
+                recommendation_knowledge_links.len(),
+                active_positions.len(),
+            );
+        }
     }
 
     #[cfg(feature = "persistence")]
