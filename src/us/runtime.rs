@@ -2579,6 +2579,7 @@ pub async fn run() {
         }
 
         // ── Belief field update + wake + snapshot ──
+        stage_timer.mark("S20_wake_surface");
         // Symmetric to HK runtime: update from tick-layer pressure + current
         // symbol states, emit notable wake lines, snapshot every 60s async.
         {
@@ -4179,6 +4180,7 @@ pub async fn run() {
                 }
             }
         }
+        stage_timer.mark("S21a_sk_snapshots");
         #[cfg(feature = "persistence")]
         run_us_projection_stage(
             &mut runtime,
@@ -4213,7 +4215,7 @@ pub async fn run() {
             tick_advance.received_update,
         );
 
-        stage_timer.mark("S20_S21_wake_persist_tail");
+        stage_timer.mark("S21b_projection_stage");
         let stage_top = stage_timer.top_n(5);
         if tick % 10 == 0 {
             let parts: Vec<String> = stage_top
