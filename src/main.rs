@@ -52,10 +52,7 @@ async fn main() {
     if matches!(command, CliCommand::UsLive) {
         install_live_crash_hook("us");
         eprintln!("[main] entering us live runtime");
-        if let Err(error) = eden::us::run().await {
-            eprintln!("US runtime failed: {}", error);
-            std::process::exit(1);
-        }
+        eden::us::run().await;
         return;
     }
 

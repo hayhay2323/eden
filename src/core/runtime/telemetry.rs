@@ -2,7 +2,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use longport::quote::PushEvent;
 use tokio::sync::mpsc;
@@ -10,12 +10,14 @@ use tokio::sync::mpsc::error::TrySendError;
 
 use serde_json::json;
 
+use super::push_health::{HealthTransition, PushReceiverHealth};
 use super::RuntimeInfraConfig;
 
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeCounters {
     dropped_push_events: Arc<AtomicU64>,
     rest_updates: Arc<AtomicU64>,
+    ndjson_drops: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -49,6 +51,18 @@ impl RuntimeCounters {
     pub fn rest_updates(&self) -> u64 {
         self.rest_updates.load(Ordering::Relaxed)
     }
+
+    /// Shared handle that NdjsonWriter instances bump on `Full` drops.
+    /// Spawn sites attach via `NdjsonWriter::with_aggregate_counter` so
+    /// the tick summary can surface aggregate ndjson loss without
+    /// iterating each writer.
+    pub fn ndjson_drops_handle(&self) -> Arc<AtomicU64> {
+        self.ndjson_drops.clone()
+    }
+
+    pub fn ndjson_drops(&self) -> u64 {
+        self.ndjson_drops.load(Ordering::Relaxed)
+    }
 }
 
 pub fn log_runtime_tick_summary(
@@ -65,13 +79,14 @@ pub fn log_runtime_tick_summary(
     }
 
     println!(
-        "[runtime:{} summary] tick={} tick_ms={} pushes={} dropped={} rest_updates={} got_push={} got_update={}",
+        "[runtime:{} summary] tick={} tick_ms={} pushes={} dropped={} rest_updates={} ndjson_drops={} got_push={} got_update={}",
         config.market.slug(),
         tick,
         tick_started_at.elapsed().as_millis(),
         total_push_events,
         counters.dropped_push_events(),
         counters.rest_updates(),
+        counters.ndjson_drops(),
         received_push,
         received_update,
     );
@@ -84,6 +99,7 @@ pub fn log_runtime_tick_summary(
             "pushes": total_push_events,
             "dropped_push_events": counters.dropped_push_events(),
             "rest_updates": counters.rest_updates(),
+            "ndjson_drops": counters.ndjson_drops(),
             "received_push": received_push,
             "received_update": received_update,
         }),
@@ -179,11 +195,15 @@ pub fn spawn_batched_push_forwarder(
     counters: RuntimeCounters,
     config: RuntimeInfraConfig,
     tap: Option<PushTap>,
+    health: Option<Arc<PushReceiverHealth>>,
 ) -> mpsc::Receiver<Vec<PushEvent>> {
     let (push_tx, push_rx) = mpsc::channel::<Vec<PushEvent>>(capacity);
     tokio::spawn(async move {
         let mut dropped_push_events = 0u64;
         while let Some(event) = receiver.recv().await {
+            if let Some(h) = health.as_ref() {
+                h.record_event();
+            }
             if let Some(tap_fn) = tap.as_ref() {
                 tap_fn(&event);
             }
@@ -192,6 +212,9 @@ pub fn spawn_batched_push_forwarder(
             while batch.len() < batch_size {
                 match receiver.try_recv() {
                     Ok(event) => {
+                        if let Some(h) = health.as_ref() {
+                            h.record_event();
+                        }
                         if let Some(tap_fn) = tap.as_ref() {
                             tap_fn(&event);
                         }
@@ -236,6 +259,63 @@ pub fn spawn_batched_push_forwarder(
         }
     });
     push_rx
+}
+
+/// Spawn a periodic poller that watches `health` and emits a runtime
+/// log on Healthy↔Stale transitions. Each silence episode produces one
+/// "stale" warning when crossed in, and one "recovered" info log when
+/// the next event arrives — preventing log spam during sustained
+/// outages while still surfacing both edges of the event.
+///
+/// The poller runs forever (until the runtime tears down). For tests
+/// that need to exercise the poll/log loop in isolation, drive
+/// [`PushReceiverHealth::poll_transition`] directly — this wrapper is
+/// only the spawn-and-forget glue.
+pub fn spawn_push_health_monitor(
+    health: Arc<PushReceiverHealth>,
+    poll_interval: Duration,
+    config: RuntimeInfraConfig,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(poll_interval);
+        // Skip the immediate first tick so we don't emit on a fresh
+        // NeverReceived → NeverReceived "transition" before any event
+        // could plausibly have arrived.
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            match health.poll_transition() {
+                HealthTransition::Unchanged => {}
+                HealthTransition::BecameStale { silent_for } => {
+                    log_runtime_issue(
+                        &config,
+                        RuntimeIssueLevel::Warning,
+                        "push_receiver_stale",
+                        format!(
+                            "{} push receiver silent for {:.1}s — Longport stream may be \
+                             reconnecting or upstream is degraded.",
+                            config.market.slug().to_ascii_uppercase(),
+                            silent_for.as_secs_f64(),
+                        ),
+                        json!({ "silent_for_secs": silent_for.as_secs_f64() }),
+                    );
+                }
+                HealthTransition::Recovered { last_event_age } => {
+                    log_runtime_issue(
+                        &config,
+                        RuntimeIssueLevel::Warning,
+                        "push_receiver_recovered",
+                        format!(
+                            "{} push receiver recovered; latest event {:.2}s old.",
+                            config.market.slug().to_ascii_uppercase(),
+                            last_event_age.as_secs_f64(),
+                        ),
+                        json!({ "last_event_age_secs": last_event_age.as_secs_f64() }),
+                    );
+                }
+            }
+        }
+    })
 }
 
 pub(super) fn load_u64_override(

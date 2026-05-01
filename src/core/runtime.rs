@@ -24,8 +24,12 @@ use crate::core::runtime_tasks::{
 use crate::live_snapshot::ensure_snapshot_parent;
 #[path = "runtime/context.rs"]
 mod context;
+#[path = "runtime/connect_retry.rs"]
+mod connect_retry;
 #[path = "runtime/persistence.rs"]
 mod persistence;
+#[path = "runtime/push_health.rs"]
+mod push_health;
 #[path = "runtime/projection.rs"]
 mod projection_runtime;
 #[path = "runtime/telemetry.rs"]
@@ -70,7 +74,12 @@ use persistence::{
 };
 use projection_runtime::{finalize_runtime_projection, write_projection_artifacts};
 use serde_json::json;
-pub use telemetry::PushTap;
+pub use connect_retry::{connect_with_retry, RetryPolicy};
+pub use push_health::{
+    Clock as PushHealthClock, HealthStatus as PushHealthStatus,
+    HealthTransition as PushHealthTransition, PushReceiverHealth, SystemClock as PushSystemClock,
+};
+pub use telemetry::{spawn_push_health_monitor, PushTap};
 use telemetry::{
     emit_runtime_log, load_optional_string_override, load_string_override, load_u64_override,
     spawn_batched_push_forwarder, spawn_push_forwarder, RuntimeCounters,

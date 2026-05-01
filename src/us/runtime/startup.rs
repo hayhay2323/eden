@@ -44,15 +44,41 @@ pub(super) struct UsRuntimeBootstrap {
     pub(super) cached_us_learning_feedback: Option<ReasoningLearningFeedback>,
 }
 
-pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dyn std::error::Error>>
-{
+pub(super) async fn initialize_us_runtime() -> UsRuntimeBootstrap {
     eprintln!("[us][startup] begin initialize_us_runtime");
     println!("=== Eden US — Real-time US Market Monitor ===\n");
 
     eprintln!("[us][startup] loading config from env");
-    let config = Config::from_env()?;
+    let config = match Config::from_env() {
+        Ok(config) => Arc::new(config),
+        Err(error) => {
+            eprintln!(
+                "Live runtime failed to load Longport config from env: {}",
+                error
+            );
+            std::process::exit(1);
+        }
+    };
     eprintln!("[us][startup] creating Longport quote context");
-    let (ctx, receiver) = QuoteContext::try_new(Arc::new(config)).await?;
+    let (ctx, receiver) = match crate::core::runtime::connect_with_retry(
+        || {
+            let config = config.clone();
+            async move { QuoteContext::try_new(config).await }
+        },
+        crate::core::runtime::RetryPolicy::longport_startup(),
+        "us QuoteContext::try_new",
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!(
+                "Live runtime failed to connect to Longport after retries: {}",
+                error
+            );
+            std::process::exit(1);
+        }
+    };
     eprintln!("[us][startup] Longport quote context ready");
 
     println!("Connected to Longport. Initializing US stocks...");
@@ -83,8 +109,16 @@ pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dy
         "[us][startup] subscribing websocket streams for {} symbols",
         ws_symbols.len()
     );
-    ctx.subscribe(&ws_symbols, SubFlags::QUOTE | SubFlags::TRADE)
-        .await?;
+    if let Err(error) = ctx
+        .subscribe(&ws_symbols, SubFlags::QUOTE | SubFlags::TRADE)
+        .await
+    {
+        eprintln!(
+            "Live runtime failed to subscribe to QUOTE/TRADE streams: {}",
+            error
+        );
+        std::process::exit(1);
+    }
     eprintln!("[us][startup] websocket subscription complete");
     println!(
         "Subscribed to {} US symbols x 2 channels. ({} symbols via REST only.)",
@@ -311,18 +345,31 @@ pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dy
         crate::pipeline::pressure_events::spawn_bus(),
     );
     let bus_for_tap = std::sync::Arc::clone(&pressure_event_bus);
+    let raw_event_journal = crate::core::raw_event_journal::RawEventJournal::spawn("us");
+    let journal_for_tap = raw_event_journal.clone();
     let tap: crate::core::runtime::PushTap = Box::new(move |evt: &PushEvent| {
+        journal_for_tap.record_push(&evt.symbol, &evt.detail);
         for pe in crate::pipeline::pressure_events::demux_push_event(evt) {
             bus_for_tap.publish(pe);
         }
     });
+    let push_health = std::sync::Arc::new(
+        crate::core::runtime::PushReceiverHealth::new(std::time::Duration::from_secs(60)),
+    );
     let push_rx = runtime.spawn_batched_push_forwarder(
         receiver,
         US_PUSH_BATCH_CHANNEL_CAP,
         US_PUSH_BATCH_SIZE,
         Some(tap),
+        Some(push_health.clone()),
     );
     eprintln!("[us][startup] spawned batched push forwarder");
+    crate::core::runtime::spawn_push_health_monitor(
+        push_health,
+        std::time::Duration::from_secs(5),
+        runtime.config_clone(),
+    );
+    eprintln!("[us][startup] spawned push receiver health monitor");
 
     let rest_ctx = ctx.clone();
     let rest_watchlist = watchlist_symbols.clone();
@@ -365,7 +412,7 @@ pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dy
     }
     eprintln!("[us][startup] initialize_us_runtime complete");
 
-    Ok(UsRuntimeBootstrap {
+    UsRuntimeBootstrap {
         store,
         live,
         rest,
@@ -396,5 +443,5 @@ pub(super) async fn initialize_us_runtime() -> Result<UsRuntimeBootstrap, Box<dy
         eden_ledger,
         #[cfg(feature = "persistence")]
         cached_us_learning_feedback: None,
-    })
+    }
 }

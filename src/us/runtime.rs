@@ -75,6 +75,9 @@ use startup::*;
 #[path = "runtime/view.rs"]
 mod view;
 use view::*;
+#[path = "runtime/tick_stages.rs"]
+mod tick_stages;
+use tick_stages::handle_us_after_hours_idle;
 
 const US_SIGNAL_RECORD_CAP: usize = 4_000;
 const US_SIGNAL_RECORD_RETENTION_TICKS: u64 = 240;
@@ -377,8 +380,51 @@ fn augment_us_live_snapshot_with_raw_expectations(
 }
 
 // ── Runtime entry ──
-
-pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//
+// ## Anatomy of `run()`
+//
+// `run()` has two parts: a long pre-loop initialisation (~445 lines)
+// and a multi-stage tick loop body (~3 400 lines). Stages below match
+// the existing comment markers inside the function; they are listed
+// here so the file is navigable from one place. Line ranges drift as
+// stages get extracted into helpers — search by stage name first.
+//
+// ### Pre-loop setup
+//   1. Destructure `UsRuntimeBootstrap` (state ownership transfer)
+//   2. Restore lifecycle tracker / cached learning feedback
+//   3. Load causal schemas
+//   4. Background terrain build (skip outside cash session)
+//
+// ### Tick loop body  (one iteration per tick)
+//   S00. begin_tick  — drain push/REST channels, advance `tick`
+//   S01. trade_tape_feed   — T4 parity raw trade tape feed
+//   S02. after_hours_branch — early `continue` outside cash session
+//   S03. canonical_snapshot — `live.to_canonical_snapshot(&rest, now)`
+//   S04. perception_build  — link / dimensions / graph
+//   S05. cross_market_merge — read HK snapshot bridge
+//   S06. pressure_field   — vortex detection + propagation
+//   S07. tactical_setups  — vortex → setups + reasoning insights
+//   S08. closed_loop_modulation — belief / outcome / intent_belief
+//   S09. bp_substrate_update — V2 event-driven BP observe
+//   S10. verify_hidden_forces
+//   S11. confidence_adjustment + crystallize
+//   S12. hub_aggregation
+//   S13. institutional_memory_accumulate
+//   S14. mechanism_evaluation_persist
+//   S15. lineage_scorecard_update
+//   S16. state_update_for_next_tick
+//   S17. workflow_monitoring + prune_stale
+//   S18. raw_trade_tape_augment + signal_momentum_feed
+//   S19. projection_bundle_build
+//   S20. wake_surface (T24 — Y-readable summary)
+//   S21. tick_layer_pressure_update + per-tick tail-end work
+//
+// Extractions in progress: the stages above are gradually moved into
+// dedicated helpers (`stage_*`) under `src/us/runtime/`. Each
+// extraction is pure code motion, verified by `cargo check` plus the
+// existing test suite. See git log for the per-stage extraction
+// commits.
+pub async fn run() {
     eprintln!("[us] run() entered");
     #[allow(unused_mut)]
     let UsRuntimeBootstrap {
@@ -412,7 +458,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         mut eden_ledger,
         #[cfg(feature = "persistence")]
         mut cached_us_learning_feedback,
-    } = initialize_us_runtime().await?;
+    } = initialize_us_runtime().await;
     let market_capabilities = MarketRegistry::capabilities(MarketId::Us);
     // Seen-set for outcome_feedback (symmetric with HK) — dedups
     // lineage-window re-emits so each resolution credits IntentBelief
@@ -486,6 +532,27 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     >::spawn("us:sector_kinematics", |events: Vec<
         crate::pipeline::sector_kinematics::SectorKinematicsEvent,
     >| crate::pipeline::sector_kinematics::write_events("us", &events));
+
+    // Wire all NDJSON writers into the runtime-level aggregate drop
+    // counter so `tick_summary.ndjson_drops` surfaces sustained loss
+    // across any artifact stream.
+    let ndjson_drops_handle = runtime.counters.ndjson_drops_handle();
+    let bp_marginals_writer = bp_marginals_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let bp_message_trace_writer =
+        bp_message_trace_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let subkg_writer = subkg_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let sector_subkg_writer =
+        sector_subkg_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let visual_frame_writer =
+        visual_frame_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let temporal_delta_writer =
+        temporal_delta_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let cross_sector_writer =
+        cross_sector_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let sector_to_symbol_writer =
+        sector_to_symbol_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let sector_kinematics_writer =
+        sector_kinematics_writer.with_aggregate_counter(ndjson_drops_handle.clone());
 
     // Production BP substrate: event-driven (sync + shadow deleted 2026-04-29).
     let belief_substrate: std::sync::Arc<dyn crate::pipeline::event_driven_bp::BeliefSubstrate> =
@@ -836,58 +903,24 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let tick_started_at = tick_advance.started_at;
         let tick_advance = tick_advance.advance;
         let now = tick_advance.now;
-        let trades_this_tick = std::mem::take(&mut live.trades);
-        // T4 parity — feed live trades into the raw trade tape so
-        // evaluate_raw_expectations has the same substrate on US as HK.
-        for (symbol, trades) in &trades_this_tick {
-            raw_trade_tape.record_tick(symbol, trades);
-        }
+        // S01 trade_tape_feed — T4 parity raw trade tape feed.
+        let trades_this_tick = drain_live_trades_into_tape(&mut live, &mut raw_trade_tape);
 
-        let market_open = is_us_regular_market_hours(now);
-        if !market_open {
-            // Still write snapshot but mark as after-hours, skip reasoning
-            lifecycle_tracker.decay(tick);
-            let timestamp_str = now
-                .format(&time::format_description::well_known::Rfc3339)
-                .unwrap_or_default();
-            let idle_snapshot = build_us_bootstrap_snapshot(
-                tick,
-                timestamp_str,
-                &store,
-                &live,
-                &rest,
-                &previous_symbol_states,
-                &previous_cluster_states,
-                previous_world_summary.as_ref(),
-            );
-            previous_symbol_states = idle_snapshot.symbol_states.clone();
-            previous_cluster_states = idle_snapshot.cluster_states.clone();
-            previous_world_summary = idle_snapshot.world_summary.clone();
-            spawn_write_snapshot(runtime.artifacts.live_snapshot_path.clone(), idle_snapshot);
-            if tick % 100 == 0 {
-                let (open_hour, open_minute, close_hour, close_minute) = us_market_hours_utc(now);
-                println!(
-                    "[US tick {}] after-hours (UTC {:02}:{:02}, session {:02}:{:02}-{:02}:{:02}), skipping reasoning",
-                    tick,
-                    now.hour(),
-                    now.minute(),
-                    open_hour,
-                    open_minute,
-                    close_hour,
-                    close_minute,
-                );
-            }
-            runtime.runtime_task_heartbeat(
-                "us runtime waiting for regular market hours",
-                json!({
-                    "market": "us",
-                    "tick": tick,
-                    "market_open": false,
-                    "quotes": live.quotes.len(),
-                    "candlesticks": live.candlesticks.len(),
-                    "workflows": workflows.len(),
-                }),
-            );
+        // S02 after_hours_branch — emit alive-snapshot heartbeat and skip
+        // reasoning when the regular cash session is closed.
+        if handle_us_after_hours_idle(
+            tick,
+            now,
+            &store,
+            &live,
+            &rest,
+            workflows.len(),
+            &mut previous_symbol_states,
+            &mut previous_cluster_states,
+            &mut previous_world_summary,
+            &mut lifecycle_tracker,
+            &runtime,
+        ) {
             continue;
         }
 
@@ -1329,7 +1362,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             market_regime: decision.market_regime.bias,
         };
         #[cfg(feature = "persistence")]
-        run_us_persistence_stage(&runtime, tick, now, &live, &rest, &tick_record).await;
+        run_us_persistence_stage(
+            &runtime,
+            tick,
+            now,
+            &live,
+            &rest,
+            &tick_record,
+            &trades_this_tick,
+        )
+        .await;
         tick_history.push(tick_record);
         #[cfg(feature = "persistence")]
         let persisted_workflows_by_id = if let Some(ref store) = runtime.store {
@@ -1856,17 +1898,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let mut sorted_convergence: Vec<_> = decision.convergence_scores.iter().collect();
         sorted_convergence.sort_by(|a, b| b.1.composite.abs().cmp(&a.1.composite.abs()));
 
-        // Feed signal momentum tracker (Palantir-style second derivative detection)
-        for (sym, score) in &decision.convergence_scores {
-            signal_momentum.record_convergence(sym.clone(), score.composite);
-        }
-        for event in &event_snapshot.events {
-            if matches!(event.value.kind, UsEventKind::VolumeSpike) {
-                if let UsSignalScope::Symbol(symbol) = &event.value.scope {
-                    signal_momentum.record_volume_spike(symbol.clone(), event.value.magnitude);
-                }
-            }
-        }
+        // S18 signal_momentum_feed — Palantir-style 2nd derivative detection.
+        feed_signal_momentum_tracker(&decision, &event_snapshot, &mut signal_momentum);
 
         // Build projection bundle
         let mut artifact_projection = project_us(UsProjectionInputs {
@@ -4230,8 +4263,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .persist_edge_learning_ledger("us", record, i128::from(tick))
             .await;
     }
-
-    Ok(())
 }
 
 #[cfg(test)]

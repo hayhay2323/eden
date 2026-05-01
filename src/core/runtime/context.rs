@@ -462,6 +462,9 @@ impl PreparedRuntimeContext {
         channel_capacity: usize,
         batch_size: usize,
         tap: Option<crate::core::runtime::telemetry::PushTap>,
+        health: Option<
+            std::sync::Arc<crate::core::runtime::push_health::PushReceiverHealth>,
+        >,
     ) -> mpsc::Receiver<Vec<PushEvent>> {
         spawn_batched_push_forwarder(
             receiver,
@@ -470,7 +473,12 @@ impl PreparedRuntimeContext {
             self.counters.clone(),
             self.config.clone(),
             tap,
+            health,
         )
+    }
+
+    pub fn config_clone(&self) -> RuntimeInfraConfig {
+        self.config.clone()
     }
 
     pub async fn begin_tick<P, U, S>(

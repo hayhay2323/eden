@@ -40,7 +40,7 @@ const HK_PUSH_BATCH_SIZE: usize = 2_048;
 
 pub(super) async fn initialize_hk_runtime() -> HkRuntimeBootstrap {
     let config = match Config::from_env() {
-        Ok(config) => config,
+        Ok(config) => Arc::new(config),
         Err(error) => {
             eprintln!(
                 "Live runtime failed to load Longport config from env: {}",
@@ -49,10 +49,22 @@ pub(super) async fn initialize_hk_runtime() -> HkRuntimeBootstrap {
             std::process::exit(1);
         }
     };
-    let (ctx, receiver) = match QuoteContext::try_new(Arc::new(config)).await {
+    let (ctx, receiver) = match eden::core::runtime::connect_with_retry(
+        || {
+            let config = config.clone();
+            async move { QuoteContext::try_new(config).await }
+        },
+        eden::core::runtime::RetryPolicy::longport_startup(),
+        "hk QuoteContext::try_new",
+    )
+    .await
+    {
         Ok(value) => value,
         Err(error) => {
-            eprintln!("Live runtime failed to connect to Longport: {}", error);
+            eprintln!(
+                "Live runtime failed to connect to Longport after retries: {}",
+                error
+            );
             std::process::exit(1);
         }
     };
@@ -228,16 +240,28 @@ pub(super) async fn initialize_hk_runtime() -> HkRuntimeBootstrap {
         eden::pipeline::pressure_events::spawn_bus(),
     );
     let bus_for_tap = std::sync::Arc::clone(&pressure_event_bus);
+    let raw_event_journal = eden::core::raw_event_journal::RawEventJournal::spawn("hk");
+    let journal_for_tap = raw_event_journal.clone();
     let tap: crate::core::runtime::PushTap = Box::new(move |evt: &PushEvent| {
+        journal_for_tap.record_push(&evt.symbol, &evt.detail);
         for pe in eden::pipeline::pressure_events::demux_push_event(evt) {
             bus_for_tap.publish(pe);
         }
     });
+    let push_health = std::sync::Arc::new(
+        eden::core::runtime::PushReceiverHealth::new(std::time::Duration::from_secs(60)),
+    );
     let push_rx = runtime.spawn_batched_push_forwarder(
         receiver,
         HK_PUSH_BATCH_CHANNEL_CAP,
         HK_PUSH_BATCH_SIZE,
         Some(tap),
+        Some(push_health.clone()),
+    );
+    eden::core::runtime::spawn_push_health_monitor(
+        push_health,
+        std::time::Duration::from_secs(5),
+        runtime.config_clone(),
     );
     let tick = history
         .latest()

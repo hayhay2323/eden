@@ -31,6 +31,6 @@ pub(super) use stages::{
     maybe_persist_us_lineage_stage, run_us_persistence_stage, run_us_projection_stage,
 };
 pub(super) use state::{
-    merge_rest_quote, prune_us_signal_records, prune_us_workflows, UsLiveState, UsRestSnapshot,
-    UsTickState,
+    drain_live_trades_into_tape, feed_signal_momentum_tracker, merge_rest_quote,
+    prune_us_signal_records, prune_us_workflows, UsLiveState, UsRestSnapshot, UsTickState,
 };

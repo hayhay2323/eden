@@ -3,7 +3,47 @@ use crate::core::market::MarketId;
 use crate::core::market_snapshot::CanonicalMarketSnapshot;
 use crate::ontology::links::OptionSurfaceObservation;
 use crate::pipeline::raw_events::{RawEventSource, RawEventStore};
+use crate::pipeline::raw_expectation::RawTradeTape;
 use longport::quote::{PushEvent, PushEventDetail, SecurityCalcIndex, SecurityQuote, Trade};
+
+/// Drain the per-symbol trade list off `live` and feed each entry into
+/// `tape`. Returns the drained map so the caller can still use it for
+/// downstream stages (raw expectation evaluation, etc). Pure code
+/// motion of the inlined T4-parity block in the US tick loop;
+/// behaviour is identical to the previous inline form.
+pub(crate) fn drain_live_trades_into_tape(
+    live: &mut UsLiveState,
+    tape: &mut RawTradeTape,
+) -> HashMap<Symbol, Vec<Trade>> {
+    let trades_this_tick = std::mem::take(&mut live.trades);
+    for (symbol, trades) in &trades_this_tick {
+        tape.record_tick(symbol, trades);
+    }
+    trades_this_tick
+}
+
+/// Feed convergence scores + volume-spike events into the
+/// Palantir-style second-derivative tracker. Pure code motion of the
+/// inlined `signal_momentum` feed block.
+pub(crate) fn feed_signal_momentum_tracker(
+    decision: &crate::us::graph::decision::UsDecisionSnapshot,
+    event_snapshot: &super::super::UsEventSnapshot,
+    signal_momentum: &mut crate::us::temporal::lineage::SignalMomentumTracker,
+) {
+    for (sym, score) in &decision.convergence_scores {
+        signal_momentum.record_convergence(sym.clone(), score.composite);
+    }
+    for event in &event_snapshot.events {
+        if matches!(
+            event.value.kind,
+            super::super::UsEventKind::VolumeSpike
+        ) {
+            if let super::super::UsSignalScope::Symbol(symbol) = &event.value.scope {
+                signal_momentum.record_volume_spike(symbol.clone(), event.value.magnitude);
+            }
+        }
+    }
+}
 
 pub(crate) struct UsLiveState {
     pub(crate) quotes: HashMap<Symbol, SecurityQuote>,
@@ -148,6 +188,7 @@ impl UsLiveState {
     }
 }
 
+#[derive(serde::Serialize)]
 pub(crate) struct UsRestSnapshot {
     pub(crate) quotes: HashMap<Symbol, SecurityQuote>,
     pub(crate) calc_indexes: HashMap<Symbol, SecurityCalcIndex>,
@@ -224,6 +265,17 @@ impl TickState<Vec<PushEvent>, UsRestSnapshot> for UsTickState<'_> {
 
     fn apply_update(&mut self, update: UsRestSnapshot) {
         let ingested_at = time::OffsetDateTime::now_utc();
+        if let Err(error) = crate::core::raw_event_journal::append_rest_snapshot(
+            "us",
+            "rest_snapshot",
+            &update,
+            ingested_at,
+        ) {
+            eprintln!(
+                "[raw_event_journal] us rest snapshot append failed: {}",
+                error
+            );
+        }
         self.live.record_rest_snapshot(&update, ingested_at);
         let UsRestSnapshot {
             quotes,
@@ -233,9 +285,6 @@ impl TickState<Vec<PushEvent>, UsRestSnapshot> for UsTickState<'_> {
             option_surfaces,
         } = update;
         for (symbol, quote) in quotes {
-            self.live
-                .raw_events
-                .record_quote(symbol.clone(), quote.clone(), RawEventSource::Rest);
             let merged = merge_rest_quote(self.live.quotes.get(&symbol), quote);
             self.live.quotes.insert(symbol, merged);
         }
@@ -349,6 +398,45 @@ mod tests {
             degradation: None,
             notes: vec![],
         }
+    }
+
+    fn dummy_trade(price: i64, volume: i64) -> Trade {
+        Trade {
+            price: Decimal::from(price),
+            volume,
+            timestamp: time::OffsetDateTime::UNIX_EPOCH,
+            trade_type: String::new(),
+            direction: longport::quote::TradeDirection::Neutral,
+            trade_session: longport::quote::TradeSession::Intraday,
+        }
+    }
+
+    #[test]
+    fn drain_live_trades_into_tape_clears_live_records_each() {
+        let mut live = UsLiveState::new();
+        let aapl = Symbol("AAPL.US".into());
+        let nvda = Symbol("NVDA.US".into());
+        live.trades
+            .insert(aapl.clone(), vec![dummy_trade(190, 100), dummy_trade(191, 200)]);
+        live.trades.insert(nvda.clone(), vec![dummy_trade(900, 50)]);
+
+        let mut tape = RawTradeTape::default();
+        let drained = drain_live_trades_into_tape(&mut live, &mut tape);
+
+        assert!(
+            live.trades.is_empty(),
+            "live.trades must be drained — it is mem::take'd by the stage"
+        );
+        assert_eq!(drained.len(), 2, "drain must return both symbols");
+        assert_eq!(drained.get(&aapl).map(|v| v.len()), Some(2));
+        assert_eq!(drained.get(&nvda).map(|v| v.len()), Some(1));
+
+        // The tape side-effect: every (symbol, &[Trade]) pair was
+        // recorded. We can't peek inside RawTradeTape from here, but
+        // any panic / type mismatch from `record_tick` would fail the
+        // test — so reaching this point proves the loop ran for both
+        // symbols.
+        let _ = tape;
     }
 
     #[test]
