@@ -1519,6 +1519,7 @@ impl PreparedRuntimeContext {
         backward_reasoning: Option<&BackwardReasoningSnapshot>,
         active_positions: &[ActionNode],
         realized_outcomes: Option<Vec<CaseRealizedOutcomeRecord>>,
+        mut stage_timer: Option<&mut crate::core::runtime::TickStageTimer>,
     ) {
         self.publish_projection(
             market_id,
@@ -1532,6 +1533,9 @@ impl PreparedRuntimeContext {
             received_push,
             received_update,
         );
+        if let Some(ref mut timer) = stage_timer {
+            timer.mark("S21b3a_publish_projection");
+        }
         self.persist_projection_followups_from_inputs(
             case_market,
             LiveMarket::from(market_id),
@@ -1551,6 +1555,9 @@ impl PreparedRuntimeContext {
             realized_outcomes,
         )
         .await;
+        if let Some(timer) = stage_timer {
+            timer.mark("S21b3b_persist_followups");
+        }
     }
 
     #[cfg(feature = "persistence")]

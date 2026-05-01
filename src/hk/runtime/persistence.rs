@@ -47,26 +47,16 @@ pub(super) async fn run_hk_persistence_stage(
 ) {
     runtime.persist_hk_tick(tick_record.clone()).await;
 
-    let is_full_snapshot = tick % 30 == 0 || tick <= 1;
-    let archive = if is_full_snapshot {
-        crate::ontology::microstructure::TickArchive::from_raw(tick, raw)
-    } else {
-        crate::ontology::microstructure::TickArchive {
-            tick_number: tick,
-            timestamp: raw.timestamp,
-            calc_indexes: Vec::new(),
-            order_books: Vec::new(),
-            candlesticks: Vec::new(),
-            trades: crate::ontology::microstructure::archive_trades_pub(raw),
-            capital_flows: Vec::new(),
-            capital_distributions: Vec::new(),
-            quotes: crate::ontology::microstructure::archive_quotes_pub(raw),
-            intraday: Vec::new(),
-            option_surfaces: Vec::new(),
-            market_temperature: None,
-            broker_queues: crate::ontology::microstructure::archive_broker_queues_pub(raw),
-        }
-    };
+    // Full archive every tick (parity with US — see
+    // run_us_persistence_stage). The previous 30-tick sampling wrote
+    // partial archives on intermediate ticks (empty order_books /
+    // option_surfaces / calc_indexes / broker_queues), which made
+    // replay state non-equivalent to live state at non-30 ticks. Write
+    // rate is unchanged; only payload size grows. Tick latency cost is
+    // observable via tick_summary.tick_ms and ndjson_drops; if a real
+    // size pressure shows up, the right answer is compression /
+    // schema cleanup, not sampling.
+    let archive = crate::ontology::microstructure::TickArchive::from_raw_for_market("hk", tick, raw);
     runtime.persist_market_tick_archive(archive).await;
 
     if tick % 30 == 0 {
@@ -237,6 +227,7 @@ pub(super) async fn run_hk_projection_stage<S: AnalystService>(
             Some(&world_snapshots.backward_reasoning),
             &live_snapshot.active_position_nodes,
             (!realized_outcomes.is_empty()).then_some(realized_outcomes),
+            None, // HK runtime doesn't yet thread a stage timer
         )
         .await;
 
