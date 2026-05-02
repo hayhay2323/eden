@@ -5,6 +5,7 @@ import { FocusPanel } from "@/features/desk/focus-panel";
 import { MarketSessionPanel } from "@/features/desk/market-session-panel";
 import { ObjectInspectorPanel } from "@/features/desk/object-inspector-panel";
 import { ReasoningPanel } from "@/features/desk/reasoning-panel";
+import { WorldReflectionPanel } from "@/features/desk/world-reflection-panel";
 import { SelectionHint, SurfaceKpi } from "@/features/workbench/surface-support";
 
 export function DeskPage() {
@@ -42,6 +43,7 @@ export function DeskPage() {
         </div>
 
         <div className="eden-surface-layout__stack">
+          <WorldReflectionPanel />
           <ReasoningPanel snap={snap} />
         </div>
       </div>

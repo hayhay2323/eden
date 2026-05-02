@@ -8,6 +8,9 @@ import type {
   OperationalNeighborhood,
   OperationalSnapshot,
   RuntimeTaskRecord,
+  IntentDirection,
+  IntentKind,
+  WorldIntentReflectionQuery,
 } from "./types";
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8787";
@@ -201,6 +204,28 @@ export function fetchLiveSnapshot(market: string, signal?: AbortSignal) {
     return fetchJson<unknown>("/api/us/live", { signal });
   }
   return fetchJson<unknown>("/api/live", { signal });
+}
+
+export interface WorldReflectionRequest {
+  kind?: IntentKind;
+  direction?: IntentDirection;
+  limit?: number;
+}
+
+export function fetchAgentWorldReflection(
+  market: string,
+  options: WorldReflectionRequest = {},
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams();
+  if (options.kind) params.set("kind", options.kind);
+  if (options.direction) params.set("direction", options.direction);
+  if (options.limit != null) params.set("limit", String(options.limit));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return fetchJson<WorldIntentReflectionQuery>(
+    `/api/agent/${encodeURIComponent(market)}/world/reflection${suffix}`,
+    { signal },
+  );
 }
 
 export function postCaseTransition(

@@ -810,6 +810,71 @@ export interface AgentMacroEventCandidate {
   impact: AgentEventImpact;
 }
 
+export type DecimalLike = number | string;
+
+export type IntentKind =
+  | "accumulation"
+  | "distribution"
+  | "forced_unwind"
+  | "passive_rebalance"
+  | "event_repricing"
+  | "failed_propagation"
+  | "cross_market_lead"
+  | "absorption"
+  | "unknown";
+
+export type IntentDirection = "buy" | "sell" | "mixed" | "neutral";
+
+export interface WorldIntentReflectionRecord {
+  record_id: string;
+  market: EdenMarket | string;
+  predicted_intent_id: string;
+  tick_predicted_at: number;
+  tick_resolved_at: number;
+  predicted_kind: IntentKind;
+  predicted_direction: IntentDirection;
+  realized_kind: IntentKind;
+  realized_direction: IntentDirection;
+  confidence: DecimalLike;
+  expectation_count: number;
+  violation_count: number;
+  violation_magnitude: DecimalLike;
+  violation_descriptions: string[];
+}
+
+export interface WorldIntentReflectionBucketSummary {
+  key: string;
+  kind: IntentKind;
+  direction: IntentDirection;
+  resolved_count: number;
+  reliability: DecimalLike;
+  violation_probability: DecimalLike;
+  mean_confidence: DecimalLike;
+}
+
+export interface WorldIntentReflectionSummary {
+  market: EdenMarket | string;
+  resolved_count: number;
+  confirmed_count: number;
+  violated_count: number;
+  reliability: DecimalLike;
+  violation_rate: DecimalLike;
+  mean_confidence: DecimalLike;
+  calibration_gap: DecimalLike;
+  mean_violation_magnitude: DecimalLike;
+  best_bucket?: WorldIntentReflectionBucketSummary | null;
+  worst_bucket?: WorldIntentReflectionBucketSummary | null;
+  latest?: WorldIntentReflectionRecord | null;
+}
+
+export interface WorldIntentReflectionQuery {
+  market: EdenMarket | string;
+  summary?: WorldIntentReflectionSummary | null;
+  focus?: WorldIntentReflectionBucketSummary | null;
+  buckets: WorldIntentReflectionBucketSummary[];
+  recent: WorldIntentReflectionRecord[];
+}
+
 export interface OperationalSidecars {
   sector_flows: AgentSectorFlow[];
   backward_investigations: BackwardInvestigation[];
