@@ -67,6 +67,11 @@ pub struct SectorKinematicsEvent {
 pub struct SectorKinematicsTracker {
     /// (sector_id, NodeKind) → rolling sector_mean history
     history: HashMap<(String, NodeKind), VecDeque<f64>>,
+    /// (sector_id, NodeKind) → last tick this entry was observed at.
+    /// Used by `apply_to_perception_graph` so unobserved-this-tick
+    /// entries don't fraudulently bump their `last_tick` and confuse
+    /// Y / L4 staleness checks.
+    last_observed: HashMap<(String, NodeKind), u64>,
 }
 
 impl SectorKinematicsTracker {
@@ -74,13 +79,14 @@ impl SectorKinematicsTracker {
         Self::default()
     }
 
-    fn observe(&mut self, sector_id: &str, kind: NodeKind, value: f64) {
+    fn observe(&mut self, sector_id: &str, kind: NodeKind, value: f64, tick: u64) {
         let key = (sector_id.to_string(), kind);
-        let entry = self.history.entry(key).or_default();
+        let entry = self.history.entry(key.clone()).or_default();
         entry.push_back(value);
         while entry.len() > HISTORY_LEN {
             entry.pop_front();
         }
+        self.last_observed.insert(key, tick);
     }
 
     fn velocity(history: &VecDeque<f64>) -> Option<f64> {
@@ -123,6 +129,8 @@ impl SectorKinematicsTracker {
         graph: &mut crate::perception::PerceptionGraph,
         tick: u64,
     ) {
+        let _ = tick; // current-tick parameter retained for symmetry; the
+                      // per-entry stamp comes from `last_observed`.
         for ((sector_id, kind), history) in self.history.iter() {
             if history.is_empty() {
                 continue;
@@ -145,6 +153,15 @@ impl SectorKinematicsTracker {
                         .get(sector_id, &kind_str)
                         .and_then(|s| s.classification)
                 });
+            // Per-entry last_tick: when this (sector, kind) was last
+            // observed by `observe()`, NOT the apply-call tick. A
+            // sector that dropped out of the universe keeps its prior
+            // last_tick so Y staleness checks aren't lied to.
+            let last_tick = self
+                .last_observed
+                .get(&(sector_id.clone(), *kind))
+                .copied()
+                .unwrap_or(0);
             graph.sector_kinematics.upsert(
                 sector_id.clone(),
                 kind_str,
@@ -153,7 +170,7 @@ impl SectorKinematicsTracker {
                     velocity,
                     acceleration,
                     classification,
-                    last_tick: tick,
+                    last_tick,
                 },
             );
         }
@@ -168,6 +185,7 @@ pub fn update_and_detect(
     sectors: &SectorSubKgRegistry,
     tracker: &mut SectorKinematicsTracker,
     ts: DateTime<Utc>,
+    tick: u64,
 ) -> Vec<SectorKinematicsEvent> {
     let mut events = Vec::new();
     for (sid, sector) in &sectors.sectors {
@@ -181,7 +199,7 @@ pub fn update_and_detect(
             let Some(agg) = sector.agg.get(&kind) else {
                 continue;
             };
-            tracker.observe(sid, kind, agg.mean);
+            tracker.observe(sid, kind, agg.mean, tick);
 
             let key = (sid.clone(), kind);
             let history = match tracker.history.get(&key) {
@@ -302,9 +320,9 @@ mod tests {
         // That tick should emit TopForming. Collect events from every
         // observation so we can find it.
         let mut all = Vec::new();
-        for v in [0.1, 0.3, 0.5, 0.6, 0.55] {
-            let reg = mk_registry_at_mean("tech", kind, v);
-            all.extend(update_and_detect("test", &reg, &mut tracker, Utc::now()));
+        for (i, v) in [0.1, 0.3, 0.5, 0.6, 0.55].iter().enumerate() {
+            let reg = mk_registry_at_mean("tech", kind, *v);
+            all.extend(update_and_detect("test", &reg, &mut tracker, Utc::now(), i as u64));
         }
         let top = all.iter().find(|e| {
             e.sector_id == "tech" && matches!(e.kind, SectorTurningPointKind::TopForming)
@@ -321,9 +339,9 @@ mod tests {
         let mut tracker = SectorKinematicsTracker::new();
         let kind = NodeKind::Intent;
         let mut all = Vec::new();
-        for v in [0.6, 0.4, 0.2, 0.1, 0.15] {
-            let reg = mk_registry_at_mean("finance", kind, v);
-            all.extend(update_and_detect("test", &reg, &mut tracker, Utc::now()));
+        for (i, v) in [0.6, 0.4, 0.2, 0.1, 0.15].iter().enumerate() {
+            let reg = mk_registry_at_mean("finance", kind, *v);
+            all.extend(update_and_detect("test", &reg, &mut tracker, Utc::now(), i as u64));
         }
         let bot = all.iter().find(|e| {
             e.sector_id == "finance" && matches!(e.kind, SectorTurningPointKind::BottomForming)
@@ -340,9 +358,9 @@ mod tests {
         let mut tracker = SectorKinematicsTracker::new();
         let kind = NodeKind::Pressure;
         let mut all_evs = Vec::new();
-        for v in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7] {
-            let reg = mk_registry_at_mean("energy", kind, v);
-            all_evs.extend(update_and_detect("test", &reg, &mut tracker, Utc::now()));
+        for (i, v) in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7].iter().enumerate() {
+            let reg = mk_registry_at_mean("energy", kind, *v);
+            all_evs.extend(update_and_detect("test", &reg, &mut tracker, Utc::now(), i as u64));
         }
         for ev in &all_evs {
             assert!(
@@ -357,18 +375,23 @@ mod tests {
     fn apply_to_perception_graph_writes_snapshot_for_each_observed_kind() {
         let mut tracker = SectorKinematicsTracker::new();
         let kind = NodeKind::Pressure;
+        // Three observations on tick 5; apply on tick 9. snap.last_tick
+        // should reflect the OBSERVED tick (5), not the apply-call tick.
         for v in [0.1, 0.2, 0.3] {
             let reg = mk_registry_at_mean("tech", kind, v);
-            let _ = update_and_detect("test", &reg, &mut tracker, Utc::now());
+            let _ = update_and_detect("test", &reg, &mut tracker, Utc::now(), 5);
         }
         let mut graph = crate::perception::PerceptionGraph::new();
-        tracker.apply_to_perception_graph(&[], &mut graph, 7);
+        tracker.apply_to_perception_graph(&[], &mut graph, 9);
 
         let snap = graph
             .sector_kinematics
             .get("tech", "Pressure")
             .expect("graph should hold snapshot for tracked sector");
-        assert_eq!(snap.last_tick, 7);
+        assert_eq!(
+            snap.last_tick, 5,
+            "last_tick must come from the last observe(), not the apply call"
+        );
         // 3 samples, [0.1, 0.2, 0.3] → level_now=0.3, velocity=(0.3-0.1)/2=0.1
         assert!((snap.level_now - 0.3).abs() < 1e-9, "got {}", snap.level_now);
         assert!((snap.velocity - 0.1).abs() < 1e-9, "got {}", snap.velocity);
@@ -388,8 +411,8 @@ mod tests {
         let mut last_tick = 0u64;
         for (i, v) in [0.1, 0.3, 0.5, 0.6, 0.55].iter().enumerate() {
             let reg = mk_registry_at_mean("tech", kind, *v);
-            last_events = update_and_detect("test", &reg, &mut tracker, Utc::now());
             last_tick = i as u64;
+            last_events = update_and_detect("test", &reg, &mut tracker, Utc::now(), last_tick);
             tracker.apply_to_perception_graph(&last_events, &mut graph, last_tick);
         }
         // After the final tick (0.55 after 0.6), TopForming should fire.
@@ -415,6 +438,46 @@ mod tests {
     }
 
     #[test]
+    fn apply_to_perception_graph_keeps_prior_last_tick_when_sector_unobserved() {
+        // Pin Y staleness contract: a (sector, kind) that was observed
+        // on tick 5 but NOT on tick 10 must still report last_tick=5
+        // in the graph after the tick-10 apply call. Otherwise Y can't
+        // distinguish "fresh" from "stale".
+        let mut tracker = SectorKinematicsTracker::new();
+        let kind = NodeKind::Pressure;
+        let mut graph = crate::perception::PerceptionGraph::new();
+
+        // Tick 5: tech only.
+        let reg_tech = mk_registry_at_mean("tech", kind, 0.5);
+        let evs = update_and_detect("test", &reg_tech, &mut tracker, Utc::now(), 5);
+        tracker.apply_to_perception_graph(&evs, &mut graph, 5);
+        assert_eq!(
+            graph
+                .sector_kinematics
+                .get("tech", "Pressure")
+                .unwrap()
+                .last_tick,
+            5
+        );
+
+        // Tick 10: finance only — tech is NOT in this registry.
+        let reg_finance = mk_registry_at_mean("finance", kind, -0.2);
+        let evs = update_and_detect("test", &reg_finance, &mut tracker, Utc::now(), 10);
+        tracker.apply_to_perception_graph(&evs, &mut graph, 10);
+
+        let tech_snap = graph.sector_kinematics.get("tech", "Pressure").unwrap();
+        let finance_snap = graph.sector_kinematics.get("finance", "Pressure").unwrap();
+        assert_eq!(
+            tech_snap.last_tick, 5,
+            "tech wasn't observed on tick 10, last_tick must remain 5"
+        );
+        assert_eq!(
+            finance_snap.last_tick, 10,
+            "finance was observed on tick 10"
+        );
+    }
+
+    #[test]
     fn apply_to_perception_graph_classification_persists_across_event_free_ticks() {
         // Pin the doc-claimed sticky semantics: once a TopForming
         // classification is in the graph, a subsequent tick with no
@@ -429,7 +492,7 @@ mod tests {
         let mut last_events = Vec::new();
         for (i, v) in [0.1, 0.3, 0.5, 0.6, 0.55].iter().enumerate() {
             let reg = mk_registry_at_mean("tech", kind, *v);
-            last_events = update_and_detect("test", &reg, &mut tracker, Utc::now());
+            last_events = update_and_detect("test", &reg, &mut tracker, Utc::now(), i as u64);
             tracker.apply_to_perception_graph(&last_events, &mut graph, i as u64);
         }
         assert_eq!(
@@ -446,7 +509,7 @@ mod tests {
         // Now a tick with no event (continuing the descent gently —
         // velocity stays negative, no new zero-crossing).
         let reg = mk_registry_at_mean("tech", kind, 0.50);
-        let next_events = update_and_detect("test", &reg, &mut tracker, Utc::now());
+        let next_events = update_and_detect("test", &reg, &mut tracker, Utc::now(), 6);
         tracker.apply_to_perception_graph(&next_events, &mut graph, 6);
 
         let snap = graph.sector_kinematics.get("tech", "Pressure").unwrap();
@@ -463,9 +526,9 @@ mod tests {
     fn overlay_sector_skipped() {
         let mut tracker = SectorKinematicsTracker::new();
         let kind = NodeKind::Pressure;
-        for v in [0.1, 0.3, 0.5, 0.4, 0.3] {
-            let reg = mk_registry_at_mean("china_adr", kind, v);
-            let evs = update_and_detect("test", &reg, &mut tracker, Utc::now());
+        for (i, v) in [0.1, 0.3, 0.5, 0.4, 0.3].iter().enumerate() {
+            let reg = mk_registry_at_mean("china_adr", kind, *v);
+            let evs = update_and_detect("test", &reg, &mut tracker, Utc::now(), i as u64);
             for ev in &evs {
                 assert!(
                     ev.sector_id != "china_adr",
