@@ -56,7 +56,8 @@ pub(super) async fn run_hk_persistence_stage(
     // observable via tick_summary.tick_ms and ndjson_drops; if a real
     // size pressure shows up, the right answer is compression /
     // schema cleanup, not sampling.
-    let archive = crate::ontology::microstructure::TickArchive::from_raw_for_market("hk", tick, raw);
+    let archive =
+        crate::ontology::microstructure::TickArchive::from_raw_for_market("hk", tick, raw);
     runtime.persist_market_tick_archive(archive).await;
 
     if tick % 30 == 0 {
@@ -141,6 +142,7 @@ pub(super) async fn run_hk_projection_stage<S: AnalystService>(
         crate::pipeline::broker_outcome_feedback::BrokerEntrySnapshot,
     >,
     broker_credited_setup_ids: &mut std::collections::HashSet<String>,
+    stage_timer: &mut crate::core::runtime::TickStageTimer,
 ) {
     let live_snapshot = &artifact_projection.live_snapshot;
     let agent_snapshot = &artifact_projection.agent_snapshot;
@@ -192,6 +194,7 @@ pub(super) async fn run_hk_projection_stage<S: AnalystService>(
             broker_credited_setup_ids,
         );
     }
+    stage_timer.mark("S21b2_outcomes_compute");
 
     runtime
         .publish_projection_with_followups_from_inputs(
@@ -227,7 +230,6 @@ pub(super) async fn run_hk_projection_stage<S: AnalystService>(
             Some(&world_snapshots.backward_reasoning),
             &live_snapshot.active_position_nodes,
             (!realized_outcomes.is_empty()).then_some(realized_outcomes),
-            None, // HK runtime doesn't yet thread a stage timer
         )
         .await;
 
@@ -241,6 +243,7 @@ pub(super) async fn run_hk_projection_stage<S: AnalystService>(
         )
         .await;
     }
+    stage_timer.mark("S21b4_settle_horizons");
 
     let symbol_state_records = live_snapshot
         .symbol_states
@@ -258,6 +261,7 @@ pub(super) async fn run_hk_projection_stage<S: AnalystService>(
             .persist_symbol_perception_states(crate::cases::CaseMarket::Hk, symbol_state_records)
             .await;
     }
+    stage_timer.mark("S21b5_persist_perception_states");
 
     runtime
         .persist_hk_lineage_stats(tick, now, LINEAGE_WINDOW, lineage_stats)

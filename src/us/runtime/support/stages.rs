@@ -167,7 +167,6 @@ pub(crate) async fn run_us_projection_stage<S: AnalystService>(
             agent_snapshot.backward_reasoning.as_ref(),
             &live_snapshot.active_position_nodes,
             (!realized_outcomes.is_empty()).then_some(realized_outcomes),
-            Some(stage_timer),
         )
         .await;
 

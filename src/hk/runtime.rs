@@ -630,6 +630,7 @@ pub async fn run() {
         let tick_started_at = tick_advance.started_at;
         let tick_advance = tick_advance.advance;
         let now = tick_advance.now;
+        let mut stage_timer = crate::core::runtime::TickStageTimer::new();
 
         if tick_advance.received_update {
             for idx in rest.calc_indexes.values() {
@@ -688,6 +689,24 @@ pub async fn run() {
             .filter(|(_, t)| !t.is_empty())
             .map(|(s, t)| (s.clone(), t.len(), t.iter().map(|t| t.volume).sum::<i64>()))
             .collect();
+
+        // S01 raw microstructure feed — mirror US trade-tape ingestion, with
+        // HK's broker/depth queues included. This must run before reasoning
+        // snapshots broker/depth/trade evidence for current-tick setups.
+        for (symbol, brokers) in &live.brokers {
+            raw_broker_presence.record_tick(symbol, brokers);
+        }
+        broker_archetype_field.observe_tick(&raw_broker_presence);
+        for (symbol, depth) in &live.depths {
+            raw_depth_levels.record_tick(symbol, depth);
+        }
+        for (symbol, trades) in &live.trades {
+            raw_trade_tape.record_tick(symbol, trades);
+        }
+        stage_timer.mark("S01_trade_tape_feed");
+        // S02 after-hours branch — HK keeps processing live pushed state
+        // outside regular session, so this is an explicit no-op branch.
+        stage_timer.mark("S02_S03_canonical");
 
         let links = LinkSnapshot::from_canonical_market(&canonical_market_snapshot, &store);
         let readiness = compute_readiness(&links);
@@ -971,6 +990,7 @@ pub async fn run() {
                 vortex_insights.push((insight, vortex.clone()));
             }
         }
+        stage_timer.mark("S04_S06_perception_pressure");
         let mut reasoning_snapshot = ReasoningSnapshot::empty(deep_reasoning_decision.timestamp);
 
         // Inject vortex-derived tactical setups from pressure field WITH reasoning.
@@ -1167,6 +1187,7 @@ pub async fn run() {
             &reasoning_snapshot,
             &hk_momentum,
         );
+        stage_timer.mark("S07_S13_setups_bp_hub");
         let new_set: HashSet<&Symbol> = action_stage.newly_entered.iter().collect();
         #[cfg(not(feature = "persistence"))]
         let _ = (
@@ -1303,23 +1324,10 @@ pub async fn run() {
         for dyn_entry in dynamics.values() {
             hk_momentum.record_tick(dyn_entry);
         }
-        // Y#1 — feed raw broker queue + depth levels into the raw trackers.
-        // No aggregation between LiveState.brokers / LiveState.depths and the
-        // tracker; this is literally "what Longport pushed this tick, per
-        // symbol, per broker identity / depth position".
-        for (symbol, brokers) in &live.brokers {
-            raw_broker_presence.record_tick(symbol, brokers);
-        }
-        // Broker-level belief: reclassify all brokers present this
-        // tick and update per-broker posterior. Ontology-entity-level
-        // belief, independent of symbol.
-        broker_archetype_field.observe_tick(&raw_broker_presence);
-        for (symbol, depth) in &live.depths {
-            raw_depth_levels.record_tick(symbol, depth);
-        }
-        for (symbol, trades) in &live.trades {
-            raw_trade_tape.record_tick(symbol, trades);
-        }
+        stage_timer.mark("S18_signal_momentum_feed");
+        // Raw tracker ingestion moved to S01 so current-tick broker /
+        // depth / trade evidence is available before setup reasoning
+        // snapshots.
         // Per-symbol sub-KG update: mirror live quotes/depths/brokers into
         // typed-node graphs. Pure mechanical wiring (one Eden field → one
         // sub-KG node), no inference. Snapshot every 5 ticks to NDJSON
@@ -3602,6 +3610,7 @@ pub async fn run() {
             // receding wave narrative to the agent snapshot's
             // wake.reasons before the snapshot is persisted downstream.
             let mut artifact_projection = artifact_projection;
+            stage_timer.mark("S14_S19_state_workflow_projection");
             let absence_count = artifact_projection
                 .agent_snapshot
                 .perception_states
@@ -4074,6 +4083,7 @@ pub async fn run() {
                 }
             }
             // ── Belief field update + wake + snapshot ──
+            stage_timer.mark("S20_wake_surface");
             // Update from freshly-built pressure field (tick-scale) plus
             // current symbol states, emit notable belief wake lines, and
             // write a snapshot every 60s via tokio::spawn (non-blocking).
@@ -4342,6 +4352,7 @@ pub async fn run() {
                     }
                 }
             }
+            stage_timer.mark("S21a_sk_snapshots");
             #[cfg(feature = "persistence")]
             run_hk_projection_stage(
                 &mut runtime,
@@ -4365,6 +4376,7 @@ pub async fn run() {
                 &mut broker_archetype_field,
                 &mut broker_entry_snapshots,
                 &mut broker_credited_setup_ids,
+                &mut stage_timer,
             )
             .await;
             #[cfg(not(feature = "persistence"))]
@@ -4445,6 +4457,24 @@ pub async fn run() {
             &action_stage.newly_entered,
         );
 
+        stage_timer.mark("S21c_heartbeat_tail");
+        let stage_top = stage_timer.top_n(5);
+        if tick % 10 == 0 {
+            let parts: Vec<String> = stage_top
+                .iter()
+                .map(|(name, dur)| format!("{}={}ms", name, dur.as_millis()))
+                .collect();
+            eprintln!(
+                "[hk tick {}] tick_ms={} stage_top={}",
+                tick,
+                tick_started_at.elapsed().as_millis(),
+                parts.join(",")
+            );
+        }
+        let stage_top_json: Vec<serde_json::Value> = stage_top
+            .iter()
+            .map(|(name, dur)| json!({ "stage": name, "ms": dur.as_millis() }))
+            .collect();
         runtime.runtime_task_heartbeat(
             format!(
                 "hk runtime tick {} · pushes={} · ready={}",
@@ -4459,6 +4489,7 @@ pub async fn run() {
                 "received_push": tick_advance.received_push,
                 "received_update": tick_advance.received_update,
                 "tick_ms": tick_started_at.elapsed().as_millis(),
+                "stage_top5_ms": stage_top_json,
                 "history_len": history.len(),
                 "learned_edges": edge_ledger.len(),
                 "ready_symbols": readiness.ready_symbols.len(),

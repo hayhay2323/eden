@@ -839,6 +839,67 @@ fn runtime_stage_plan_is_the_shared_hk_us_contract() {
 }
 
 #[test]
+fn hk_us_runtime_stage_timer_markers_stay_symmetric() {
+    for path in ["src/hk/runtime.rs", "src/us/runtime.rs"] {
+        let runtime = read(path);
+        for needle in [
+            "TickStageTimer::new()",
+            "S01_trade_tape_feed",
+            "S02_S03_canonical",
+            "S04_S06_perception_pressure",
+            "S07_S13_setups_bp_hub",
+            "S18_signal_momentum_feed",
+            "S14_S19_state_workflow_projection",
+            "S20_wake_surface",
+            "S21a_sk_snapshots",
+            "S21c_heartbeat_tail",
+            "stage_top5_ms",
+        ] {
+            assert!(
+                runtime.contains(needle),
+                "{path} must keep runtime stage timer marker `{needle}`",
+            );
+        }
+    }
+
+    let hk_persistence = read("src/hk/runtime/persistence.rs");
+    let us_persistence = read("src/us/runtime/support/stages.rs");
+    for (path, src) in [
+        ("src/hk/runtime/persistence.rs", hk_persistence),
+        ("src/us/runtime/support/stages.rs", us_persistence),
+    ] {
+        for needle in [
+            "S21b2_outcomes_compute",
+            "S21b4_settle_horizons",
+            "S21b5_persist_perception_states",
+        ] {
+            assert!(
+                src.contains(needle),
+                "{path} must keep projection persistence timer marker `{needle}`",
+            );
+        }
+    }
+}
+
+#[test]
+fn persistence_breakdown_scaffold_stays_removed() {
+    let context = strip_comments(&read("src/core/runtime/context.rs"));
+    for banned in [
+        "EDEN_PERSIST_TIMING",
+        "persist_timing_enabled",
+        "persist_followups_breakdown",
+        "persist_followups_outer",
+        "S21b3a_publish_projection",
+        "S21b3b_persist_followups",
+    ] {
+        assert!(
+            !context.contains(banned),
+            "diagnostic persistence scaffold `{banned}` should stay removed",
+        );
+    }
+}
+
+#[test]
 fn frontier_worker_is_graph_local_not_registry_scan() {
     let frontier = read("src/pipeline/frontier.rs");
     for needle in [

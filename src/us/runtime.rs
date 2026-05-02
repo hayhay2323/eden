@@ -1905,6 +1905,7 @@ pub async fn run() {
 
         // S18 signal_momentum_feed — Palantir-style 2nd derivative detection.
         feed_signal_momentum_tracker(&decision, &event_snapshot, &mut signal_momentum);
+        stage_timer.mark("S18_signal_momentum_feed");
 
         // Build projection bundle
         let mut artifact_projection = project_us(UsProjectionInputs {

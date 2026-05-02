@@ -297,10 +297,7 @@ impl AgentArtifactPaths {
                 market,
                 ArtifactKind::Recommendations,
             ),
-            agent_perception_path: resolve_artifact_path(
-                market,
-                ArtifactKind::Perception,
-            ),
+            agent_perception_path: resolve_artifact_path(market, ArtifactKind::Perception),
             agent_recommendation_journal_path: resolve_artifact_path(
                 market,
                 ArtifactKind::RecommendationJournal,
@@ -462,9 +459,7 @@ impl PreparedRuntimeContext {
         channel_capacity: usize,
         batch_size: usize,
         tap: Option<crate::core::runtime::telemetry::PushTap>,
-        health: Option<
-            std::sync::Arc<crate::core::runtime::push_health::PushReceiverHealth>,
-        >,
+        health: Option<std::sync::Arc<crate::core::runtime::push_health::PushReceiverHealth>>,
     ) -> mpsc::Receiver<Vec<PushEvent>> {
         spawn_batched_push_forwarder(
             receiver,
@@ -1397,13 +1392,6 @@ impl PreparedRuntimeContext {
     }
 
     #[cfg(feature = "persistence")]
-    fn persist_timing_enabled() -> bool {
-        use std::sync::OnceLock;
-        static ENABLED: OnceLock<bool> = OnceLock::new();
-        *ENABLED.get_or_init(|| std::env::var("EDEN_PERSIST_TIMING").as_deref() == Ok("1"))
-    }
-
-    #[cfg(feature = "persistence")]
     pub async fn persist_projection_followups(
         &self,
         market: CaseMarket,
@@ -1415,22 +1403,8 @@ impl PreparedRuntimeContext {
         source: &'static str,
         realized_outcomes: Option<Vec<CaseRealizedOutcomeRecord>>,
     ) {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static BREAKDOWN_COUNTER: AtomicU64 = AtomicU64::new(0);
-        let timing_on = Self::persist_timing_enabled();
-        let log_breakdown = if timing_on {
-            BREAKDOWN_COUNTER
-                .fetch_add(1, Ordering::Relaxed)
-                .is_multiple_of(10)
-        } else {
-            false
-        };
-
-        let t0 = Instant::now();
         self.persist_knowledge_projection(knowledge_bundle).await;
-        let t_kb = t0.elapsed();
 
-        let t1 = Instant::now();
         if !setups.is_empty() {
             let hypothesis_by_id = hypotheses
                 .iter()
@@ -1452,9 +1426,7 @@ impl PreparedRuntimeContext {
             self.persist_horizon_evaluations(market, setups, recorded_at)
                 .await;
         }
-        let t_setups_horizons = t1.elapsed();
 
-        let t2 = Instant::now();
         self.persist_case_reasoning_assessments_for_cases(
             market,
             cases,
@@ -1464,26 +1436,9 @@ impl PreparedRuntimeContext {
             source,
         )
         .await;
-        let t_assessments = t2.elapsed();
 
-        let t3 = Instant::now();
-        let outcome_count = realized_outcomes.as_ref().map(|v| v.len()).unwrap_or(0);
         if let Some(records) = realized_outcomes {
             self.persist_hk_case_realized_outcomes(records).await;
-        }
-        let t_outcomes = t3.elapsed();
-
-        if log_breakdown {
-            eprintln!(
-                "[persist_followups_breakdown] kb={}ms setups+horizons={}ms assessments={}ms outcomes={}ms (n_setups={} n_cases={} n_outcomes={})",
-                t_kb.as_millis(),
-                t_setups_horizons.as_millis(),
-                t_assessments.as_millis(),
-                t_outcomes.as_millis(),
-                setups.len(),
-                cases.len(),
-                outcome_count,
-            );
         }
     }
 
@@ -1507,18 +1462,6 @@ impl PreparedRuntimeContext {
         source: &'static str,
         realized_outcomes: Option<Vec<CaseRealizedOutcomeRecord>>,
     ) {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static OUTER_BREAKDOWN_COUNTER: AtomicU64 = AtomicU64::new(0);
-        let timing_on = Self::persist_timing_enabled();
-        let log_outer = if timing_on {
-            OUTER_BREAKDOWN_COUNTER
-                .fetch_add(1, Ordering::Relaxed)
-                .is_multiple_of(10)
-        } else {
-            false
-        };
-
-        let t_build = Instant::now();
         let knowledge_bundle = self.build_knowledge_followup_bundle(
             live_market,
             tick_number,
@@ -1534,9 +1477,7 @@ impl PreparedRuntimeContext {
             backward_reasoning,
             active_positions,
         );
-        let build_ms = t_build.elapsed().as_millis();
 
-        let t_persist = Instant::now();
         self.persist_projection_followups(
             market,
             knowledge_bundle,
@@ -1548,23 +1489,6 @@ impl PreparedRuntimeContext {
             realized_outcomes,
         )
         .await;
-        let persist_ms = t_persist.elapsed().as_millis();
-
-        if log_outer {
-            eprintln!(
-                "[persist_followups_outer] build={build_ms}ms persist={persist_ms}ms \
-                 (n_macro_events={} n_decisions={} n_hyp={} n_setups={} n_cases={} \
-                  n_snap_links={} n_rec_links={} n_active_pos={})",
-                macro_events.len(),
-                decisions.len(),
-                hypotheses.len(),
-                setups.len(),
-                cases.len(),
-                snapshot_knowledge_links.len(),
-                recommendation_knowledge_links.len(),
-                active_positions.len(),
-            );
-        }
     }
 
     #[cfg(feature = "persistence")]
@@ -1594,7 +1518,6 @@ impl PreparedRuntimeContext {
         backward_reasoning: Option<&BackwardReasoningSnapshot>,
         active_positions: &[ActionNode],
         realized_outcomes: Option<Vec<CaseRealizedOutcomeRecord>>,
-        mut stage_timer: Option<&mut crate::core::runtime::TickStageTimer>,
     ) {
         self.publish_projection(
             market_id,
@@ -1608,9 +1531,6 @@ impl PreparedRuntimeContext {
             received_push,
             received_update,
         );
-        if let Some(ref mut timer) = stage_timer {
-            timer.mark("S21b3a_publish_projection");
-        }
         self.persist_projection_followups_from_inputs(
             case_market,
             LiveMarket::from(market_id),
@@ -1630,9 +1550,6 @@ impl PreparedRuntimeContext {
             realized_outcomes,
         )
         .await;
-        if let Some(timer) = stage_timer {
-            timer.mark("S21b3b_persist_followups");
-        }
     }
 
     #[cfg(feature = "persistence")]
