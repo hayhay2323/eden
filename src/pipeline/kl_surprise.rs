@@ -194,6 +194,57 @@ impl KlSurpriseTracker {
     /// saturation" than to a hard cutoff. The choice of `2` in the
     /// divisor mirrors the standard practice of using ≈2σ as the
     /// "starting to be unusual" reference; it is *not* a threshold.
+    /// Mutate the perception graph's KL-surprise sub-graph in place
+    /// with this tick's readings. Symmetric to `surprise_summary` —
+    /// derives the same `(magnitude, direction)` from the same
+    /// baselines — but writes typed snapshots into the unified graph
+    /// rather than returning a HashMap. Symbols with no informed
+    /// baseline are simply skipped (no entry written, no entry
+    /// removed).
+    ///
+    /// Per the eden thesis: detectors are perceivers; perception lives
+    /// in the graph, not in detector-specific return shapes.
+    pub fn apply_to_perception_graph(
+        &self,
+        belief_field: &PressureBeliefField,
+        graph: &mut crate::perception::PerceptionGraph,
+        tick: u64,
+    ) {
+        let mut by_symbol: HashMap<Symbol, (f64, f64)> = HashMap::new();
+        // (best_abs_z, signed_direction)
+        for ((symbol, channel), current_belief) in belief_field.gaussian_iter() {
+            let Some(prev_belief) = belief_field.query_previous_gaussian(symbol, *channel) else {
+                continue;
+            };
+            let Some(kl) = prev_belief.kl_divergence(current_belief) else {
+                continue;
+            };
+            let Some(z) = self.surprise_z(symbol, *channel, kl) else {
+                continue;
+            };
+            let prev_mean = prev_belief.mean.to_f64().unwrap_or(0.0);
+            let curr_mean = current_belief.mean.to_f64().unwrap_or(0.0);
+            let signed_dir = (curr_mean - prev_mean).signum();
+            let entry = by_symbol.entry(symbol.clone()).or_insert((0.0, 0.0));
+            if z.abs() > entry.0 {
+                entry.0 = z.abs();
+                entry.1 = signed_dir;
+            }
+        }
+        for (symbol, (abs_z, signed_dir)) in by_symbol {
+            let magnitude = (abs_z / 2.0).tanh().clamp(0.0, 1.0);
+            let direction = signed_dir.clamp(-1.0, 1.0);
+            graph.kl_surprise.upsert(
+                symbol,
+                crate::perception::KlSurpriseSnapshot {
+                    magnitude: Decimal::try_from(magnitude).unwrap_or(Decimal::ZERO),
+                    direction: Decimal::try_from(direction).unwrap_or(Decimal::ZERO),
+                    last_tick: tick,
+                },
+            );
+        }
+    }
+
     pub fn surprise_summary(
         &self,
         belief_field: &PressureBeliefField,
@@ -352,6 +403,94 @@ mod tests {
         let tracker = KlSurpriseTracker::new();
         let summary = tracker.surprise_summary(&field);
         assert!(summary.is_empty());
+    }
+
+    #[test]
+    fn apply_to_perception_graph_writes_signed_snapshot() {
+        let mut field = PressureBeliefField::new(Market::Hk);
+        let s = sym("0700.HK");
+        for _ in 0..6 {
+            field.record_gaussian_sample(&s, PressureChannel::OrderBook, dec!(1.0), 1);
+        }
+        let mut tracker = KlSurpriseTracker::new();
+        for tick in 2..=10 {
+            field.record_gaussian_sample(
+                &s,
+                PressureChannel::OrderBook,
+                Decimal::from(tick),
+                tick as u64,
+            );
+            tracker.observe_from_belief_field(&field);
+        }
+        // Final shock — direction should be positive.
+        field.record_gaussian_sample(&s, PressureChannel::OrderBook, dec!(50.0), 11);
+        tracker.observe_from_belief_field(&field);
+
+        let mut graph = crate::perception::PerceptionGraph::new();
+        tracker.apply_to_perception_graph(&field, &mut graph, 11);
+
+        let snap = graph
+            .kl_surprise
+            .get(&s)
+            .expect("graph should hold reading after apply");
+        assert!(
+            snap.magnitude > Decimal::ZERO,
+            "magnitude should be > 0 after a real shock, got {}",
+            snap.magnitude
+        );
+        assert!(
+            snap.direction > Decimal::ZERO,
+            "direction should be positive when mean increases, got {}",
+            snap.direction
+        );
+        assert_eq!(snap.last_tick, 11);
+    }
+
+    #[test]
+    fn apply_to_perception_graph_matches_surprise_summary() {
+        let mut field = PressureBeliefField::new(Market::Hk);
+        let s = sym("0700.HK");
+        for _ in 0..6 {
+            field.record_gaussian_sample(&s, PressureChannel::OrderBook, dec!(1.0), 1);
+        }
+        let mut tracker = KlSurpriseTracker::new();
+        for tick in 2..=10 {
+            field.record_gaussian_sample(
+                &s,
+                PressureChannel::OrderBook,
+                Decimal::from(tick),
+                tick as u64,
+            );
+            tracker.observe_from_belief_field(&field);
+        }
+        field.record_gaussian_sample(&s, PressureChannel::OrderBook, dec!(50.0), 11);
+        tracker.observe_from_belief_field(&field);
+
+        let summary = tracker.surprise_summary(&field);
+        let mut graph = crate::perception::PerceptionGraph::new();
+        tracker.apply_to_perception_graph(&field, &mut graph, 11);
+
+        // Both paths must produce the same magnitude & direction; the
+        // graph carries the typed shape, the summary carries the legacy
+        // tuple. They must not diverge during the migration window.
+        for (sym_str, (mag, dir)) in &summary {
+            let snap = graph
+                .kl_surprise
+                .get(&Symbol(sym_str.clone()))
+                .unwrap_or_else(|| panic!("graph missing reading for {}", sym_str));
+            assert_eq!(snap.magnitude, *mag, "magnitude divergence for {}", sym_str);
+            assert_eq!(snap.direction, *dir, "direction divergence for {}", sym_str);
+        }
+        assert_eq!(graph.kl_surprise.len(), summary.len());
+    }
+
+    #[test]
+    fn apply_to_perception_graph_no_op_on_empty_baselines() {
+        let field = PressureBeliefField::new(Market::Hk);
+        let tracker = KlSurpriseTracker::new();
+        let mut graph = crate::perception::PerceptionGraph::new();
+        tracker.apply_to_perception_graph(&field, &mut graph, 7);
+        assert!(graph.kl_surprise.is_empty());
     }
 
     #[test]

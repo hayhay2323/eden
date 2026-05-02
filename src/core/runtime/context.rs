@@ -196,6 +196,18 @@ pub struct PreparedRuntimeContext {
     /// async tasks while keeping the bucket value mutable.
     pub current_regime_buckets:
         Arc<std::sync::RwLock<std::collections::HashMap<crate::cases::CaseMarket, String>>>,
+    /// Eden's unified internal world model. Perceivers (KL surprise,
+    /// future detectors) mutate sub-graphs through this lock; L4 / Y
+    /// reads through `PerceptionGraph::node()`. Per the thesis: a
+    /// sensory organ unifies modalities at the graph layer rather than
+    /// emitting per-modality streams.
+    ///
+    /// Uses `std::sync::RwLock` because today only one Perceiver writes
+    /// in the synchronous slice of the tick loop and there are no
+    /// concurrent readers. When a second Perceiver lands or Y starts
+    /// querying from another task, swap to `tokio::sync::RwLock` (or
+    /// `spawn_blocking`) so `write()` doesn't block the runtime worker.
+    pub perception_graph: Arc<std::sync::RwLock<crate::perception::PerceptionGraph>>,
 }
 
 impl RuntimeInfraConfig {
@@ -2861,6 +2873,9 @@ mod horizon_helper_tests {
             current_regime_buckets: std::sync::Arc::new(std::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
+            perception_graph: std::sync::Arc::new(std::sync::RwLock::new(
+                crate::perception::PerceptionGraph::new(),
+            )),
         };
 
         let generated = ActionWorkflowRecord {
@@ -2957,6 +2972,9 @@ mod horizon_helper_tests {
             persistence_limit: std::sync::Arc::new(Semaphore::new(1)),
             current_regime_buckets: std::sync::Arc::new(std::sync::RwLock::new(
                 std::collections::HashMap::new(),
+            )),
+            perception_graph: std::sync::Arc::new(std::sync::RwLock::new(
+                crate::perception::PerceptionGraph::new(),
             )),
         };
 

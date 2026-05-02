@@ -12,6 +12,7 @@ pub mod hk;
 pub mod live_snapshot;
 pub mod math;
 pub mod ontology;
+pub mod perception;
 pub mod persistence;
 pub mod pipeline;
 pub mod temporal;

@@ -164,6 +164,9 @@ pub async fn prepare_runtime_context(
         #[cfg(feature = "persistence")]
         persistence_limit,
         current_regime_buckets: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+        perception_graph: Arc::new(std::sync::RwLock::new(
+            crate::perception::PerceptionGraph::new(),
+        )),
     })
 }
 
