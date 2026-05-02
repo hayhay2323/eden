@@ -1397,6 +1397,13 @@ impl PreparedRuntimeContext {
     }
 
     #[cfg(feature = "persistence")]
+    fn persist_timing_enabled() -> bool {
+        use std::sync::OnceLock;
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var("EDEN_PERSIST_TIMING").as_deref() == Ok("1"))
+    }
+
+    #[cfg(feature = "persistence")]
     pub async fn persist_projection_followups(
         &self,
         market: CaseMarket,
@@ -1410,8 +1417,14 @@ impl PreparedRuntimeContext {
     ) {
         use std::sync::atomic::{AtomicU64, Ordering};
         static BREAKDOWN_COUNTER: AtomicU64 = AtomicU64::new(0);
-        let breakdown_count = BREAKDOWN_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let log_breakdown = breakdown_count.is_multiple_of(10);
+        let timing_on = Self::persist_timing_enabled();
+        let log_breakdown = if timing_on {
+            BREAKDOWN_COUNTER
+                .fetch_add(1, Ordering::Relaxed)
+                .is_multiple_of(10)
+        } else {
+            false
+        };
 
         let t0 = Instant::now();
         self.persist_knowledge_projection(knowledge_bundle).await;
@@ -1496,8 +1509,14 @@ impl PreparedRuntimeContext {
     ) {
         use std::sync::atomic::{AtomicU64, Ordering};
         static OUTER_BREAKDOWN_COUNTER: AtomicU64 = AtomicU64::new(0);
-        let outer_count = OUTER_BREAKDOWN_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let log_outer = outer_count.is_multiple_of(10);
+        let timing_on = Self::persist_timing_enabled();
+        let log_outer = if timing_on {
+            OUTER_BREAKDOWN_COUNTER
+                .fetch_add(1, Ordering::Relaxed)
+                .is_multiple_of(10)
+        } else {
+            false
+        };
 
         let t_build = Instant::now();
         let knowledge_bundle = self.build_knowledge_followup_bundle(
@@ -2066,7 +2085,7 @@ pub async fn settle_live_horizons_hk(
                 crate::persistence::horizon_evaluation::decrement_attempts_or_expire(records);
             if newly_expired > 0 {
                 eprintln!(
-                    "[horizon][hk] expired {} horizons for {} after {} settle attempts \
+                    "[horizon][hk] expired {} horizons for {} after up to {} settle attempts \
                      (entry context never recovered)",
                     newly_expired,
                     setup_id,
@@ -2329,7 +2348,7 @@ pub async fn settle_live_horizons_us(
                 crate::persistence::horizon_evaluation::decrement_attempts_or_expire(records);
             if newly_expired > 0 {
                 eprintln!(
-                    "[horizon][us] expired {} horizons for {} after {} settle attempts \
+                    "[horizon][us] expired {} horizons for {} after up to {} settle attempts \
                      (entry context never recovered)",
                     newly_expired,
                     setup_id,

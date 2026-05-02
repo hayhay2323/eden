@@ -1,10 +1,11 @@
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use surrealdb::engine::local::{Db, RocksDb};
 use surrealdb::Surreal;
 use time::OffsetDateTime;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use super::action_workflow::{ActionWorkflowEventRecord, ActionWorkflowRecord};
 use super::schema;
@@ -29,10 +30,16 @@ mod write;
 #[derive(Clone, Debug)]
 pub struct EdenStore {
     db: Surreal<Db>,
-    // Serializes wholesale `DELETE WHERE market=… ; UPSERT *` syncs that
-    // share the same key range and trigger SurrealDB 2.x optimistic-lock
-    // "read or write conflict" failures when run concurrently.
-    sync_lock: Arc<Mutex<()>>,
+    /// Per-table mutexes for the wholesale
+    /// `DELETE WHERE market=… ; UPSERT *` syncs. SurrealDB 2.x throws
+    /// "read or write conflict" on concurrent overlapping key-range
+    /// writes within a single table; conflicts are per-table not
+    /// global, so a per-table mutex restores parallelism between
+    /// distinct tables (e.g. `knowledge_link_state` and
+    /// `symbol_perception_state` no longer wait on each other) while
+    /// still serialising within a table. Keys are static table-name
+    /// strings, lazily inserted on first lock attempt.
+    table_locks: Arc<DashMap<&'static str, Arc<Mutex<()>>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +50,24 @@ struct SchemaMigrationState {
 }
 
 impl EdenStore {
+    /// Acquire the wholesale-sync lock for `table`, lazily creating
+    /// it on first use. Returned guard serialises any
+    /// `DELETE WHERE market=… ; UPSERT *` writes against this exact
+    /// table. Cross-table sync paths (knowledge_link vs
+    /// symbol_perception, etc.) hold disjoint locks and run
+    /// concurrently.
+    pub(crate) async fn acquire_table_lock(
+        &self,
+        table: &'static str,
+    ) -> OwnedMutexGuard<()> {
+        let lock = self
+            .table_locks
+            .entry(table)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone();
+        lock.lock_owned().await
+    }
+
     /// Open or create the SurrealDB database at the given path.
     pub async fn open(path: &str) -> Result<Self, StoreError> {
         eprintln!("[store] opening {}", path);
@@ -53,7 +78,7 @@ impl EdenStore {
         eprintln!("[store] ready {}", path);
         Ok(Self {
             db,
-            sync_lock: Arc::new(Mutex::new(())),
+            table_locks: Arc::new(DashMap::new()),
         })
     }
 

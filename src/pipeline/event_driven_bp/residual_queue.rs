@@ -257,6 +257,31 @@ mod tests {
     }
 
     #[test]
+    fn equal_residuals_pop_in_lifo_order() {
+        // Pin the tiebreak contract for pop on equal residuals.
+        //
+        // The `BTreeSet<(OrderedFloat, seq)>` ordering is
+        // lexicographic ascending on both keys, so `pop_last` returns
+        // (largest residual, largest seq) — i.e. LIFO within a tied
+        // residual band. `pop_min` (eviction) is symmetric: smallest
+        // residual + smallest seq → FIFO eviction of the oldest tied
+        // pending update.
+        //
+        // True FIFO on the pop side would require a different shape
+        // (e.g. `BTreeMap<OrderedFloat, VecDeque<seq>>`); the current
+        // single-set design cannot give "ascending residual + descending
+        // seq" simultaneously. Document the actual behaviour so a future
+        // refactor that breaks it has to do so deliberately.
+        let q = ResidualQueue::new();
+        q.push(update("first", "x", 0.5));
+        q.push(update("second", "x", 0.5));
+        q.push(update("third", "x", 0.5));
+        assert_eq!(q.try_pop().unwrap().from, "third");
+        assert_eq!(q.try_pop().unwrap().from, "second");
+        assert_eq!(q.try_pop().unwrap().from, "first");
+    }
+
+    #[test]
     fn pops_highest_residual_first() {
         // Residual scheduler invariant: messages with the largest
         // delta from the previous iteration are processed first. This
