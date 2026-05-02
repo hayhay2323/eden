@@ -448,7 +448,7 @@ impl WorldIntentReflectionBucket {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorldIntentReflectionBucketSummary {
     pub key: String,
     pub kind: IntentKind,
@@ -459,7 +459,7 @@ pub struct WorldIntentReflectionBucketSummary {
     pub mean_confidence: Decimal,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorldIntentReflectionSummary {
     pub market: Market,
     pub resolved_count: usize,
@@ -473,6 +473,15 @@ pub struct WorldIntentReflectionSummary {
     pub best_bucket: Option<WorldIntentReflectionBucketSummary>,
     pub worst_bucket: Option<WorldIntentReflectionBucketSummary>,
     pub latest: Option<WorldIntentReflectionRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorldIntentReflectionQuery {
+    pub market: Market,
+    pub summary: Option<WorldIntentReflectionSummary>,
+    pub focus: Option<WorldIntentReflectionBucketSummary>,
+    pub buckets: Vec<WorldIntentReflectionBucketSummary>,
+    pub recent: Vec<WorldIntentReflectionRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -605,6 +614,36 @@ impl WorldIntentReflectionLedger {
         self.buckets.get(&world_reflection_key(kind, direction))
     }
 
+    pub fn bucket_summaries(&self) -> Vec<WorldIntentReflectionBucketSummary> {
+        sorted_world_reflection_buckets(self.buckets.values())
+    }
+
+    pub fn query(
+        &self,
+        focus: Option<(IntentKind, IntentDirection)>,
+        recent_limit: usize,
+    ) -> WorldIntentReflectionQuery {
+        let focus = focus.and_then(|(kind, direction)| {
+            self.bucket(kind, direction)
+                .map(WorldIntentReflectionBucketSummary::from_bucket)
+        });
+        let mut recent: Vec<_> = self
+            .records
+            .iter()
+            .rev()
+            .take(recent_limit)
+            .cloned()
+            .collect();
+        recent.reverse();
+        WorldIntentReflectionQuery {
+            market: self.market,
+            summary: self.summary(),
+            focus,
+            buckets: self.bucket_summaries(),
+            recent,
+        }
+    }
+
     pub fn summary(&self) -> Option<WorldIntentReflectionSummary> {
         let resolved_count = self.resolved_count();
         if resolved_count == 0 {
@@ -617,16 +656,7 @@ impl WorldIntentReflectionLedger {
         let violation_rate =
             Decimal::from(self.violated_count as i64) / Decimal::from(resolved_count as i64);
         let calibration_gap = self.mean_confidence - reliability;
-        let mut buckets: Vec<_> = self
-            .buckets
-            .values()
-            .map(WorldIntentReflectionBucketSummary::from_bucket)
-            .collect();
-        buckets.sort_by(|a, b| {
-            b.reliability
-                .partial_cmp(&a.reliability)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        let buckets = self.bucket_summaries();
         let best_bucket = buckets.first().cloned();
         let worst_bucket = buckets.last().cloned().filter(|worst| {
             best_bucket
@@ -650,6 +680,29 @@ impl WorldIntentReflectionLedger {
             latest: self.latest_record().cloned(),
         })
     }
+}
+
+pub fn query_world_reflection_ledger(
+    market: Market,
+    focus: Option<(IntentKind, IntentDirection)>,
+    recent_limit: usize,
+) -> WorldIntentReflectionQuery {
+    load_world_reflection_ledger(market).query(focus, recent_limit)
+}
+
+pub fn query_world_reflection_ledger_from_path(
+    market: Market,
+    path: &Path,
+    focus: Option<(IntentKind, IntentDirection)>,
+    recent_limit: usize,
+) -> WorldIntentReflectionQuery {
+    load_world_reflection_ledger_from_path(
+        market,
+        path,
+        WORLD_REFLECTION_LEDGER_TAIL_BYTES,
+        WORLD_REFLECTION_LEDGER_TAIL_RECORDS,
+    )
+    .query(focus, recent_limit)
 }
 
 pub fn append_world_reflection_record(record: &WorldIntentReflectionRecord) -> std::io::Result<()> {
@@ -1768,6 +1821,22 @@ fn latest_world_reflection_label(summary: &WorldIntentReflectionSummary) -> Opti
     })
 }
 
+fn sorted_world_reflection_buckets<'a>(
+    buckets: impl IntoIterator<Item = &'a WorldIntentReflectionBucket>,
+) -> Vec<WorldIntentReflectionBucketSummary> {
+    let mut summaries: Vec<_> = buckets
+        .into_iter()
+        .map(WorldIntentReflectionBucketSummary::from_bucket)
+        .collect();
+    summaries.sort_by(|a, b| {
+        b.reliability
+            .cmp(&a.reliability)
+            .then_with(|| b.resolved_count.cmp(&a.resolved_count))
+            .then_with(|| a.key.cmp(&b.key))
+    });
+    summaries
+}
+
 fn world_reflection_key(kind: IntentKind, direction: IntentDirection) -> String {
     format!(
         "{}:{}",
@@ -2433,6 +2502,92 @@ mod tests {
         let wrong_market =
             load_world_reflection_ledger_from_path(Market::Us, &path, 1024 * 1024, 100);
         assert_eq!(wrong_market.resolved_count(), 0);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn world_intent_reflection_query_returns_focus_buckets_and_recent_records() {
+        let mut state = LatentWorldState::new(Market::Hk);
+        let mut belief = WorldIntentBelief::new(Market::Hk);
+        for tick in 1..=8 {
+            state.step(
+                tick,
+                WorldObservation {
+                    values: [0.10, 0.35, 0.25, 0.80, 0.10],
+                    mask: [true; LATENT_DIM],
+                },
+            );
+            let _ = belief.observe_state(&state);
+        }
+        for tick in 9..=14 {
+            state.step(
+                tick,
+                WorldObservation {
+                    values: [0.20, -0.35, 0.25, -0.80, -0.15],
+                    mask: [true; LATENT_DIM],
+                },
+            );
+            let _ = belief.observe_state(&state);
+        }
+
+        let query = belief
+            .reflection_ledger()
+            .query(Some((IntentKind::Accumulation, IntentDirection::Buy)), 3);
+
+        assert_eq!(query.market, Market::Hk);
+        assert!(query.summary.is_some());
+        assert!(query.focus.is_some());
+        assert!(!query.buckets.is_empty());
+        assert!(query.recent.len() <= 3);
+        assert!(query
+            .recent
+            .windows(2)
+            .all(|pair| pair[0].tick_resolved_at <= pair[1].tick_resolved_at));
+
+        let encoded = serde_json::to_string(&query).expect("query serializes for API");
+        assert!(encoded.contains("focus"));
+        assert!(encoded.contains("recent"));
+    }
+
+    #[test]
+    fn world_intent_reflection_query_reads_from_ndjson_path() {
+        let mut state = LatentWorldState::new(Market::Hk);
+        let mut belief = WorldIntentBelief::new(Market::Hk);
+        for tick in 1..=8 {
+            state.step(
+                tick,
+                WorldObservation {
+                    values: [0.10, 0.35, 0.25, 0.80, 0.10],
+                    mask: [true; LATENT_DIM],
+                },
+            );
+            let _ = belief.observe_state(&state);
+        }
+
+        let dir = std::env::temp_dir().join(format!(
+            "eden-world-reflection-query-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = dir.join("world-reflection-hk.ndjson");
+        for record in belief.reflection_ledger().records() {
+            append_world_reflection_record_to_path(record, &path).expect("append reflection");
+        }
+
+        let query = query_world_reflection_ledger_from_path(
+            Market::Hk,
+            &path,
+            Some((IntentKind::Accumulation, IntentDirection::Buy)),
+            2,
+        );
+
+        assert!(query.summary.is_some());
+        assert!(query.focus.is_some());
+        assert_eq!(query.recent.len(), 2);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
