@@ -9,8 +9,8 @@ use super::super::agent_api::{
     get_agent_recommendations, get_agent_scoreboard, get_agent_sector_flows, get_agent_session,
     get_agent_snapshot, get_agent_structure, get_agent_structures, get_agent_symbol,
     get_agent_thread, get_agent_threads, get_agent_tools, get_agent_transitions, get_agent_turns,
-    get_agent_wake, get_agent_watchlist, get_agent_world, post_agent_analyze,
-    post_agent_analyze_codex_cli,
+    get_agent_wake, get_agent_watchlist, get_agent_world, get_agent_world_reflection,
+    post_agent_analyze, post_agent_analyze_codex_cli,
 };
 use super::super::agent_graph::{
     get_agent_graph_links, get_agent_graph_node, get_agent_knowledge_link_history,
@@ -141,6 +141,10 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
             post(post_agent_analyze_codex_cli),
         )
         .route("/agent/:market/world", get(get_agent_world))
+        .route(
+            "/agent/:market/world/reflection",
+            get(get_agent_world_reflection),
+        )
         .route("/agent/:market/notices", get(get_agent_notices))
         .route("/agent/:market/transitions", get(get_agent_transitions))
         .route("/feed/:market/notices", get(get_feed_notices))

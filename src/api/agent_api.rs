@@ -13,6 +13,10 @@ use crate::agent::{
     AgentToolSpec, AgentTurn, AgentWakeState, AgentWatchlist,
 };
 use crate::ontology::world::{BackwardInvestigation, WorldStateSnapshot};
+use crate::ontology::{IntentDirection, IntentKind};
+use crate::pipeline::latent_world_state::{
+    query_world_reflection_ledger, WorldIntentReflectionQuery,
+};
 
 use super::agent_surface::{
     load_agent_analyst_review_for_market, load_agent_analyst_scoreboard_for_market,
@@ -78,6 +82,13 @@ pub(super) struct AgentFeedQuery {
 pub(super) struct AgentAnalyzeBody {
     #[serde(default)]
     deterministic_only: bool,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+pub(super) struct AgentWorldReflectionQuery {
+    pub(super) kind: Option<IntentKind>,
+    pub(super) direction: Option<IntentDirection>,
+    pub(super) limit: Option<usize>,
 }
 
 pub(super) async fn get_agent_snapshot(
@@ -319,6 +330,27 @@ pub(super) async fn get_agent_world(
     Path(market): Path<String>,
 ) -> Result<Json<WorldStateSnapshot>, ApiError> {
     Ok(Json(load_world_state_for_market(&market).await?))
+}
+
+pub(super) async fn get_agent_world_reflection(
+    Path(market): Path<String>,
+    Query(query): Query<AgentWorldReflectionQuery>,
+) -> Result<Json<WorldIntentReflectionQuery>, ApiError> {
+    let market = match parse_case_market(&market)? {
+        crate::cases::CaseMarket::Hk => crate::ontology::objects::Market::Hk,
+        crate::cases::CaseMarket::Us => crate::ontology::objects::Market::Us,
+    };
+    let limit = bounded(query.limit, DEFAULT_LIMIT, MAX_LIMIT, "limit")?;
+    let focus = match (query.kind, query.direction) {
+        (Some(kind), Some(direction)) => Some((kind, direction)),
+        (None, None) => None,
+        _ => {
+            return Err(ApiError::bad_request(
+                "`kind` and `direction` must be provided together",
+            ));
+        }
+    };
+    Ok(Json(query_world_reflection_ledger(market, focus, limit)))
 }
 
 pub(super) async fn get_agent_notices(
