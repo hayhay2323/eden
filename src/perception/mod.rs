@@ -214,6 +214,11 @@ pub struct WorldIntentSnapshot {
     pub expectation_count: usize,
     pub top_violation: Option<String>,
     pub violation_count: usize,
+    pub reflection_observations: usize,
+    pub reflection_reliability: Option<Decimal>,
+    pub reflection_violation_rate: Option<Decimal>,
+    pub reflection_calibration_gap: Option<Decimal>,
+    pub latest_reflection: Option<String>,
     pub last_tick: u64,
 }
 
@@ -386,6 +391,11 @@ mod tests {
                 expectation_count: 1,
                 top_violation: Some("sync failed".into()),
                 violation_count: 1,
+                reflection_observations: 3,
+                reflection_reliability: Some(dec!(0.67)),
+                reflection_violation_rate: Some(dec!(0.33)),
+                reflection_calibration_gap: Some(dec!(-0.01)),
+                latest_reflection: Some("event_repricing->distribution".into()),
                 last_tick: 42,
             },
         );
@@ -403,6 +413,14 @@ mod tests {
         assert_eq!(intent.expectation_count, 1);
         assert_eq!(intent.top_violation.as_deref(), Some("sync failed"));
         assert_eq!(intent.violation_count, 1);
+        assert_eq!(intent.reflection_observations, 3);
+        assert_eq!(intent.reflection_reliability, Some(dec!(0.67)));
+        assert_eq!(intent.reflection_violation_rate, Some(dec!(0.33)));
+        assert_eq!(intent.reflection_calibration_gap, Some(dec!(-0.01)));
+        assert_eq!(
+            intent.latest_reflection.as_deref(),
+            Some("event_repricing->distribution")
+        );
         assert_eq!(intent.last_tick, 42);
         assert_eq!(graph.world_intent.len(), 1);
     }

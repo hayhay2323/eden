@@ -32,6 +32,8 @@
 //!   - Observation-dependent transition (that's a regime-switching
 //!     SSM — worth doing later)
 
+use std::collections::HashMap;
+
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -258,6 +260,7 @@ pub struct WorldIntentBelief {
     previous: CategoricalBelief<IntentKind>,
     posterior: CategoricalBelief<IntentKind>,
     previous_intent: Option<IntentHypothesis>,
+    reflection_ledger: WorldIntentReflectionLedger,
 }
 
 impl WorldIntentBelief {
@@ -268,6 +271,7 @@ impl WorldIntentBelief {
             previous: posterior.clone(),
             posterior,
             previous_intent: None,
+            reflection_ledger: WorldIntentReflectionLedger::new(market),
         }
     }
 
@@ -276,15 +280,22 @@ impl WorldIntentBelief {
             *self = Self::new(state.market);
         }
         self.previous = self.posterior.clone();
+        let previous_intent = self.previous_intent.clone();
         let likelihoods = world_intent_likelihoods(state);
         let likelihoods_decimal: Vec<Decimal> =
             likelihoods.iter().map(|v| decimal_positive(*v)).collect();
         self.posterior.update_likelihoods(&likelihoods_decimal);
         let mut intent =
             build_world_intent_hypothesis(state, &self.posterior, Some(&self.previous));
-        if let Some(previous_intent) = self.previous_intent.as_ref() {
+        if let Some(previous_intent) = previous_intent.as_ref() {
             intent.expectation_violations =
                 world_intent_expectation_violations(previous_intent, &intent, state);
+            let _ = self.reflection_ledger.record_resolution(
+                previous_intent,
+                &intent,
+                state.last_tick,
+                &intent.expectation_violations,
+            );
         }
         self.previous_intent = Some(intent.clone());
         intent
@@ -292,6 +303,358 @@ impl WorldIntentBelief {
 
     pub fn posterior(&self) -> &CategoricalBelief<IntentKind> {
         &self.posterior
+    }
+
+    pub fn reflection_ledger(&self) -> &WorldIntentReflectionLedger {
+        &self.reflection_ledger
+    }
+
+    pub fn reflection_ledger_line(&self) -> Option<String> {
+        self.reflection_ledger
+            .summary()
+            .map(|summary| format_world_reflection_ledger_line(&summary))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorldIntentReflectionOutcome {
+    Confirmed,
+    Violated,
+}
+
+const WORLD_REFLECTION_OUTCOMES: [WorldIntentReflectionOutcome; 2] = [
+    WorldIntentReflectionOutcome::Confirmed,
+    WorldIntentReflectionOutcome::Violated,
+];
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorldIntentReflectionRecord {
+    pub record_id: String,
+    pub market: Market,
+    pub predicted_intent_id: String,
+    pub tick_predicted_at: u64,
+    pub tick_resolved_at: u64,
+    pub predicted_kind: IntentKind,
+    pub predicted_direction: IntentDirection,
+    pub realized_kind: IntentKind,
+    pub realized_direction: IntentDirection,
+    pub confidence: Decimal,
+    pub expectation_count: usize,
+    pub violation_count: usize,
+    pub violation_magnitude: Decimal,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub violation_descriptions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorldIntentReflectionBucket {
+    pub key: String,
+    pub kind: IntentKind,
+    pub direction: IntentDirection,
+    pub resolved_count: usize,
+    pub confirmed_count: usize,
+    pub violated_count: usize,
+    pub mean_confidence: Decimal,
+    pub mean_violation_magnitude: Decimal,
+    pub outcome_belief: CategoricalBelief<WorldIntentReflectionOutcome>,
+}
+
+impl WorldIntentReflectionBucket {
+    fn new(kind: IntentKind, direction: IntentDirection) -> Self {
+        Self {
+            key: world_reflection_key(kind, direction),
+            kind,
+            direction,
+            resolved_count: 0,
+            confirmed_count: 0,
+            violated_count: 0,
+            mean_confidence: Decimal::ZERO,
+            mean_violation_magnitude: Decimal::ZERO,
+            outcome_belief: CategoricalBelief::uniform(WORLD_REFLECTION_OUTCOMES.to_vec()),
+        }
+    }
+
+    fn observe(&mut self, record: &WorldIntentReflectionRecord) {
+        self.resolved_count += 1;
+        if record.violation_count == 0 {
+            self.confirmed_count += 1;
+        } else {
+            self.violated_count += 1;
+        }
+        self.mean_confidence =
+            update_decimal_mean(self.mean_confidence, self.resolved_count, record.confidence);
+        self.mean_violation_magnitude = update_decimal_mean(
+            self.mean_violation_magnitude,
+            self.resolved_count,
+            record.violation_magnitude,
+        );
+
+        let support = (Decimal::ONE - record.violation_magnitude).max(Decimal::ZERO);
+        let violation = record.violation_magnitude.max(Decimal::ZERO);
+        let likelihoods = [
+            decimal_positive(decimal_to_f64(support)),
+            decimal_positive(decimal_to_f64(violation)),
+        ];
+        self.outcome_belief.update_likelihoods(&likelihoods);
+    }
+
+    pub fn reliability(&self) -> Decimal {
+        reflection_outcome_probability(
+            &self.outcome_belief,
+            WorldIntentReflectionOutcome::Confirmed,
+        )
+    }
+
+    pub fn violation_probability(&self) -> Decimal {
+        reflection_outcome_probability(&self.outcome_belief, WorldIntentReflectionOutcome::Violated)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorldIntentReflectionBucketSummary {
+    pub key: String,
+    pub kind: IntentKind,
+    pub direction: IntentDirection,
+    pub resolved_count: usize,
+    pub reliability: Decimal,
+    pub violation_probability: Decimal,
+    pub mean_confidence: Decimal,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorldIntentReflectionSummary {
+    pub market: Market,
+    pub resolved_count: usize,
+    pub confirmed_count: usize,
+    pub violated_count: usize,
+    pub reliability: Decimal,
+    pub violation_rate: Decimal,
+    pub mean_confidence: Decimal,
+    pub calibration_gap: Decimal,
+    pub mean_violation_magnitude: Decimal,
+    pub best_bucket: Option<WorldIntentReflectionBucketSummary>,
+    pub worst_bucket: Option<WorldIntentReflectionBucketSummary>,
+    pub latest: Option<WorldIntentReflectionRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorldIntentReflectionLedger {
+    market: Market,
+    records: Vec<WorldIntentReflectionRecord>,
+    buckets: HashMap<String, WorldIntentReflectionBucket>,
+    outcome_belief: CategoricalBelief<WorldIntentReflectionOutcome>,
+    mean_confidence: Decimal,
+    mean_violation_magnitude: Decimal,
+    confirmed_count: usize,
+    violated_count: usize,
+}
+
+impl WorldIntentReflectionLedger {
+    const MAX_RECORDS: usize = 10_000;
+
+    pub fn new(market: Market) -> Self {
+        Self {
+            market,
+            records: Vec::new(),
+            buckets: HashMap::new(),
+            outcome_belief: CategoricalBelief::uniform(WORLD_REFLECTION_OUTCOMES.to_vec()),
+            mean_confidence: Decimal::ZERO,
+            mean_violation_magnitude: Decimal::ZERO,
+            confirmed_count: 0,
+            violated_count: 0,
+        }
+    }
+
+    pub fn record_resolution(
+        &mut self,
+        previous: &IntentHypothesis,
+        current: &IntentHypothesis,
+        tick_resolved_at: u64,
+        violations: &[ExpectationViolation],
+    ) -> Option<WorldIntentReflectionRecord> {
+        let tick_predicted_at = parse_world_intent_tick(&previous.intent_id)?;
+        let record = WorldIntentReflectionRecord::from_resolution(
+            self.market,
+            previous,
+            current,
+            tick_predicted_at,
+            tick_resolved_at,
+            violations,
+        );
+        self.record(record.clone());
+        Some(record)
+    }
+
+    pub fn record(&mut self, record: WorldIntentReflectionRecord) {
+        if record.market != self.market {
+            self.market = record.market;
+            self.records.clear();
+            self.buckets.clear();
+            self.outcome_belief = CategoricalBelief::uniform(WORLD_REFLECTION_OUTCOMES.to_vec());
+            self.mean_confidence = Decimal::ZERO;
+            self.mean_violation_magnitude = Decimal::ZERO;
+            self.confirmed_count = 0;
+            self.violated_count = 0;
+        }
+
+        let resolved_count = self.resolved_count() + 1;
+        if record.violation_count == 0 {
+            self.confirmed_count += 1;
+        } else {
+            self.violated_count += 1;
+        }
+        self.mean_confidence =
+            update_decimal_mean(self.mean_confidence, resolved_count, record.confidence);
+        self.mean_violation_magnitude = update_decimal_mean(
+            self.mean_violation_magnitude,
+            resolved_count,
+            record.violation_magnitude,
+        );
+
+        let support = (Decimal::ONE - record.violation_magnitude).max(Decimal::ZERO);
+        let violation = record.violation_magnitude.max(Decimal::ZERO);
+        let likelihoods = [
+            decimal_positive(decimal_to_f64(support)),
+            decimal_positive(decimal_to_f64(violation)),
+        ];
+        self.outcome_belief.update_likelihoods(&likelihoods);
+
+        let key = world_reflection_key(record.predicted_kind, record.predicted_direction);
+        self.buckets
+            .entry(key)
+            .or_insert_with(|| {
+                WorldIntentReflectionBucket::new(record.predicted_kind, record.predicted_direction)
+            })
+            .observe(&record);
+
+        self.records.push(record);
+        if self.records.len() > Self::MAX_RECORDS {
+            let overflow = self.records.len() - Self::MAX_RECORDS;
+            self.records.drain(0..overflow);
+        }
+    }
+
+    pub fn resolved_count(&self) -> usize {
+        self.confirmed_count + self.violated_count
+    }
+
+    pub fn records(&self) -> &[WorldIntentReflectionRecord] {
+        &self.records
+    }
+
+    pub fn latest_record(&self) -> Option<&WorldIntentReflectionRecord> {
+        self.records.last()
+    }
+
+    pub fn bucket(
+        &self,
+        kind: IntentKind,
+        direction: IntentDirection,
+    ) -> Option<&WorldIntentReflectionBucket> {
+        self.buckets.get(&world_reflection_key(kind, direction))
+    }
+
+    pub fn summary(&self) -> Option<WorldIntentReflectionSummary> {
+        let resolved_count = self.resolved_count();
+        if resolved_count == 0 {
+            return None;
+        }
+        let reliability = reflection_outcome_probability(
+            &self.outcome_belief,
+            WorldIntentReflectionOutcome::Confirmed,
+        );
+        let violation_rate =
+            Decimal::from(self.violated_count as i64) / Decimal::from(resolved_count as i64);
+        let calibration_gap = self.mean_confidence - reliability;
+        let mut buckets: Vec<_> = self
+            .buckets
+            .values()
+            .map(WorldIntentReflectionBucketSummary::from_bucket)
+            .collect();
+        buckets.sort_by(|a, b| {
+            b.reliability
+                .partial_cmp(&a.reliability)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let best_bucket = buckets.first().cloned();
+        let worst_bucket = buckets.last().cloned().filter(|worst| {
+            best_bucket
+                .as_ref()
+                .map(|best| best.key != worst.key)
+                .unwrap_or(true)
+        });
+
+        Some(WorldIntentReflectionSummary {
+            market: self.market,
+            resolved_count,
+            confirmed_count: self.confirmed_count,
+            violated_count: self.violated_count,
+            reliability,
+            violation_rate: violation_rate.round_dp(4),
+            mean_confidence: self.mean_confidence.round_dp(4),
+            calibration_gap: calibration_gap.round_dp(4),
+            mean_violation_magnitude: self.mean_violation_magnitude.round_dp(4),
+            best_bucket,
+            worst_bucket,
+            latest: self.latest_record().cloned(),
+        })
+    }
+}
+
+impl WorldIntentReflectionRecord {
+    fn from_resolution(
+        market: Market,
+        previous: &IntentHypothesis,
+        current: &IntentHypothesis,
+        tick_predicted_at: u64,
+        tick_resolved_at: u64,
+        violations: &[ExpectationViolation],
+    ) -> Self {
+        let violation_magnitude = violations
+            .iter()
+            .map(|violation| violation.magnitude)
+            .max()
+            .unwrap_or(Decimal::ZERO)
+            .clamp(Decimal::ZERO, Decimal::ONE)
+            .round_dp(4);
+        let violation_descriptions = violations
+            .iter()
+            .map(|violation| violation.description.clone())
+            .collect();
+        Self {
+            record_id: format!(
+                "world_reflection:{}:{}:{}",
+                market, previous.intent_id, tick_resolved_at
+            ),
+            market,
+            predicted_intent_id: previous.intent_id.clone(),
+            tick_predicted_at,
+            tick_resolved_at,
+            predicted_kind: previous.kind,
+            predicted_direction: previous.direction,
+            realized_kind: current.kind,
+            realized_direction: current.direction,
+            confidence: previous.confidence,
+            expectation_count: previous.expectation_bindings.len(),
+            violation_count: violations.len(),
+            violation_magnitude,
+            violation_descriptions,
+        }
+    }
+}
+
+impl WorldIntentReflectionBucketSummary {
+    fn from_bucket(bucket: &WorldIntentReflectionBucket) -> Self {
+        Self {
+            key: bucket.key.clone(),
+            kind: bucket.kind,
+            direction: bucket.direction,
+            resolved_count: bucket.resolved_count,
+            reliability: bucket.reliability().round_dp(4),
+            violation_probability: bucket.violation_probability().round_dp(4),
+            mean_confidence: bucket.mean_confidence.round_dp(4),
+        }
     }
 }
 
@@ -401,9 +764,65 @@ pub fn format_world_reflection_line(intent: &IntentHypothesis) -> Option<String>
     ))
 }
 
+pub fn format_world_reflection_ledger_line(summary: &WorldIntentReflectionSummary) -> String {
+    let mut line = format!(
+        "world_reflection_ledger: market={} resolved={} confirmed={} violated={} reliability={} violation_rate={} mean_confidence={} calibration_gap={} mean_violation={}",
+        summary.market,
+        summary.resolved_count,
+        summary.confirmed_count,
+        summary.violated_count,
+        summary.reliability,
+        summary.violation_rate,
+        summary.mean_confidence,
+        summary.calibration_gap,
+        summary.mean_violation_magnitude,
+    );
+    if let Some(latest) = latest_world_reflection_label(summary) {
+        line.push_str(&format!(" latest={}", latest));
+    }
+    if let Some(best) = &summary.best_bucket {
+        line.push_str(&format!(
+            " best={}/{}:{} n={}",
+            intent_kind_label(best.kind),
+            intent_direction_label(best.direction),
+            best.reliability,
+            best.resolved_count,
+        ));
+    }
+    if let Some(worst) = &summary.worst_bucket {
+        line.push_str(&format!(
+            " worst={}/{}:{} n={}",
+            intent_kind_label(worst.kind),
+            intent_direction_label(worst.direction),
+            worst.reliability,
+            worst.resolved_count,
+        ));
+    }
+    line
+}
+
 pub fn apply_world_intent_to_perception_graph(
     state: &LatentWorldState,
     intent: &IntentHypothesis,
+    graph: &mut PerceptionGraph,
+) {
+    apply_world_intent_snapshot_to_perception_graph(state, intent, None, graph);
+}
+
+pub fn apply_world_intent_and_reflection_to_perception_graph(
+    state: &LatentWorldState,
+    intent: &IntentHypothesis,
+    ledger: &WorldIntentReflectionLedger,
+    graph: &mut PerceptionGraph,
+) {
+    let summary = ledger.summary();
+    apply_world_intent_snapshot_to_perception_graph(state, intent, summary.as_ref(), graph);
+}
+
+fn apply_world_intent_snapshot_to_perception_graph(
+    state: &LatentWorldState,
+    intent: &IntentHypothesis,
+    reflection: Option<&WorldIntentReflectionSummary>,
     graph: &mut PerceptionGraph,
 ) {
     graph.world_intent.upsert(
@@ -430,6 +849,13 @@ pub fn apply_world_intent_to_perception_graph(
                 .first()
                 .map(|item| item.description.clone()),
             violation_count: intent.expectation_violations.len(),
+            reflection_observations: reflection
+                .map(|summary| summary.resolved_count)
+                .unwrap_or(0),
+            reflection_reliability: reflection.map(|summary| summary.reliability),
+            reflection_violation_rate: reflection.map(|summary| summary.violation_rate),
+            reflection_calibration_gap: reflection.map(|summary| summary.calibration_gap),
+            latest_reflection: reflection.and_then(latest_world_reflection_label),
             last_tick: state.last_tick,
         },
     );
@@ -1232,6 +1658,56 @@ fn format_world_intent_posterior(posterior: &CategoricalBelief<IntentKind>) -> S
     format!("intent_posterior[{}]", parts.join(","))
 }
 
+fn latest_world_reflection_label(summary: &WorldIntentReflectionSummary) -> Option<String> {
+    summary.latest.as_ref().map(|record| {
+        let violation = if record.violation_count == 0 {
+            "none".to_string()
+        } else {
+            record.violation_descriptions.join("+")
+        };
+        format!(
+            "{}->{} violation={} magnitude={}",
+            intent_kind_label(record.predicted_kind),
+            intent_kind_label(record.realized_kind),
+            violation,
+            record.violation_magnitude,
+        )
+    })
+}
+
+fn world_reflection_key(kind: IntentKind, direction: IntentDirection) -> String {
+    format!(
+        "{}:{}",
+        intent_kind_label(kind),
+        intent_direction_label(direction)
+    )
+}
+
+fn parse_world_intent_tick(intent_id: &str) -> Option<u64> {
+    intent_id.rsplit(':').next()?.parse::<u64>().ok()
+}
+
+fn update_decimal_mean(previous_mean: Decimal, new_count: usize, value: Decimal) -> Decimal {
+    if new_count <= 1 {
+        value
+    } else {
+        let previous_count = Decimal::from((new_count - 1) as i64);
+        (previous_mean * previous_count + value) / Decimal::from(new_count as i64)
+    }
+}
+
+fn reflection_outcome_probability(
+    belief: &CategoricalBelief<WorldIntentReflectionOutcome>,
+    outcome: WorldIntentReflectionOutcome,
+) -> Decimal {
+    belief
+        .variants
+        .iter()
+        .zip(belief.probs.iter())
+        .find_map(|(variant, prob)| (*variant == outcome).then_some(*prob))
+        .unwrap_or(Decimal::ZERO)
+}
+
 fn intent_kind_label(kind: IntentKind) -> &'static str {
     match kind {
         IntentKind::Accumulation => "accumulation",
@@ -1743,6 +2219,90 @@ mod tests {
     }
 
     #[test]
+    fn world_intent_reflection_ledger_accumulates_soft_reliability() {
+        let mut state = LatentWorldState::new(Market::Hk);
+        let mut belief = WorldIntentBelief::new(Market::Hk);
+        for tick in 1..=8 {
+            state.step(
+                tick,
+                WorldObservation {
+                    values: [0.10, 0.35, 0.25, 0.80, 0.10],
+                    mask: [true; LATENT_DIM],
+                },
+            );
+            let _ = belief.observe_state(&state);
+        }
+
+        let summary = belief
+            .reflection_ledger()
+            .summary()
+            .expect("ledger summary");
+        assert!(summary.resolved_count > 0);
+        assert_eq!(summary.violated_count, 0);
+        assert!(summary.reliability > summary.violation_rate);
+
+        let bucket = belief
+            .reflection_ledger()
+            .bucket(IntentKind::Accumulation, IntentDirection::Buy)
+            .expect("accumulation bucket");
+        assert!(bucket.reliability() > bucket.violation_probability());
+
+        let line = belief.reflection_ledger_line().expect("ledger wake line");
+        assert!(line.starts_with("world_reflection_ledger:"));
+        assert!(line.contains("reliability="));
+        assert!(line.contains("calibration_gap="));
+    }
+
+    #[test]
+    fn world_intent_reflection_ledger_records_falsified_expectation() {
+        let mut state = LatentWorldState::new(Market::Hk);
+        let mut belief = WorldIntentBelief::new(Market::Hk);
+        for tick in 1..=5 {
+            state.step(
+                tick,
+                WorldObservation {
+                    values: [0.10, 0.35, 0.25, 0.80, 0.10],
+                    mask: [true; LATENT_DIM],
+                },
+            );
+            let _ = belief.observe_state(&state);
+        }
+        for tick in 6..=12 {
+            state.step(
+                tick,
+                WorldObservation {
+                    values: [0.20, -0.35, 0.25, -0.80, -0.15],
+                    mask: [true; LATENT_DIM],
+                },
+            );
+            let _ = belief.observe_state(&state);
+            if belief
+                .reflection_ledger()
+                .latest_record()
+                .map(|record| record.violation_count > 0)
+                .unwrap_or(false)
+            {
+                break;
+            }
+        }
+
+        let latest = belief
+            .reflection_ledger()
+            .latest_record()
+            .expect("latest reflection record");
+        assert!(latest.violation_count > 0);
+        assert!(latest.violation_magnitude > Decimal::ZERO);
+        assert!(!latest.violation_descriptions.is_empty());
+
+        let summary = belief
+            .reflection_ledger()
+            .summary()
+            .expect("ledger summary");
+        assert!(summary.violated_count > 0);
+        assert!(summary.mean_violation_magnitude > Decimal::ZERO);
+    }
+
+    #[test]
     fn world_intent_infers_event_repricing_from_stress_and_synchrony() {
         let state = steady_state_from_observation([0.80, 0.05, 0.75, 0.05, 0.00], 20);
         let intent = infer_world_intent(&state);
@@ -1780,7 +2340,48 @@ mod tests {
         assert_eq!(snap.expectation_count, intent.expectation_bindings.len());
         assert_eq!(snap.top_violation, None);
         assert_eq!(snap.violation_count, 0);
+        assert_eq!(snap.reflection_observations, 0);
+        assert_eq!(snap.reflection_reliability, None);
+        assert_eq!(snap.reflection_violation_rate, None);
+        assert_eq!(snap.reflection_calibration_gap, None);
+        assert_eq!(snap.latest_reflection, None);
         assert_eq!(snap.last_tick, state.last_tick);
+    }
+
+    #[test]
+    fn world_intent_reflection_writes_graph_calibration_snapshot() {
+        let mut state = LatentWorldState::new(Market::Hk);
+        let mut belief = WorldIntentBelief::new(Market::Hk);
+        let mut intent = None;
+        for tick in 1..=8 {
+            state.step(
+                tick,
+                WorldObservation {
+                    values: [0.10, 0.35, 0.25, 0.80, 0.10],
+                    mask: [true; LATENT_DIM],
+                },
+            );
+            intent = Some(belief.observe_state(&state));
+        }
+        let intent = intent.expect("latest intent");
+        let mut graph = PerceptionGraph::new();
+
+        apply_world_intent_and_reflection_to_perception_graph(
+            &state,
+            &intent,
+            belief.reflection_ledger(),
+            &mut graph,
+        );
+
+        let snap = graph
+            .world(Market::Hk)
+            .world_intent
+            .expect("world intent snapshot");
+        assert!(snap.reflection_observations > 0);
+        assert!(snap.reflection_reliability.is_some());
+        assert!(snap.reflection_violation_rate.is_some());
+        assert!(snap.reflection_calibration_gap.is_some());
+        assert!(snap.latest_reflection.is_some());
     }
 
     #[test]

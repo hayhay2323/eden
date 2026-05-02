@@ -3815,6 +3815,9 @@ pub async fn run() {
                 {
                     artifact_projection.agent_snapshot.wake.reasons.push(line);
                 }
+                if let Some(line) = world_intent_belief.reflection_ledger_line() {
+                    artifact_projection.agent_snapshot.wake.reasons.push(line);
+                }
                 if let Some(world_state) = artifact_projection.agent_snapshot.world_state.as_mut() {
                     world_state.world_intents = vec![world_intent.clone()];
                 }
@@ -3823,9 +3826,10 @@ pub async fn run() {
                         .perception_graph
                         .write()
                         .expect("perception graph lock poisoned");
-                    eden::pipeline::latent_world_state::apply_world_intent_to_perception_graph(
+                    eden::pipeline::latent_world_state::apply_world_intent_and_reflection_to_perception_graph(
                         &latent_world_state,
                         &world_intent,
+                        world_intent_belief.reflection_ledger(),
                         &mut graph,
                     );
                 }
