@@ -136,12 +136,74 @@ impl SectorKinematicsSubGraph {
     }
 }
 
+/// Per-(sector, kind) cross-sector contrast reading: how this sector's
+/// activation compares to the mean across all OTHER sectors. Center −
+/// surround mirrors the biological vision primitive that
+/// `cross_sector_contrast` already computes per-tick.
+///
+/// All values are raw f64 because that's what the detector emits.
+/// `last_tick` is the apply-call tick (events are derived from this
+/// tick's `SectorSubKgRegistry`, so observation == apply).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectorContrastSnapshot {
+    pub center_activation: f64,
+    pub surround_mean: f64,
+    pub contrast: f64,
+    pub surround_count: usize,
+    pub last_tick: u64,
+}
+
+/// Cross-sector contrast sub-graph keyed by (sector_id, node_kind).
+/// Holds the latest contrast reading per (sector, kind) — Y can ask
+/// "is energy a standout this tick?" without watching the event
+/// stream.
+#[derive(Debug, Clone, Default)]
+pub struct SectorContrastSubGraph {
+    by_sector_kind: HashMap<(String, String), SectorContrastSnapshot>,
+}
+
+impl SectorContrastSubGraph {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn upsert(
+        &mut self,
+        sector_id: String,
+        node_kind: String,
+        snapshot: SectorContrastSnapshot,
+    ) {
+        self.by_sector_kind.insert((sector_id, node_kind), snapshot);
+    }
+
+    pub fn get(&self, sector_id: &str, node_kind: &str) -> Option<SectorContrastSnapshot> {
+        self.by_sector_kind
+            .get(&(sector_id.to_string(), node_kind.to_string()))
+            .cloned()
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_sector_kind.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_sector_kind.is_empty()
+    }
+
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&(String, String), &SectorContrastSnapshot)> {
+        self.by_sector_kind.iter()
+    }
+}
+
 /// Eden's unified perception graph. Composed of typed sub-graphs, one
 /// per perceiver. Add new sub-graphs as detectors migrate off NDJSON.
 #[derive(Debug, Clone, Default)]
 pub struct PerceptionGraph {
     pub kl_surprise: KlSurpriseSubGraph,
     pub sector_kinematics: SectorKinematicsSubGraph,
+    pub sector_contrast: SectorContrastSubGraph,
 }
 
 impl PerceptionGraph {
@@ -351,6 +413,64 @@ mod tests {
             graph.sector_kinematics.get("tech", "Pressure").unwrap().level_now,
             graph.sector_kinematics.get("tech", "Intent").unwrap().level_now,
         );
+    }
+
+    #[test]
+    fn fresh_graph_has_empty_sector_contrast() {
+        let graph = PerceptionGraph::new();
+        assert!(graph.sector_contrast.is_empty());
+        assert_eq!(graph.sector_contrast.len(), 0);
+    }
+
+    #[test]
+    fn upsert_sector_contrast_then_read() {
+        let mut graph = PerceptionGraph::new();
+        graph.sector_contrast.upsert(
+            "tech".into(),
+            "Pressure".into(),
+            SectorContrastSnapshot {
+                center_activation: 1.0,
+                surround_mean: 0.1,
+                contrast: 0.9,
+                surround_count: 16,
+                last_tick: 4,
+            },
+        );
+
+        let snap = graph.sector_contrast.get("tech", "Pressure").unwrap();
+        assert!((snap.center_activation - 1.0).abs() < 1e-9);
+        assert!((snap.surround_mean - 0.1).abs() < 1e-9);
+        assert!((snap.contrast - 0.9).abs() < 1e-9);
+        assert_eq!(snap.surround_count, 16);
+        assert_eq!(snap.last_tick, 4);
+    }
+
+    #[test]
+    fn sector_contrast_distinct_keys() {
+        let mut graph = PerceptionGraph::new();
+        graph.sector_contrast.upsert(
+            "tech".into(),
+            "Pressure".into(),
+            SectorContrastSnapshot {
+                center_activation: 1.0,
+                surround_mean: 0.1,
+                contrast: 0.9,
+                surround_count: 16,
+                last_tick: 4,
+            },
+        );
+        graph.sector_contrast.upsert(
+            "tech".into(),
+            "Intent".into(),
+            SectorContrastSnapshot {
+                center_activation: 0.5,
+                surround_mean: 0.4,
+                contrast: 0.1,
+                surround_count: 16,
+                last_tick: 4,
+            },
+        );
+        assert_eq!(graph.sector_contrast.len(), 2);
     }
 
     #[test]

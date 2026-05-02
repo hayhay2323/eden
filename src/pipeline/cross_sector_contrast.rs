@@ -116,6 +116,32 @@ pub fn detect_sector_contrasts(
     all_events
 }
 
+/// Mutate the perception graph's sector-contrast sub-graph from this
+/// tick's events. Unlike sector_kinematics, contrast is fully
+/// recomputed each tick (stateless detector), so a sector that
+/// dropped out of the universe leaves its old reading lingering —
+/// Y / L4 readers must compare `last_tick` against current tick to
+/// judge freshness.
+pub fn apply_to_perception_graph(
+    events: &[SectorContrastEvent],
+    graph: &mut crate::perception::PerceptionGraph,
+    tick: u64,
+) {
+    for ev in events {
+        graph.sector_contrast.upsert(
+            ev.sector_id.clone(),
+            ev.node_kind.clone(),
+            crate::perception::SectorContrastSnapshot {
+                center_activation: ev.center_activation,
+                surround_mean: ev.surround_mean,
+                contrast: ev.contrast,
+                surround_count: ev.surround_count,
+                last_tick: tick,
+            },
+        );
+    }
+}
+
 pub fn write_events(market: &str, events: &[SectorContrastEvent]) -> std::io::Result<usize> {
     if events.is_empty() {
         return Ok(0);
@@ -271,6 +297,104 @@ mod tests {
                 ev.sector_id
             );
         }
+    }
+
+    #[test]
+    fn apply_to_perception_graph_writes_one_snapshot_per_event() {
+        let kind = NodeKind::Pressure;
+        let mut rows: Vec<(&str, NodeKind, f64)> = vec![
+            ("finance", kind, 0.1),
+            ("energy", kind, 0.1),
+            ("telecom", kind, 0.1),
+            ("property", kind, 0.1),
+            ("consumer", kind, 0.1),
+            ("healthcare", kind, 0.1),
+            ("utilities", kind, 0.1),
+            ("insurance", kind, 0.1),
+            ("auto", kind, 0.1),
+            ("materials", kind, 0.1),
+            ("industrial", kind, 0.1),
+            ("conglomerate", kind, 0.1),
+            ("media", kind, 0.1),
+            ("logistics", kind, 0.1),
+            ("education", kind, 0.1),
+            ("semiconductor", kind, 0.1),
+            ("tech", kind, 1.0),
+        ];
+        rows.sort_by(|a, b| a.0.cmp(b.0));
+        let reg = build_registry(&rows);
+        let evs = detect_sector_contrasts("test", &reg, Utc::now());
+
+        let mut graph = crate::perception::PerceptionGraph::new();
+        apply_to_perception_graph(&evs, &mut graph, 42);
+
+        assert_eq!(graph.sector_contrast.len(), evs.len());
+        let tech = graph
+            .sector_contrast
+            .get("tech", "Pressure")
+            .expect("tech reading should be in graph");
+        assert!(tech.contrast > 0.5, "tech contrast should be large");
+        assert_eq!(tech.last_tick, 42);
+    }
+
+    #[test]
+    fn apply_to_perception_graph_empty_events_is_noop() {
+        let mut graph = crate::perception::PerceptionGraph::new();
+        apply_to_perception_graph(&[], &mut graph, 99);
+        assert!(graph.sector_contrast.is_empty());
+    }
+
+    #[test]
+    fn apply_to_perception_graph_overwrites_prior_reading() {
+        let mut graph = crate::perception::PerceptionGraph::new();
+        let kind = NodeKind::Pressure;
+        // First tick: tech standout at 1.0.
+        let mut rows: Vec<(&str, NodeKind, f64)> = vec![
+            ("finance", kind, 0.1),
+            ("energy", kind, 0.1),
+            ("telecom", kind, 0.1),
+            ("property", kind, 0.1),
+            ("consumer", kind, 0.1),
+            ("healthcare", kind, 0.1),
+            ("utilities", kind, 0.1),
+            ("insurance", kind, 0.1),
+            ("auto", kind, 0.1),
+            ("materials", kind, 0.1),
+            ("industrial", kind, 0.1),
+            ("conglomerate", kind, 0.1),
+            ("media", kind, 0.1),
+            ("logistics", kind, 0.1),
+            ("education", kind, 0.1),
+            ("semiconductor", kind, 0.1),
+            ("tech", kind, 1.0),
+        ];
+        rows.sort_by(|a, b| a.0.cmp(b.0));
+        let reg = build_registry(&rows);
+        let evs = detect_sector_contrasts("test", &reg, Utc::now());
+        apply_to_perception_graph(&evs, &mut graph, 1);
+        let tick1_contrast = graph
+            .sector_contrast
+            .get("tech", "Pressure")
+            .unwrap()
+            .contrast;
+
+        // Second tick: tech back to baseline 0.1.
+        let mut rows2 = rows.clone();
+        if let Some(idx) = rows2.iter().position(|r| r.0 == "tech") {
+            rows2[idx].2 = 0.1;
+        }
+        let reg2 = build_registry(&rows2);
+        let evs2 = detect_sector_contrasts("test", &reg2, Utc::now());
+        apply_to_perception_graph(&evs2, &mut graph, 2);
+        let tick2_snap = graph.sector_contrast.get("tech", "Pressure").unwrap();
+        assert!(
+            tick2_snap.contrast.abs() < 1e-9,
+            "tech should now be at the mean, contrast≈0; got {}",
+            tick2_snap.contrast
+        );
+        assert_eq!(tick2_snap.last_tick, 2);
+        // Sanity: the two ticks differ.
+        assert!((tick1_contrast - tick2_snap.contrast).abs() > 0.5);
     }
 
     #[test]
