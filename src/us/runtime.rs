@@ -711,7 +711,7 @@ pub async fn run() {
         crate::ontology::objects::Market::Us,
     );
     let mut world_intent_belief =
-        crate::pipeline::latent_world_state::WorldIntentBelief::new(
+        crate::pipeline::latent_world_state::WorldIntentBelief::persistent(
             crate::ontology::objects::Market::Us,
         );
     // Shift B: SCM over same latent dims (semantics cross-market

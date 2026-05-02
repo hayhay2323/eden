@@ -307,10 +307,9 @@ pub async fn run() {
     let mut latent_world_state = eden::pipeline::latent_world_state::LatentWorldState::new(
         eden::ontology::objects::Market::Hk,
     );
-    let mut world_intent_belief =
-        eden::pipeline::latent_world_state::WorldIntentBelief::new(
-            eden::ontology::objects::Market::Hk,
-        );
+    let mut world_intent_belief = eden::pipeline::latent_world_state::WorldIntentBelief::persistent(
+        eden::ontology::objects::Market::Hk,
+    );
     // Shift B: structural causal model over the same 5 latent dims.
     // Replaces edge-weight propagation with true do-calculus for
     // "what if stress spikes" reasoning. v1 uses default hand-

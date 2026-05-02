@@ -33,6 +33,8 @@
 //!     SSM — worth doing later)
 
 use std::collections::HashMap;
+use std::io::Write;
+use std::path::Path;
 
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
@@ -67,6 +69,8 @@ const WORLD_INTENT_VARIANTS: [IntentKind; WORLD_INTENT_COUNT] = [
     IntentKind::Unknown,
 ];
 const NUMERIC_EPSILON: f64 = 1.0e-9;
+const WORLD_REFLECTION_LEDGER_TAIL_BYTES: u64 = 4 * 1024 * 1024;
+const WORLD_REFLECTION_LEDGER_TAIL_RECORDS: usize = 50_000;
 
 /// One tick's observation vector — emitted by the aggregator below
 /// before being fed to the Kalman update step.
@@ -261,23 +265,48 @@ pub struct WorldIntentBelief {
     posterior: CategoricalBelief<IntentKind>,
     previous_intent: Option<IntentHypothesis>,
     reflection_ledger: WorldIntentReflectionLedger,
+    reflection_persistence_path: Option<String>,
 }
 
 impl WorldIntentBelief {
     pub fn new(market: Market) -> Self {
+        Self::with_reflection_ledger(market, WorldIntentReflectionLedger::new(market), None)
+    }
+
+    pub fn persistent(market: Market) -> Self {
+        let path = world_reflection_ledger_path(market);
+        let ledger = load_world_reflection_ledger_from_path(
+            market,
+            Path::new(&path),
+            WORLD_REFLECTION_LEDGER_TAIL_BYTES,
+            WORLD_REFLECTION_LEDGER_TAIL_RECORDS,
+        );
+        Self::with_reflection_ledger(market, ledger, Some(path))
+    }
+
+    pub fn with_reflection_ledger(
+        market: Market,
+        reflection_ledger: WorldIntentReflectionLedger,
+        reflection_persistence_path: Option<String>,
+    ) -> Self {
         let posterior = world_intent_prior();
         Self {
             market,
             previous: posterior.clone(),
             posterior,
             previous_intent: None,
-            reflection_ledger: WorldIntentReflectionLedger::new(market),
+            reflection_ledger,
+            reflection_persistence_path,
         }
     }
 
     pub fn observe_state(&mut self, state: &LatentWorldState) -> IntentHypothesis {
         if self.market != state.market {
-            *self = Self::new(state.market);
+            *self = if self.reflection_persistence_path.is_some() {
+                Self::persistent(state.market)
+            } else {
+                Self::new(state.market)
+            };
         }
         self.previous = self.posterior.clone();
         let previous_intent = self.previous_intent.clone();
@@ -290,12 +319,16 @@ impl WorldIntentBelief {
         if let Some(previous_intent) = previous_intent.as_ref() {
             intent.expectation_violations =
                 world_intent_expectation_violations(previous_intent, &intent, state);
-            let _ = self.reflection_ledger.record_resolution(
+            if let Some(record) = self.reflection_ledger.record_resolution(
                 previous_intent,
                 &intent,
                 state.last_tick,
                 &intent.expectation_violations,
-            );
+            ) {
+                if let Some(path) = self.reflection_persistence_path.as_deref() {
+                    let _ = append_world_reflection_record_to_path(&record, Path::new(path));
+                }
+            }
         }
         self.previous_intent = Some(intent.clone());
         intent
@@ -314,6 +347,10 @@ impl WorldIntentBelief {
             .summary()
             .map(|summary| format_world_reflection_ledger_line(&summary))
     }
+}
+
+pub fn world_reflection_ledger_path(market: Market) -> String {
+    format!(".run/world-reflection-{}.ndjson", market)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -466,6 +503,19 @@ impl WorldIntentReflectionLedger {
         }
     }
 
+    pub fn from_records(
+        market: Market,
+        records: impl IntoIterator<Item = WorldIntentReflectionRecord>,
+    ) -> Self {
+        let mut ledger = Self::new(market);
+        for record in records {
+            if record.market == market {
+                ledger.record(record);
+            }
+        }
+        ledger
+    }
+
     pub fn record_resolution(
         &mut self,
         previous: &IntentHypothesis,
@@ -600,6 +650,49 @@ impl WorldIntentReflectionLedger {
             latest: self.latest_record().cloned(),
         })
     }
+}
+
+pub fn append_world_reflection_record(record: &WorldIntentReflectionRecord) -> std::io::Result<()> {
+    let path = world_reflection_ledger_path(record.market);
+    append_world_reflection_record_to_path(record, Path::new(&path))
+}
+
+pub fn append_world_reflection_record_to_path(
+    record: &WorldIntentReflectionRecord,
+    path: &Path,
+) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    let line = serde_json::to_string(record)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    writeln!(file, "{}", line)?;
+    Ok(())
+}
+
+pub fn load_world_reflection_ledger(market: Market) -> WorldIntentReflectionLedger {
+    let path = world_reflection_ledger_path(market);
+    load_world_reflection_ledger_from_path(
+        market,
+        Path::new(&path),
+        WORLD_REFLECTION_LEDGER_TAIL_BYTES,
+        WORLD_REFLECTION_LEDGER_TAIL_RECORDS,
+    )
+}
+
+pub fn load_world_reflection_ledger_from_path(
+    market: Market,
+    path: &Path,
+    buffer_bytes: u64,
+    max_records: usize,
+) -> WorldIntentReflectionLedger {
+    let records: Vec<WorldIntentReflectionRecord> =
+        crate::live_snapshot::tail_records(path, buffer_bytes, max_records);
+    WorldIntentReflectionLedger::from_records(market, records)
 }
 
 impl WorldIntentReflectionRecord {
@@ -2300,6 +2393,49 @@ mod tests {
             .expect("ledger summary");
         assert!(summary.violated_count > 0);
         assert!(summary.mean_violation_magnitude > Decimal::ZERO);
+    }
+
+    #[test]
+    fn world_intent_reflection_ledger_persists_and_hydrates_ndjson() {
+        let mut state = LatentWorldState::new(Market::Hk);
+        let mut belief = WorldIntentBelief::new(Market::Hk);
+        for tick in 1..=8 {
+            state.step(
+                tick,
+                WorldObservation {
+                    values: [0.10, 0.35, 0.25, 0.80, 0.10],
+                    mask: [true; LATENT_DIM],
+                },
+            );
+            let _ = belief.observe_state(&state);
+        }
+        let records = belief.reflection_ledger().records().to_vec();
+        assert!(!records.is_empty());
+
+        let dir = std::env::temp_dir().join(format!(
+            "eden-world-reflection-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = dir.join("world-reflection-hk.ndjson");
+        for record in &records {
+            append_world_reflection_record_to_path(record, &path).expect("append reflection");
+        }
+
+        let loaded = load_world_reflection_ledger_from_path(Market::Hk, &path, 1024 * 1024, 100);
+        assert_eq!(loaded.resolved_count(), records.len());
+        let loaded_summary = loaded.summary().expect("loaded summary");
+        assert_eq!(loaded_summary.confirmed_count, records.len());
+        assert!(loaded_summary.reliability > loaded_summary.violation_rate);
+
+        let wrong_market =
+            load_world_reflection_ledger_from_path(Market::Us, &path, 1024 * 1024, 100);
+        assert_eq!(wrong_market.resolved_count(), 0);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]
