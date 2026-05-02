@@ -36,11 +36,35 @@ use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
+use crate::ontology::horizon::{HorizonBucket, Urgency};
 use crate::ontology::objects::Market;
+use crate::ontology::{
+    ExpectationBinding, ExpectationKind, ExpectationViolation, ExpectationViolationKind,
+    IntentDirection, IntentHypothesis, IntentKind, IntentOpportunityBias, IntentOpportunityWindow,
+    IntentState, IntentStrength, ReasoningScope,
+};
+use crate::perception::{PerceptionGraph, WorldIntentSnapshot};
+use crate::pipeline::belief::CategoricalBelief;
 
 pub const LATENT_DIM: usize = 5;
 pub const LATENT_NAMES: [&str; LATENT_DIM] =
     ["stress", "breadth", "synchrony", "inst_flow", "retail_flow"];
+const STRESS: usize = 0;
+const BREADTH: usize = 1;
+const SYNCHRONY: usize = 2;
+const INST_FLOW: usize = 3;
+const RETAIL_FLOW: usize = 4;
+
+const WORLD_INTENT_COUNT: usize = 6;
+const WORLD_INTENT_VARIANTS: [IntentKind; WORLD_INTENT_COUNT] = [
+    IntentKind::Accumulation,
+    IntentKind::Distribution,
+    IntentKind::ForcedUnwind,
+    IntentKind::EventRepricing,
+    IntentKind::Absorption,
+    IntentKind::Unknown,
+];
+const NUMERIC_EPSILON: f64 = 1.0e-9;
 
 /// One tick's observation vector — emitted by the aggregator below
 /// before being fed to the Kalman update step.
@@ -217,6 +241,198 @@ impl LatentWorldState {
             parts.join(" "),
         )
     }
+
+    pub fn dominant_world_intent(&self) -> IntentHypothesis {
+        infer_world_intent(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Intent posterior — project the latent world state into the ontology's
+// existing IntentHypothesis schema.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct WorldIntentBelief {
+    market: Market,
+    previous: CategoricalBelief<IntentKind>,
+    posterior: CategoricalBelief<IntentKind>,
+    previous_intent: Option<IntentHypothesis>,
+}
+
+impl WorldIntentBelief {
+    pub fn new(market: Market) -> Self {
+        let posterior = world_intent_prior();
+        Self {
+            market,
+            previous: posterior.clone(),
+            posterior,
+            previous_intent: None,
+        }
+    }
+
+    pub fn observe_state(&mut self, state: &LatentWorldState) -> IntentHypothesis {
+        if self.market != state.market {
+            *self = Self::new(state.market);
+        }
+        self.previous = self.posterior.clone();
+        let likelihoods = world_intent_likelihoods(state);
+        let likelihoods_decimal: Vec<Decimal> =
+            likelihoods.iter().map(|v| decimal_positive(*v)).collect();
+        self.posterior.update_likelihoods(&likelihoods_decimal);
+        let mut intent =
+            build_world_intent_hypothesis(state, &self.posterior, Some(&self.previous));
+        if let Some(previous_intent) = self.previous_intent.as_ref() {
+            intent.expectation_violations =
+                world_intent_expectation_violations(previous_intent, &intent, state);
+        }
+        self.previous_intent = Some(intent.clone());
+        intent
+    }
+
+    pub fn posterior(&self) -> &CategoricalBelief<IntentKind> {
+        &self.posterior
+    }
+}
+
+pub fn infer_world_intent(state: &LatentWorldState) -> IntentHypothesis {
+    let mut belief = WorldIntentBelief::new(state.market);
+    belief.observe_state(state)
+}
+
+fn build_world_intent_hypothesis(
+    state: &LatentWorldState,
+    posterior: &CategoricalBelief<IntentKind>,
+    previous: Option<&CategoricalBelief<IntentKind>>,
+) -> IntentHypothesis {
+    let summary = summarize_world_intent_posterior(posterior);
+    let kind = summary.kind;
+    let direction = infer_intent_direction(kind, state);
+    let certainty = latent_certainty(state);
+    let persistence = evidence_maturity(state.update_count);
+    let conflict = intent_conflict_score(state);
+    let confidence = if kind == IntentKind::Unknown || state.update_count == 0 {
+        0.0
+    } else {
+        clamp01(summary.edge * certainty * persistence * (1.0 - conflict))
+    };
+    let urgency = world_intent_urgency(state);
+    let strength = build_intent_strength(
+        active_abs_dim(state, INST_FLOW).max(active_abs_dim(state, RETAIL_FLOW)),
+        active_abs_dim(state, STRESS),
+        persistence,
+        active_abs_dim(state, SYNCHRONY),
+        conflict,
+    );
+    let state_label = classify_intent_state(kind, &summary, conflict);
+    let surprise = previous
+        .and_then(|prior| posterior.kl_divergence(prior))
+        .unwrap_or(0.0);
+    let rationale = format_world_intent_rationale(state, certainty, &summary, posterior, surprise);
+    let expectation_bindings = world_intent_expectations(kind, direction, state, summary.edge);
+    let falsifiers = world_intent_falsifiers(kind);
+
+    IntentHypothesis {
+        intent_id: format!("world_intent:{}:{}", state.market, state.last_tick),
+        kind,
+        scope: ReasoningScope::market(),
+        direction,
+        state: state_label,
+        confidence: decimal01(confidence),
+        urgency: decimal01(urgency),
+        persistence: decimal01(persistence),
+        conflict_score: decimal01(conflict),
+        strength,
+        propagation_targets: vec![],
+        supporting_archetypes: vec![],
+        supporting_case_signature: None,
+        expectation_bindings,
+        expectation_violations: vec![],
+        exit_signals: vec![],
+        opportunities: vec![IntentOpportunityWindow::new(
+            opportunity_bucket(urgency, persistence),
+            opportunity_urgency(urgency),
+            opportunity_bias(kind, state_label, confidence, conflict),
+            decimal01(confidence),
+            decimal01(1.0 - conflict),
+            rationale.clone(),
+        )],
+        falsifiers,
+        rationale,
+    }
+}
+
+pub fn format_world_intent_line(intent: &IntentHypothesis) -> String {
+    format!(
+        "world_intent: id={} kind={} direction={} state={} confidence={} urgency={} persistence={} conflict={} strength={}",
+        intent.intent_id,
+        intent_kind_label(intent.kind),
+        intent_direction_label(intent.direction),
+        intent_state_label(intent.state),
+        intent.confidence,
+        intent.urgency,
+        intent.persistence,
+        intent.conflict_score,
+        intent.strength.composite,
+    )
+}
+
+pub fn format_world_reflection_line(intent: &IntentHypothesis) -> Option<String> {
+    let expectation = intent.expectation_bindings.first()?;
+    let falsifier = intent
+        .falsifiers
+        .first()
+        .map(String::as_str)
+        .unwrap_or("none");
+    let violation = intent
+        .expectation_violations
+        .first()
+        .map(|item| item.description.as_str())
+        .unwrap_or("none");
+    Some(format!(
+        "world_reflection: id={} belief={} expectation={} falsifier={} violation={} confidence={} conflict={}",
+        intent.intent_id,
+        intent_kind_label(intent.kind),
+        expectation.rationale,
+        falsifier,
+        violation,
+        intent.confidence,
+        intent.conflict_score,
+    ))
+}
+
+pub fn apply_world_intent_to_perception_graph(
+    state: &LatentWorldState,
+    intent: &IntentHypothesis,
+    graph: &mut PerceptionGraph,
+) {
+    graph.world_intent.upsert(
+        state.market,
+        WorldIntentSnapshot {
+            intent_id: intent.intent_id.clone(),
+            kind: intent.kind,
+            direction: intent.direction,
+            state: intent.state,
+            confidence: intent.confidence,
+            urgency: intent.urgency,
+            persistence: intent.persistence,
+            conflict_score: intent.conflict_score,
+            strength: intent.strength.composite,
+            rationale: intent.rationale.clone(),
+            top_expectation: intent
+                .expectation_bindings
+                .first()
+                .map(|item| item.rationale.clone()),
+            top_falsifier: intent.falsifiers.first().cloned(),
+            expectation_count: intent.expectation_bindings.len(),
+            top_violation: intent
+                .expectation_violations
+                .first()
+                .map(|item| item.description.clone()),
+            violation_count: intent.expectation_violations.len(),
+            last_tick: state.last_tick,
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +482,817 @@ pub struct ObservationInputs {
 
 pub fn decimal_to_f64(d: Decimal) -> f64 {
     d.to_f64().unwrap_or(0.0)
+}
+
+pub fn signed_breadth_signal(breadth_up: Decimal, breadth_down: Decimal) -> f64 {
+    clamp_signed_unit(decimal_to_f64(breadth_up - breadth_down))
+}
+
+pub fn mean_decimal_signal(values: impl IntoIterator<Item = Decimal>) -> Option<f64> {
+    let mut count = 0_i64;
+    let mut total = Decimal::ZERO;
+    for value in values {
+        total += value;
+        count += 1;
+    }
+    if count == 0 {
+        return None;
+    }
+    Some(clamp_signed_unit(decimal_to_f64(
+        total / Decimal::from(count),
+    )))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct IntentPosteriorSummary {
+    kind: IntentKind,
+    best_prob: f64,
+    runner_up_prob: f64,
+    margin: f64,
+    entropy: f64,
+    edge: f64,
+}
+
+fn world_intent_prior() -> CategoricalBelief<IntentKind> {
+    CategoricalBelief::uniform(WORLD_INTENT_VARIANTS.to_vec())
+}
+
+fn summarize_world_intent_posterior(
+    posterior: &CategoricalBelief<IntentKind>,
+) -> IntentPosteriorSummary {
+    let mut best = (IntentKind::Unknown, 0.0_f64);
+    let mut runner_up = 0.0_f64;
+    for (variant, prob) in posterior.variants.iter().zip(posterior.probs.iter()) {
+        let prob = decimal_to_f64(*prob);
+        if prob > best.1 {
+            runner_up = best.1;
+            best = (*variant, prob);
+        } else if prob > runner_up {
+            runner_up = prob;
+        }
+    }
+    let prior = 1.0 / WORLD_INTENT_COUNT as f64;
+    let entropy = posterior.entropy().unwrap_or(0.0);
+    IntentPosteriorSummary {
+        kind: best.0,
+        best_prob: best.1,
+        runner_up_prob: runner_up,
+        margin: clamp01(best.1 - runner_up),
+        entropy,
+        edge: clamp01((best.1 - prior) / (1.0 - prior)),
+    }
+}
+
+fn world_intent_likelihoods(state: &LatentWorldState) -> [f64; WORLD_INTENT_COUNT] {
+    let stress_pos = evidence_positive(state, STRESS);
+    let stress_active = evidence_active_abs(state, STRESS);
+    let breadth_pos = evidence_positive(state, BREADTH);
+    let breadth_neg = evidence_negative(state, BREADTH);
+    let breadth_compressed = evidence_neutral(state, BREADTH).max(breadth_neg);
+    let synchrony_active = evidence_active_abs(state, SYNCHRONY);
+    let inst_pos = evidence_positive(state, INST_FLOW);
+    let inst_neg = evidence_negative(state, INST_FLOW);
+    let inst_neutral = evidence_neutral(state, INST_FLOW);
+    let retail_neg = evidence_negative(state, RETAIL_FLOW);
+    let retail_neutral = evidence_neutral(state, RETAIL_FLOW);
+    let unknown = joint_likelihood(&[
+        evidence_neutral(state, STRESS),
+        evidence_neutral(state, BREADTH),
+        evidence_neutral(state, SYNCHRONY),
+        evidence_neutral(state, INST_FLOW),
+        evidence_neutral(state, RETAIL_FLOW),
+    ]);
+
+    [
+        joint_likelihood(&[
+            inst_pos,
+            breadth_pos,
+            evidence_neutral(state, STRESS),
+            retail_neutral.max(evidence_positive(state, RETAIL_FLOW)),
+        ]),
+        joint_likelihood(&[
+            inst_neg,
+            breadth_neg,
+            stress_pos.max(evidence_neutral(state, STRESS)),
+        ]),
+        joint_likelihood(&[
+            stress_pos,
+            synchrony_active,
+            breadth_neg,
+            inst_neg.max(retail_neg),
+        ]),
+        joint_likelihood(&[
+            stress_active,
+            synchrony_active,
+            inst_neutral,
+            retail_neutral,
+        ]),
+        joint_likelihood(&[
+            stress_pos,
+            inst_pos,
+            breadth_compressed,
+            evidence_neutral(state, SYNCHRONY),
+        ]),
+        unknown,
+    ]
+}
+
+fn infer_intent_direction(kind: IntentKind, state: &LatentWorldState) -> IntentDirection {
+    match kind {
+        IntentKind::Accumulation => IntentDirection::Buy,
+        IntentKind::Distribution | IntentKind::ForcedUnwind => IntentDirection::Sell,
+        IntentKind::EventRepricing => repricing_direction(state),
+        IntentKind::Absorption => IntentDirection::Neutral,
+        _ => IntentDirection::Neutral,
+    }
+}
+
+fn repricing_direction(state: &LatentWorldState) -> IntentDirection {
+    let buy = geometric_mean(&[
+        evidence_positive(state, BREADTH),
+        evidence_positive(state, INST_FLOW),
+        evidence_positive(state, RETAIL_FLOW),
+    ]);
+    let sell = geometric_mean(&[
+        evidence_negative(state, BREADTH),
+        evidence_negative(state, INST_FLOW),
+        evidence_negative(state, RETAIL_FLOW),
+    ]);
+    let mixed = geometric_mean(&[
+        evidence_neutral(state, BREADTH),
+        evidence_neutral(state, INST_FLOW),
+        evidence_neutral(state, RETAIL_FLOW),
+    ]);
+    if mixed >= buy.max(sell) {
+        IntentDirection::Mixed
+    } else if buy > sell {
+        IntentDirection::Buy
+    } else {
+        IntentDirection::Sell
+    }
+}
+
+fn classify_intent_state(
+    kind: IntentKind,
+    summary: &IntentPosteriorSummary,
+    conflict: f64,
+) -> IntentState {
+    if kind == IntentKind::Unknown || summary.edge <= 0.0 {
+        IntentState::Unknown
+    } else if conflict > summary.best_prob {
+        IntentState::AtRisk
+    } else if summary.best_prob >= (1.0 / WORLD_INTENT_COUNT as f64) * 2.0
+        && summary.margin >= 1.0 / WORLD_INTENT_COUNT as f64
+    {
+        IntentState::Active
+    } else {
+        IntentState::Forming
+    }
+}
+
+fn build_intent_strength(
+    flow_strength: f64,
+    impact_strength: f64,
+    persistence_strength: f64,
+    propagation_strength: f64,
+    resistance_strength: f64,
+) -> IntentStrength {
+    let composite = clamp01(
+        ((flow_strength + impact_strength + persistence_strength + propagation_strength)
+            / LATENT_DIM.saturating_sub(1) as f64)
+            * (1.0 - resistance_strength),
+    );
+    IntentStrength {
+        flow_strength: decimal01(flow_strength),
+        impact_strength: decimal01(impact_strength),
+        persistence_strength: decimal01(persistence_strength),
+        propagation_strength: decimal01(propagation_strength),
+        resistance_strength: decimal01(resistance_strength),
+        composite: decimal01(composite),
+    }
+}
+
+fn intent_conflict_score(state: &LatentWorldState) -> f64 {
+    let flow_breadth = opposite_sign_evidence(state, INST_FLOW, BREADTH);
+    let inst_retail = opposite_sign_evidence(state, INST_FLOW, RETAIL_FLOW);
+    let uncertainty = 1.0 - latent_certainty(state);
+    clamp01(flow_breadth.max(inst_retail).max(uncertainty))
+}
+
+fn opposite_sign_evidence(state: &LatentWorldState, a: usize, b: usize) -> f64 {
+    let a_value = state.mean[a];
+    let b_value = state.mean[b];
+    if a_value.signum() == b_value.signum() {
+        return 0.0;
+    }
+    geometric_mean(&[evidence_active_abs(state, a), evidence_active_abs(state, b)])
+}
+
+fn evidence_maturity(update_count: u32) -> f64 {
+    let updates = update_count as f64;
+    if updates <= 0.0 {
+        0.0
+    } else {
+        updates / (updates + LATENT_DIM as f64)
+    }
+}
+
+fn world_intent_urgency(state: &LatentWorldState) -> f64 {
+    root_mean_square(&[
+        evidence_active_abs(state, STRESS),
+        evidence_active_abs(state, SYNCHRONY),
+        active_abs_dim(state, INST_FLOW).max(active_abs_dim(state, RETAIL_FLOW)),
+    ])
+}
+
+fn evidence_positive(state: &LatentWorldState, idx: usize) -> f64 {
+    sigmoid(normalized_dim(state, idx))
+}
+
+fn evidence_negative(state: &LatentWorldState, idx: usize) -> f64 {
+    sigmoid(-normalized_dim(state, idx))
+}
+
+fn evidence_neutral(state: &LatentWorldState, idx: usize) -> f64 {
+    let z = normalized_dim(state, idx);
+    (-0.5 * z * z).exp().clamp(NUMERIC_EPSILON, 1.0)
+}
+
+fn evidence_active_abs(state: &LatentWorldState, idx: usize) -> f64 {
+    1.0 - evidence_neutral(state, idx)
+}
+
+fn active_abs_dim(state: &LatentWorldState, idx: usize) -> f64 {
+    evidence_active_abs(state, idx)
+}
+
+fn normalized_dim(state: &LatentWorldState, idx: usize) -> f64 {
+    let variance = state.covariance[idx][idx].max(0.0) + state.observation_noise[idx][idx].max(0.0);
+    state.mean[idx] / variance.sqrt().max(NUMERIC_EPSILON)
+}
+
+fn sigmoid(value: f64) -> f64 {
+    if !value.is_finite() {
+        0.5
+    } else {
+        1.0 / (1.0 + (-value).exp())
+    }
+}
+
+fn geometric_mean(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let log_sum = values
+        .iter()
+        .map(|value| value.clamp(NUMERIC_EPSILON, 1.0).ln())
+        .sum::<f64>();
+    (log_sum / values.len() as f64).exp()
+}
+
+fn joint_likelihood(values: &[f64]) -> f64 {
+    values
+        .iter()
+        .fold(1.0, |acc, value| acc * value.clamp(NUMERIC_EPSILON, 1.0))
+}
+
+fn root_mean_square(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mean_square = values
+        .iter()
+        .map(|value| clamp01(*value).powi(2))
+        .sum::<f64>()
+        / values.len() as f64;
+    mean_square.sqrt()
+}
+
+fn latent_certainty(state: &LatentWorldState) -> f64 {
+    let avg_stdev = (0..LATENT_DIM)
+        .map(|idx| state.covariance[idx][idx].max(0.0).sqrt())
+        .sum::<f64>()
+        / LATENT_DIM as f64;
+    clamp01(1.0 / (1.0 + avg_stdev))
+}
+
+fn opportunity_bucket(urgency: f64, persistence: f64) -> HorizonBucket {
+    if urgency >= 0.70 {
+        HorizonBucket::Fast5m
+    } else if persistence >= 0.70 {
+        HorizonBucket::MultiSession
+    } else if urgency >= 0.45 {
+        HorizonBucket::Mid30m
+    } else {
+        HorizonBucket::Session
+    }
+}
+
+fn opportunity_urgency(urgency: f64) -> Urgency {
+    if urgency >= 0.70 {
+        Urgency::Immediate
+    } else if urgency <= 0.25 {
+        Urgency::Relaxed
+    } else {
+        Urgency::Normal
+    }
+}
+
+fn opportunity_bias(
+    kind: IntentKind,
+    state: IntentState,
+    confidence: f64,
+    conflict: f64,
+) -> IntentOpportunityBias {
+    if kind == IntentKind::Unknown {
+        IntentOpportunityBias::Watch
+    } else if state == IntentState::AtRisk || conflict >= 0.65 {
+        IntentOpportunityBias::Exit
+    } else if state == IntentState::Active && confidence >= 0.65 {
+        IntentOpportunityBias::Hold
+    } else {
+        IntentOpportunityBias::Watch
+    }
+}
+
+fn world_intent_expectations(
+    kind: IntentKind,
+    direction: IntentDirection,
+    state: &LatentWorldState,
+    strength: f64,
+) -> Vec<ExpectationBinding> {
+    match kind {
+        IntentKind::Accumulation => vec![
+            world_expectation(
+                state,
+                "accumulation_flow",
+                ExpectationKind::Confirmation,
+                "fast5m",
+                strength,
+                "institutional flow should remain constructive while breadth broadens",
+            ),
+            world_expectation(
+                state,
+                "accumulation_stress",
+                ExpectationKind::Observation,
+                "next_tick",
+                strength,
+                "stress should not rise against positive flow",
+            ),
+        ],
+        IntentKind::Distribution => vec![
+            world_expectation(
+                state,
+                "distribution_flow",
+                ExpectationKind::Confirmation,
+                "fast5m",
+                strength,
+                "institutional flow should remain negative while breadth narrows",
+            ),
+            world_expectation(
+                state,
+                "distribution_propagation",
+                ExpectationKind::Propagation,
+                "session",
+                strength,
+                "sell pressure should spread beyond the first affected cluster",
+            ),
+        ],
+        IntentKind::ForcedUnwind => vec![
+            world_expectation(
+                state,
+                "forced_unwind_sync",
+                ExpectationKind::CoMovement,
+                "next_tick",
+                strength,
+                "stress and synchrony should stay coupled across symbols",
+            ),
+            world_expectation(
+                state,
+                "forced_unwind_breadth",
+                ExpectationKind::Propagation,
+                "fast5m",
+                strength,
+                "breadth should remain under pressure unless flow stabilizes",
+            ),
+        ],
+        IntentKind::EventRepricing => vec![
+            world_expectation(
+                state,
+                "event_repricing_sync",
+                ExpectationKind::CoMovement,
+                "next_tick",
+                strength,
+                "synchrony should stay elevated until the repricing resolves",
+            ),
+            world_expectation(
+                state,
+                "event_repricing_direction",
+                ExpectationKind::Confirmation,
+                "fast5m",
+                strength,
+                &format!(
+                    "flow or breadth should resolve toward {} instead of staying neutral",
+                    intent_direction_label(direction),
+                ),
+            ),
+        ],
+        IntentKind::Absorption => vec![
+            world_expectation(
+                state,
+                "absorption_flow",
+                ExpectationKind::Confirmation,
+                "fast5m",
+                strength,
+                "constructive flow should persist while downside breadth fails to expand",
+            ),
+            world_expectation(
+                state,
+                "absorption_sync",
+                ExpectationKind::Observation,
+                "next_tick",
+                strength,
+                "synchrony should stay contained rather than becoming forced unwind",
+            ),
+        ],
+        IntentKind::Unknown => vec![world_expectation(
+            state,
+            "unknown_disambiguate",
+            ExpectationKind::Observation,
+            "next_tick",
+            strength,
+            "posterior should sharpen only after a latent dimension moves beyond its uncertainty",
+        )],
+        _ => vec![world_expectation(
+            state,
+            "generic_follow_through",
+            ExpectationKind::Confirmation,
+            "fast5m",
+            strength,
+            "the dominant intent should produce confirming observation before case escalation",
+        )],
+    }
+}
+
+fn world_expectation(
+    state: &LatentWorldState,
+    suffix: &str,
+    kind: ExpectationKind,
+    horizon: &str,
+    strength: f64,
+    rationale: &str,
+) -> ExpectationBinding {
+    ExpectationBinding {
+        expectation_id: format!(
+            "world_intent_expectation:{}:{}:{}",
+            state.market, state.last_tick, suffix
+        ),
+        kind,
+        scope: ReasoningScope::market(),
+        target_scope: None,
+        horizon: horizon.into(),
+        strength: decimal01(strength),
+        rationale: rationale.into(),
+    }
+}
+
+fn world_intent_expectation_violations(
+    previous: &IntentHypothesis,
+    current: &IntentHypothesis,
+    state: &LatentWorldState,
+) -> Vec<ExpectationViolation> {
+    if previous.kind == IntentKind::Unknown {
+        return Vec::new();
+    }
+
+    let mut violations = Vec::new();
+    match previous.kind {
+        IntentKind::Accumulation => {
+            push_world_violation(
+                &mut violations,
+                previous,
+                "accumulation_flow",
+                ExpectationViolationKind::FailedConfirmation,
+                "accumulation flow expectation failed",
+                "institutional flow or breadth turned against accumulation",
+                evidence_negative(state, INST_FLOW).max(evidence_negative(state, BREADTH)),
+                evidence_positive(state, INST_FLOW).max(evidence_positive(state, BREADTH)),
+            );
+            push_world_violation(
+                &mut violations,
+                previous,
+                "accumulation_stress",
+                ExpectationViolationKind::ModalConflict,
+                "stress rose against accumulation",
+                "stress rises while accumulation should be constructive",
+                evidence_positive(state, STRESS),
+                evidence_neutral(state, STRESS),
+            );
+        }
+        IntentKind::Distribution => {
+            push_world_violation(
+                &mut violations,
+                previous,
+                "distribution_flow",
+                ExpectationViolationKind::FailedConfirmation,
+                "distribution flow expectation failed",
+                "institutional flow or breadth recovered against distribution",
+                evidence_positive(state, INST_FLOW).max(evidence_positive(state, BREADTH)),
+                evidence_negative(state, INST_FLOW).max(evidence_negative(state, BREADTH)),
+            );
+            push_world_violation(
+                &mut violations,
+                previous,
+                "distribution_propagation",
+                ExpectationViolationKind::MissingPropagation,
+                "distribution propagation failed",
+                "sell pressure remained isolated instead of propagating",
+                evidence_neutral(state, SYNCHRONY).max(evidence_positive(state, BREADTH)),
+                evidence_active_abs(state, SYNCHRONY).max(evidence_negative(state, BREADTH)),
+            );
+        }
+        IntentKind::ForcedUnwind => {
+            push_world_violation(
+                &mut violations,
+                previous,
+                "forced_unwind_sync",
+                ExpectationViolationKind::FailedConfirmation,
+                "forced unwind synchrony expectation failed",
+                "stress and synchrony decoupled",
+                evidence_neutral(state, STRESS).max(evidence_neutral(state, SYNCHRONY)),
+                geometric_mean(&[
+                    evidence_active_abs(state, STRESS),
+                    evidence_active_abs(state, SYNCHRONY),
+                ]),
+            );
+            push_world_violation(
+                &mut violations,
+                previous,
+                "forced_unwind_breadth",
+                ExpectationViolationKind::UnexpectedPropagation,
+                "breadth recovered against forced unwind",
+                "breadth recovered without delayed downside propagation",
+                evidence_positive(state, BREADTH),
+                evidence_negative(state, BREADTH),
+            );
+        }
+        IntentKind::EventRepricing => {
+            if !matches!(
+                current.kind,
+                IntentKind::Accumulation | IntentKind::Distribution | IntentKind::ForcedUnwind
+            ) {
+                push_world_violation(
+                    &mut violations,
+                    previous,
+                    "event_repricing_sync",
+                    ExpectationViolationKind::TimingMismatch,
+                    "event repricing synchrony faded before resolution",
+                    "synchrony decoupled without directional follow-through",
+                    evidence_neutral(state, SYNCHRONY).max(evidence_neutral(state, STRESS)),
+                    geometric_mean(&[
+                        evidence_active_abs(state, STRESS),
+                        evidence_active_abs(state, SYNCHRONY),
+                    ]),
+                );
+            }
+            if current.kind == IntentKind::Unknown {
+                push_world_violation(
+                    &mut violations,
+                    previous,
+                    "event_repricing_direction",
+                    ExpectationViolationKind::FailedConfirmation,
+                    "event repricing produced no directional follow-through",
+                    "flow and breadth stayed neutral after repricing",
+                    geometric_mean(&[
+                        evidence_neutral(state, BREADTH),
+                        evidence_neutral(state, INST_FLOW),
+                    ]),
+                    active_abs_dim(state, BREADTH).max(active_abs_dim(state, INST_FLOW)),
+                );
+            }
+        }
+        IntentKind::Absorption => {
+            push_world_violation(
+                &mut violations,
+                previous,
+                "absorption_sync",
+                ExpectationViolationKind::UnexpectedPropagation,
+                "absorption became broad synchrony",
+                "synchrony expanded instead of staying contained",
+                evidence_active_abs(state, SYNCHRONY),
+                evidence_neutral(state, SYNCHRONY),
+            );
+            push_world_violation(
+                &mut violations,
+                previous,
+                "absorption_flow",
+                ExpectationViolationKind::FailedConfirmation,
+                "absorption flow disappeared",
+                "institutional flow disappeared while breadth stayed weak",
+                evidence_negative(state, INST_FLOW).max(evidence_negative(state, BREADTH)),
+                evidence_positive(state, INST_FLOW),
+            );
+        }
+        _ => {}
+    }
+
+    if previous.kind != current.kind
+        && current.kind != IntentKind::Unknown
+        && !(previous.kind == IntentKind::EventRepricing
+            && matches!(
+                current.kind,
+                IntentKind::Accumulation | IntentKind::Distribution
+            ))
+    {
+        let current_confidence = decimal_to_f64(current.confidence);
+        if current_confidence > 0.0 {
+            violations.push(ExpectationViolation {
+                kind: ExpectationViolationKind::ModalConflict,
+                expectation_id: previous
+                    .expectation_bindings
+                    .first()
+                    .map(|binding| binding.expectation_id.clone()),
+                description: format!(
+                    "posterior shifted from {} to {}",
+                    intent_kind_label(previous.kind),
+                    intent_kind_label(current.kind),
+                ),
+                magnitude: decimal01(current_confidence),
+                falsifier: previous.falsifiers.first().cloned(),
+            });
+        }
+    }
+
+    violations.sort_by(|a, b| {
+        b.magnitude
+            .partial_cmp(&a.magnitude)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    violations.truncate(2);
+    violations
+}
+
+fn push_world_violation(
+    violations: &mut Vec<ExpectationViolation>,
+    previous: &IntentHypothesis,
+    expectation_suffix: &str,
+    kind: ExpectationViolationKind,
+    description: &str,
+    falsifier: &str,
+    counter_evidence: f64,
+    support_evidence: f64,
+) {
+    let magnitude = clamp01(counter_evidence - support_evidence);
+    if magnitude <= 0.0 {
+        return;
+    }
+    violations.push(ExpectationViolation {
+        kind,
+        expectation_id: previous_expectation_id(previous, expectation_suffix),
+        description: description.into(),
+        magnitude: decimal01(magnitude),
+        falsifier: Some(falsifier.into()),
+    });
+}
+
+fn previous_expectation_id(
+    previous: &IntentHypothesis,
+    expectation_suffix: &str,
+) -> Option<String> {
+    previous
+        .expectation_bindings
+        .iter()
+        .find(|binding| binding.expectation_id.ends_with(expectation_suffix))
+        .or_else(|| previous.expectation_bindings.first())
+        .map(|binding| binding.expectation_id.clone())
+}
+
+fn world_intent_falsifiers(kind: IntentKind) -> Vec<String> {
+    match kind {
+        IntentKind::Accumulation => vec![
+            "institutional flow turns non-positive".into(),
+            "breadth turns negative while stress rises".into(),
+            "synchrony fails to propagate beyond the first cluster".into(),
+        ],
+        IntentKind::Distribution => vec![
+            "institutional flow recovers positive".into(),
+            "breadth broadens while stress mean-reverts".into(),
+            "sell pressure remains isolated instead of propagating".into(),
+        ],
+        IntentKind::ForcedUnwind => vec![
+            "stress and synchrony both mean-revert".into(),
+            "institutional flow turns positive".into(),
+            "breadth recovers without delayed downside propagation".into(),
+        ],
+        IntentKind::EventRepricing => vec![
+            "stress mean-reverts faster than synchrony propagates".into(),
+            "synchrony decouples across symbols".into(),
+            "flow and breadth show no follow-through".into(),
+        ],
+        IntentKind::Absorption => vec![
+            "stress fades without persistent flow pressure".into(),
+            "breadth expands instead of staying compressed".into(),
+            "institutional flow disappears".into(),
+        ],
+        _ => vec!["posterior stays diffuse after covariance falls".into()],
+    }
+}
+
+fn format_world_intent_rationale(
+    state: &LatentWorldState,
+    certainty: f64,
+    summary: &IntentPosteriorSummary,
+    posterior: &CategoricalBelief<IntentKind>,
+    surprise: f64,
+) -> String {
+    let mut parts = Vec::with_capacity(LATENT_DIM + 1);
+    for (idx, name) in LATENT_NAMES.iter().enumerate() {
+        let stdev = state.covariance[idx][idx].max(0.0).sqrt();
+        parts.push(format!("{}={:+.2}±{:.2}", name, state.mean[idx], stdev));
+    }
+    parts.push(format!("certainty={:.2}", certainty));
+    parts.push(format!("intent_edge={:.2}", summary.edge));
+    parts.push(format!("intent_margin={:.2}", summary.margin));
+    parts.push(format!("intent_entropy={:.2}", summary.entropy));
+    parts.push(format!("intent_surprise={:.2}", surprise));
+    parts.push(format!("runner_up={:.2}", summary.runner_up_prob));
+    parts.push(format_world_intent_posterior(posterior));
+    format!("latent posterior {}", parts.join(" "))
+}
+
+fn format_world_intent_posterior(posterior: &CategoricalBelief<IntentKind>) -> String {
+    let mut parts = Vec::with_capacity(posterior.variants.len());
+    for (variant, prob) in posterior.variants.iter().zip(posterior.probs.iter()) {
+        parts.push(format!(
+            "{}={:.2}",
+            intent_kind_label(*variant),
+            decimal_to_f64(*prob)
+        ));
+    }
+    format!("intent_posterior[{}]", parts.join(","))
+}
+
+fn intent_kind_label(kind: IntentKind) -> &'static str {
+    match kind {
+        IntentKind::Accumulation => "accumulation",
+        IntentKind::Distribution => "distribution",
+        IntentKind::ForcedUnwind => "forced_unwind",
+        IntentKind::PassiveRebalance => "passive_rebalance",
+        IntentKind::EventRepricing => "event_repricing",
+        IntentKind::FailedPropagation => "failed_propagation",
+        IntentKind::CrossMarketLead => "cross_market_lead",
+        IntentKind::Absorption => "absorption",
+        IntentKind::Unknown => "unknown",
+    }
+}
+
+fn intent_direction_label(direction: IntentDirection) -> &'static str {
+    match direction {
+        IntentDirection::Buy => "buy",
+        IntentDirection::Sell => "sell",
+        IntentDirection::Mixed => "mixed",
+        IntentDirection::Neutral => "neutral",
+    }
+}
+
+fn intent_state_label(state: IntentState) -> &'static str {
+    match state {
+        IntentState::Forming => "forming",
+        IntentState::Active => "active",
+        IntentState::AtRisk => "at_risk",
+        IntentState::Exhausted => "exhausted",
+        IntentState::Invalidated => "invalidated",
+        IntentState::Fulfilled => "fulfilled",
+        IntentState::Unknown => "unknown",
+    }
+}
+
+fn clamp01(value: f64) -> f64 {
+    if !value.is_finite() {
+        0.0
+    } else {
+        value.clamp(0.0, 1.0)
+    }
+}
+
+fn decimal01(value: f64) -> Decimal {
+    Decimal::from_f64_retain(clamp01(value))
+        .unwrap_or(Decimal::ZERO)
+        .round_dp(4)
+}
+
+fn decimal_positive(value: f64) -> Decimal {
+    Decimal::from_f64_retain(value.max(NUMERIC_EPSILON))
+        .unwrap_or(Decimal::ONE)
+        .round_dp(8)
+}
+
+fn clamp_signed_unit(value: f64) -> f64 {
+    if !value.is_finite() {
+        0.0
+    } else {
+        value.clamp(-1.0, 1.0)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -403,6 +1430,7 @@ fn invert_5x5(m: &Mat5) -> Option<Mat5> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::perception::PerceptionGraph;
 
     #[test]
     fn identity_inverse_roundtrip() {
@@ -533,6 +1561,17 @@ mod tests {
     }
 
     #[test]
+    fn decimal_signal_helpers_clamp_and_average_existing_metrics() {
+        assert!((signed_breadth_signal(Decimal::ONE, Decimal::ZERO) - 1.0).abs() < 1e-9);
+        assert!((signed_breadth_signal(Decimal::ZERO, Decimal::ONE) + 1.0).abs() < 1e-9);
+        assert!(mean_decimal_signal(std::iter::empty()).is_none());
+
+        let mean = mean_decimal_signal([Decimal::ONE, Decimal::new(-5, 1), Decimal::ZERO])
+            .expect("non-empty iterator");
+        assert!((mean - (1.0 - 0.5) / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn summary_line_is_greppable() {
         let mut state = LatentWorldState::new(Market::Hk);
         state.step(
@@ -573,5 +1612,200 @@ mod tests {
         for i in 0..5 {
             assert!(state.mean[i].abs() < after_obs[i].abs() * 0.5);
         }
+    }
+
+    #[test]
+    fn world_intent_infers_accumulation_from_positive_institutional_flow() {
+        let state = steady_state_from_observation([0.10, 0.35, 0.25, 0.80, 0.10], 8);
+        let intent = infer_world_intent(&state);
+
+        assert_eq!(intent.kind, IntentKind::Accumulation);
+        assert_eq!(intent.direction, IntentDirection::Buy);
+        assert!(intent.confidence > Decimal::ZERO);
+        assert!(!intent.expectation_bindings.is_empty());
+        assert!(!intent.opportunities.is_empty());
+        assert!(intent.rationale.contains("latent posterior"));
+    }
+
+    #[test]
+    fn world_intent_infers_distribution_from_negative_institutional_flow() {
+        let state = steady_state_from_observation([0.20, -0.35, 0.25, -0.80, -0.15], 8);
+        let intent = state.dominant_world_intent();
+
+        assert_eq!(intent.kind, IntentKind::Distribution);
+        assert_eq!(intent.direction, IntentDirection::Sell);
+        assert!(intent
+            .falsifiers
+            .iter()
+            .any(|item| item.contains("institutional flow recovers")));
+    }
+
+    #[test]
+    fn world_intent_belief_accumulates_repeated_soft_evidence() {
+        let mut state = LatentWorldState::new(Market::Hk);
+        let mut belief = WorldIntentBelief::new(Market::Hk);
+        let mut intent = None;
+        for tick in 1..=6 {
+            state.step(
+                tick,
+                WorldObservation {
+                    values: [0.10, 0.35, 0.25, 0.80, 0.10],
+                    mask: [true; LATENT_DIM],
+                },
+            );
+            intent = Some(belief.observe_state(&state));
+        }
+        let intent = intent.expect("intent emitted");
+
+        let accum_idx = belief
+            .posterior()
+            .variants
+            .iter()
+            .position(|kind| *kind == IntentKind::Accumulation)
+            .unwrap();
+        let unknown_idx = belief
+            .posterior()
+            .variants
+            .iter()
+            .position(|kind| *kind == IntentKind::Unknown)
+            .unwrap();
+
+        assert_eq!(intent.kind, IntentKind::Accumulation);
+        assert!(belief.posterior().probs[accum_idx] > belief.posterior().probs[unknown_idx]);
+        assert_eq!(belief.posterior().sample_count, 6);
+        assert!(intent.rationale.contains("intent_posterior["));
+    }
+
+    #[test]
+    fn world_intent_reflection_surfaces_expectation_and_falsifier() {
+        let state = steady_state_from_observation([0.80, 0.05, 0.75, 0.05, 0.00], 20);
+        let intent = infer_world_intent(&state);
+        let line = format_world_reflection_line(&intent).expect("reflection line");
+
+        assert!(line.contains("world_reflection:"));
+        assert!(line.contains("expectation="));
+        assert!(line.contains("falsifier="));
+        assert!(line.contains("violation=none"));
+        assert!(intent
+            .expectation_bindings
+            .iter()
+            .any(|item| item.kind == ExpectationKind::CoMovement));
+    }
+
+    #[test]
+    fn world_intent_belief_flags_previous_expectation_violation() {
+        let mut state = LatentWorldState::new(Market::Hk);
+        let mut belief = WorldIntentBelief::new(Market::Hk);
+        for tick in 1..=5 {
+            state.step(
+                tick,
+                WorldObservation {
+                    values: [0.10, 0.35, 0.25, 0.80, 0.10],
+                    mask: [true; LATENT_DIM],
+                },
+            );
+            let _ = belief.observe_state(&state);
+        }
+
+        let mut intent = None;
+        for tick in 6..=12 {
+            state.step(
+                tick,
+                WorldObservation {
+                    values: [0.20, -0.35, 0.25, -0.80, -0.15],
+                    mask: [true; LATENT_DIM],
+                },
+            );
+            let next_intent = belief.observe_state(&state);
+            if !next_intent.expectation_violations.is_empty() {
+                intent = Some(next_intent);
+                break;
+            }
+        }
+        let intent = intent.expect("expect previous world intent to be falsified");
+        let line = format_world_reflection_line(&intent).expect("reflection line");
+
+        assert!(!intent.expectation_violations.is_empty());
+        assert!(intent
+            .expectation_violations
+            .iter()
+            .any(|violation| matches!(
+                violation.kind,
+                ExpectationViolationKind::FailedConfirmation
+                    | ExpectationViolationKind::ModalConflict
+            )));
+        assert!(intent
+            .expectation_violations
+            .iter()
+            .any(|violation| violation.magnitude > Decimal::ZERO));
+        assert!(line.contains("violation="));
+        assert!(!line.contains("violation=none"));
+    }
+
+    #[test]
+    fn world_intent_infers_event_repricing_from_stress_and_synchrony() {
+        let state = steady_state_from_observation([0.80, 0.05, 0.75, 0.05, 0.00], 20);
+        let intent = infer_world_intent(&state);
+
+        assert_eq!(intent.kind, IntentKind::EventRepricing);
+        assert_eq!(intent.direction, IntentDirection::Mixed);
+        assert_eq!(intent.state, IntentState::Active);
+        assert!(format_world_intent_line(&intent).contains("kind=event_repricing"));
+    }
+
+    #[test]
+    fn world_intent_writes_typed_perception_graph_snapshot() {
+        let state = steady_state_from_observation([0.80, 0.05, 0.75, 0.05, 0.00], 20);
+        let intent = infer_world_intent(&state);
+        let mut graph = PerceptionGraph::new();
+
+        apply_world_intent_to_perception_graph(&state, &intent, &mut graph);
+
+        let view = graph.world(Market::Hk);
+        let snap = view.world_intent.expect("world intent snapshot");
+        assert_eq!(snap.kind, intent.kind);
+        assert_eq!(snap.direction, intent.direction);
+        assert_eq!(snap.confidence, intent.confidence);
+        assert_eq!(
+            snap.top_expectation.as_deref(),
+            intent
+                .expectation_bindings
+                .first()
+                .map(|item| item.rationale.as_str())
+        );
+        assert_eq!(
+            snap.top_falsifier.as_deref(),
+            intent.falsifiers.first().map(String::as_str)
+        );
+        assert_eq!(snap.expectation_count, intent.expectation_bindings.len());
+        assert_eq!(snap.top_violation, None);
+        assert_eq!(snap.violation_count, 0);
+        assert_eq!(snap.last_tick, state.last_tick);
+    }
+
+    #[test]
+    fn world_intent_keeps_flat_state_unknown() {
+        let state = LatentWorldState::new(Market::Us);
+        let intent = infer_world_intent(&state);
+
+        assert_eq!(intent.kind, IntentKind::Unknown);
+        assert_eq!(intent.direction, IntentDirection::Neutral);
+        assert_eq!(intent.state, IntentState::Unknown);
+        assert_eq!(intent.confidence, Decimal::ZERO);
+        assert_eq!(intent.opportunities[0].bias, IntentOpportunityBias::Watch);
+    }
+
+    fn steady_state_from_observation(values: [f64; LATENT_DIM], ticks: u64) -> LatentWorldState {
+        let mut state = LatentWorldState::new(Market::Hk);
+        for tick in 1..=ticks {
+            state.step(
+                tick,
+                WorldObservation {
+                    values,
+                    mask: [true; LATENT_DIM],
+                },
+            );
+        }
+        state
     }
 }

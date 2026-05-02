@@ -14,7 +14,8 @@ use std::collections::HashMap;
 
 use rust_decimal::Decimal;
 
-use crate::ontology::objects::Symbol;
+use crate::ontology::objects::{Market, Symbol};
+use crate::ontology::{IntentDirection, IntentKind, IntentState};
 
 /// Per-symbol KL-surprise reading: how unusual the channel-level belief
 /// shift was, and which way the dominant channel moved. Magnitude is
@@ -129,9 +130,7 @@ impl SectorKinematicsSubGraph {
         self.by_sector_kind.is_empty()
     }
 
-    pub fn iter(
-        &self,
-    ) -> impl Iterator<Item = (&(String, String), &SectorKinematicsSnapshot)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&(String, String), &SectorKinematicsSnapshot)> {
         self.by_sector_kind.iter()
     }
 }
@@ -190,10 +189,65 @@ impl SectorContrastSubGraph {
         self.by_sector_kind.is_empty()
     }
 
-    pub fn iter(
-        &self,
-    ) -> impl Iterator<Item = (&(String, String), &SectorContrastSnapshot)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&(String, String), &SectorContrastSnapshot)> {
         self.by_sector_kind.iter()
+    }
+}
+
+/// Market-level intent posterior inferred from the unified latent
+/// world state. This is the bridge between the low-dimensional SSM
+/// (`LatentWorldState`) and the graph read surface that Y consumes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorldIntentSnapshot {
+    pub intent_id: String,
+    pub kind: IntentKind,
+    pub direction: IntentDirection,
+    pub state: IntentState,
+    pub confidence: Decimal,
+    pub urgency: Decimal,
+    pub persistence: Decimal,
+    pub conflict_score: Decimal,
+    pub strength: Decimal,
+    pub rationale: String,
+    pub top_expectation: Option<String>,
+    pub top_falsifier: Option<String>,
+    pub expectation_count: usize,
+    pub top_violation: Option<String>,
+    pub violation_count: usize,
+    pub last_tick: u64,
+}
+
+/// Latest market-level world intent keyed by market. Runtime contexts
+/// are currently per-market, but the key keeps the graph shape stable
+/// for cross-market readers.
+#[derive(Debug, Clone, Default)]
+pub struct WorldIntentSubGraph {
+    by_market: HashMap<Market, WorldIntentSnapshot>,
+}
+
+impl WorldIntentSubGraph {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn upsert(&mut self, market: Market, snapshot: WorldIntentSnapshot) {
+        self.by_market.insert(market, snapshot);
+    }
+
+    pub fn get(&self, market: Market) -> Option<WorldIntentSnapshot> {
+        self.by_market.get(&market).cloned()
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_market.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_market.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Market, &WorldIntentSnapshot)> {
+        self.by_market.iter()
     }
 }
 
@@ -204,6 +258,7 @@ pub struct PerceptionGraph {
     pub kl_surprise: KlSurpriseSubGraph,
     pub sector_kinematics: SectorKinematicsSubGraph,
     pub sector_contrast: SectorContrastSubGraph,
+    pub world_intent: WorldIntentSubGraph,
 }
 
 impl PerceptionGraph {
@@ -218,6 +273,15 @@ impl PerceptionGraph {
         NodeView {
             symbol: symbol.clone(),
             kl_surprise: self.kl_surprise.get(symbol),
+        }
+    }
+
+    /// Market-level read facade. This is the Y-facing counterpart to
+    /// `node()`: world intent lives on the graph, not in wake strings.
+    pub fn world(&self, market: Market) -> WorldView {
+        WorldView {
+            market,
+            world_intent: self.world_intent.get(market),
         }
     }
 }
@@ -235,6 +299,18 @@ impl NodeView {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorldView {
+    pub market: Market,
+    pub world_intent: Option<WorldIntentSnapshot>,
+}
+
+impl WorldView {
+    pub fn has_world_intent(&self) -> bool {
+        self.world_intent.is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +324,7 @@ mod tests {
     fn fresh_graph_is_empty() {
         let graph = PerceptionGraph::new();
         assert!(graph.kl_surprise.is_empty());
+        assert!(graph.world_intent.is_empty());
     }
 
     #[test]
@@ -257,6 +334,15 @@ mod tests {
         assert_eq!(view.symbol, sym("AAPL.US"));
         assert!(view.kl_surprise.is_none());
         assert!(!view.has_kl_surprise());
+    }
+
+    #[test]
+    fn fresh_graph_world_view_has_no_intent() {
+        let graph = PerceptionGraph::new();
+        let view = graph.world(Market::Us);
+        assert_eq!(view.market, Market::Us);
+        assert!(view.world_intent.is_none());
+        assert!(!view.has_world_intent());
     }
 
     #[test]
@@ -277,6 +363,48 @@ mod tests {
         assert_eq!(snap.direction, dec!(1));
         assert_eq!(snap.last_tick, 7);
         assert!(view.has_kl_surprise());
+    }
+
+    #[test]
+    fn upsert_world_intent_then_read_via_world_view() {
+        let mut graph = PerceptionGraph::new();
+        graph.world_intent.upsert(
+            Market::Hk,
+            WorldIntentSnapshot {
+                intent_id: "world_intent:hk:42".into(),
+                kind: IntentKind::EventRepricing,
+                direction: IntentDirection::Mixed,
+                state: IntentState::Active,
+                confidence: dec!(0.67),
+                urgency: dec!(0.72),
+                persistence: dec!(0.40),
+                conflict_score: dec!(0.12),
+                strength: dec!(0.64),
+                rationale: "latent posterior stress=+0.80".into(),
+                top_expectation: Some("synchrony should propagate".into()),
+                top_falsifier: Some("synchrony decouples".into()),
+                expectation_count: 1,
+                top_violation: Some("sync failed".into()),
+                violation_count: 1,
+                last_tick: 42,
+            },
+        );
+
+        let view = graph.world(Market::Hk);
+        assert!(view.has_world_intent());
+        let intent = view.world_intent.expect("expected world intent");
+        assert_eq!(intent.kind, IntentKind::EventRepricing);
+        assert_eq!(intent.direction, IntentDirection::Mixed);
+        assert_eq!(
+            intent.top_expectation.as_deref(),
+            Some("synchrony should propagate")
+        );
+        assert_eq!(intent.top_falsifier.as_deref(), Some("synchrony decouples"));
+        assert_eq!(intent.expectation_count, 1);
+        assert_eq!(intent.top_violation.as_deref(), Some("sync failed"));
+        assert_eq!(intent.violation_count, 1);
+        assert_eq!(intent.last_tick, 42);
+        assert_eq!(graph.world_intent.len(), 1);
     }
 
     #[test]
@@ -368,7 +496,11 @@ mod tests {
 
         assert_eq!(graph.sector_kinematics.len(), 2);
         assert_eq!(
-            graph.sector_kinematics.get("tech", "Pressure").unwrap().level_now,
+            graph
+                .sector_kinematics
+                .get("tech", "Pressure")
+                .unwrap()
+                .level_now,
             0.5
         );
         assert_eq!(
@@ -410,8 +542,16 @@ mod tests {
 
         assert_eq!(graph.sector_kinematics.len(), 2);
         assert_ne!(
-            graph.sector_kinematics.get("tech", "Pressure").unwrap().level_now,
-            graph.sector_kinematics.get("tech", "Intent").unwrap().level_now,
+            graph
+                .sector_kinematics
+                .get("tech", "Pressure")
+                .unwrap()
+                .level_now,
+            graph
+                .sector_kinematics
+                .get("tech", "Intent")
+                .unwrap()
+                .level_now,
         );
     }
 

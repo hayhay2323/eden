@@ -307,6 +307,10 @@ pub async fn run() {
     let mut latent_world_state = eden::pipeline::latent_world_state::LatentWorldState::new(
         eden::ontology::objects::Market::Hk,
     );
+    let mut world_intent_belief =
+        eden::pipeline::latent_world_state::WorldIntentBelief::new(
+            eden::ontology::objects::Market::Hk,
+        );
     // Shift B: structural causal model over the same 5 latent dims.
     // Replaces edge-weight propagation with true do-calculus for
     // "what if stress spikes" reasoning. v1 uses default hand-
@@ -3754,37 +3758,77 @@ pub async fn run() {
                     ));
             }
             // Shift A: advance latent_world_state from current tick
-            // aggregates. Kalman filter step then emit a summary line.
-            // v1 feeds stress + synchrony; breadth/institutional/retail
-            // dims stay masked (SSM mean-reverts them toward zero) —
-            // those aggregators come in a follow-up.
+            // aggregates. Reuses existing regime/dimension snapshots:
+            // breadth from market_regime, institutional from HK
+            // institutional_direction, retail/non-inst from orderbook +
+            // activity momentum. Kalman filter then emits summary/intent.
             {
+                use eden::pipeline::latent_world_state::{
+                    aggregate_observation, mean_decimal_signal, signed_breadth_signal,
+                    ObservationInputs,
+                };
                 use rust_decimal::prelude::ToPrimitive as _;
-                let obs = eden::pipeline::latent_world_state::aggregate_observation(
-                    &eden::pipeline::latent_world_state::ObservationInputs {
-                        market_stress: Some(
-                            graph_insights
-                                .stress
-                                .composite_stress
-                                .to_f64()
-                                .unwrap_or(0.0),
-                        ),
-                        synchrony: Some(
-                            graph_insights
-                                .stress
-                                .sector_synchrony
-                                .to_f64()
-                                .unwrap_or(0.0),
-                        ),
-                        ..Default::default()
-                    },
-                );
+                let obs = aggregate_observation(&ObservationInputs {
+                    market_stress: Some(
+                        graph_insights
+                            .stress
+                            .composite_stress
+                            .to_f64()
+                            .unwrap_or(0.0),
+                    ),
+                    breadth: Some(signed_breadth_signal(
+                        decision.market_regime.breadth_up,
+                        decision.market_regime.breadth_down,
+                    )),
+                    synchrony: Some(
+                        graph_insights
+                            .stress
+                            .sector_synchrony
+                            .to_f64()
+                            .unwrap_or(0.0),
+                    ),
+                    institutional_flow: mean_decimal_signal(
+                        dim_snapshot
+                            .dimensions
+                            .values()
+                            .map(|dims| dims.institutional_direction),
+                    ),
+                    retail_flow: mean_decimal_signal(dim_snapshot.dimensions.values().map(
+                        |dims| {
+                            (dims.order_book_pressure + dims.activity_momentum)
+                                / rust_decimal::Decimal::from(2)
+                        },
+                    )),
+                });
                 latent_world_state.step(tick, obs);
                 artifact_projection
                     .agent_snapshot
                     .wake
                     .reasons
                     .push(latent_world_state.summary_line());
+                let world_intent = world_intent_belief.observe_state(&latent_world_state);
+                artifact_projection.agent_snapshot.wake.reasons.push(
+                    eden::pipeline::latent_world_state::format_world_intent_line(&world_intent),
+                );
+                if let Some(line) =
+                    eden::pipeline::latent_world_state::format_world_reflection_line(&world_intent)
+                {
+                    artifact_projection.agent_snapshot.wake.reasons.push(line);
+                }
+                if let Some(world_state) = artifact_projection.agent_snapshot.world_state.as_mut() {
+                    world_state.world_intents = vec![world_intent.clone()];
+                }
+                {
+                    let mut graph = runtime
+                        .perception_graph
+                        .write()
+                        .expect("perception graph lock poisoned");
+                    eden::pipeline::latent_world_state::apply_world_intent_to_perception_graph(
+                        &latent_world_state,
+                        &world_intent,
+                        &mut graph,
+                    );
+                }
 
                 // Shift B: one SCM cascade wake line — "if stress
                 // jumped +1 above current, here's what propagates."

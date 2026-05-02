@@ -299,6 +299,28 @@ impl<K: Clone + Eq> CategoricalBelief<K> {
         self.renormalize();
     }
 
+    /// Bayesian update with soft evidence. Each likelihood is `P(evidence | variant)`
+    /// in the same order as `variants`. This is the categorical counterpart to
+    /// Kalman's continuous update: callers can accumulate streaming evidence
+    /// without collapsing the posterior into a hard label first.
+    pub fn update_likelihoods(&mut self, likelihoods: &[Decimal]) -> bool {
+        if likelihoods.len() != self.probs.len() {
+            return false;
+        }
+        let floor = Decimal::try_from(VARIANCE_FLOOR).unwrap_or(Decimal::ZERO);
+        for (prob, likelihood) in self.probs.iter_mut().zip(likelihoods.iter()) {
+            let safe_likelihood = if *likelihood > floor {
+                *likelihood
+            } else {
+                floor
+            };
+            *prob *= safe_likelihood;
+        }
+        self.sample_count = self.sample_count.saturating_add(1);
+        self.renormalize();
+        true
+    }
+
     fn renormalize(&mut self) {
         let total: Decimal = self.probs.iter().copied().sum();
         if total <= Decimal::ZERO {
@@ -505,6 +527,22 @@ mod tests {
         assert!(
             b.probs[a_idx] > dec!(0.5),
             "after 10 observations of 'a', P(a) should exceed 0.5, got {}",
+            b.probs[a_idx]
+        );
+        assert_eq!(b.argmax(), Some(&"a"));
+    }
+
+    #[test]
+    fn categorical_likelihood_update_accumulates_soft_evidence() {
+        let mut b: CategoricalBelief<&str> = CategoricalBelief::uniform(vec!["a", "b", "c"]);
+        for _ in 0..4 {
+            assert!(b.update_likelihoods(&[dec!(0.85), dec!(0.10), dec!(0.05)]));
+        }
+
+        let a_idx = b.variants.iter().position(|v| *v == "a").unwrap();
+        assert!(
+            b.probs[a_idx] > dec!(0.95),
+            "soft evidence should concentrate on 'a', got {}",
             b.probs[a_idx]
         );
         assert_eq!(b.argmax(), Some(&"a"));

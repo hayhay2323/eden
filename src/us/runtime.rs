@@ -710,6 +710,10 @@ pub async fn run() {
     let mut latent_world_state = crate::pipeline::latent_world_state::LatentWorldState::new(
         crate::ontology::objects::Market::Us,
     );
+    let mut world_intent_belief =
+        crate::pipeline::latent_world_state::WorldIntentBelief::new(
+            crate::ontology::objects::Market::Us,
+        );
     // Shift B: SCM over same latent dims (semantics cross-market
     // identical even if feed details differ).
     let us_scm = crate::pipeline::structural_causal::StructuralCausalModel::default_latent_scm();
@@ -1936,22 +1940,65 @@ pub async fn run() {
             let planner_summary: Option<
                 crate::pipeline::counterfactual_planner::BestActionSummary,
             > = {
+                use crate::pipeline::latent_world_state::{
+                    aggregate_observation, mean_decimal_signal, signed_breadth_signal,
+                    ObservationInputs,
+                };
                 use rust_decimal::prelude::ToPrimitive as _;
-                let obs = crate::pipeline::latent_world_state::aggregate_observation(
-                    &crate::pipeline::latent_world_state::ObservationInputs {
-                        market_stress: Some(
-                            insights.stress.composite_stress.to_f64().unwrap_or(0.0),
-                        ),
-                        synchrony: Some(insights.stress.momentum_consensus.to_f64().unwrap_or(0.0)),
-                        ..Default::default()
-                    },
-                );
+                let obs = aggregate_observation(&ObservationInputs {
+                    market_stress: Some(insights.stress.composite_stress.to_f64().unwrap_or(0.0)),
+                    breadth: Some(signed_breadth_signal(
+                        decision.market_regime.breadth_up,
+                        decision.market_regime.breadth_down,
+                    )),
+                    synchrony: Some(insights.stress.momentum_consensus.to_f64().unwrap_or(0.0)),
+                    // US has no broker/depth institutional channel, so
+                    // the existing capital_flow_direction is the closest
+                    // informed-flow proxy.
+                    institutional_flow: mean_decimal_signal(
+                        dim_snapshot
+                            .dimensions
+                            .values()
+                            .map(|dims| dims.capital_flow_direction),
+                    ),
+                    retail_flow: mean_decimal_signal(dim_snapshot.dimensions.values().map(
+                        |dims| {
+                            (dims.price_momentum
+                                + dims.volume_profile
+                                + dims.pre_post_market_anomaly)
+                                / Decimal::from(3)
+                        },
+                    )),
+                });
                 latent_world_state.step(tick, obs);
                 artifact_projection
                     .agent_snapshot
                     .wake
                     .reasons
                     .push(latent_world_state.summary_line());
+                let world_intent = world_intent_belief.observe_state(&latent_world_state);
+                artifact_projection.agent_snapshot.wake.reasons.push(
+                    crate::pipeline::latent_world_state::format_world_intent_line(&world_intent),
+                );
+                if let Some(line) =
+                    crate::pipeline::latent_world_state::format_world_reflection_line(&world_intent)
+                {
+                    artifact_projection.agent_snapshot.wake.reasons.push(line);
+                }
+                if let Some(world_state) = artifact_projection.agent_snapshot.world_state.as_mut() {
+                    world_state.world_intents = vec![world_intent.clone()];
+                }
+                {
+                    let mut graph = runtime
+                        .perception_graph
+                        .write()
+                        .expect("perception graph lock poisoned");
+                    crate::pipeline::latent_world_state::apply_world_intent_to_perception_graph(
+                        &latent_world_state,
+                        &world_intent,
+                        &mut graph,
+                    );
+                }
 
                 // Shift B: SCM cascade wake line (symmetric with HK).
                 let stress_now = latent_world_state.dim_value(0).unwrap_or(0.0);
