@@ -74,11 +74,74 @@ impl KlSurpriseSubGraph {
     }
 }
 
+/// Per-(sector, kind) kinematic state: where the sector mean is now,
+/// how fast it's moving, whether it's accelerating, and (optionally)
+/// the latest turning-point classification. Values are raw f64 because
+/// that's the form the kinematics detector produces; Y / L4 readers
+/// should compare `last_tick` against the current tick to judge
+/// freshness (the graph never evicts on its own).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectorKinematicsSnapshot {
+    pub level_now: f64,
+    pub velocity: f64,
+    pub acceleration: f64,
+    /// String label of the latest turning-point event, e.g.
+    /// "TopForming" / "BottomForming" / "Accelerating" / "Decaying".
+    /// `None` until the detector has classified at least once.
+    pub classification: Option<String>,
+    pub last_tick: u64,
+}
+
+/// Sector-kinematics sub-graph keyed by (sector_id, node_kind). Mirror
+/// of the existing `pipeline::sector_kinematics` NDJSON output, but
+/// held in-graph so Y can read "what's energy sector doing right now"
+/// without watching an event stream.
+#[derive(Debug, Clone, Default)]
+pub struct SectorKinematicsSubGraph {
+    by_sector_kind: HashMap<(String, String), SectorKinematicsSnapshot>,
+}
+
+impl SectorKinematicsSubGraph {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn upsert(
+        &mut self,
+        sector_id: String,
+        node_kind: String,
+        snapshot: SectorKinematicsSnapshot,
+    ) {
+        self.by_sector_kind.insert((sector_id, node_kind), snapshot);
+    }
+
+    pub fn get(&self, sector_id: &str, node_kind: &str) -> Option<SectorKinematicsSnapshot> {
+        self.by_sector_kind
+            .get(&(sector_id.to_string(), node_kind.to_string()))
+            .cloned()
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_sector_kind.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_sector_kind.is_empty()
+    }
+
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&(String, String), &SectorKinematicsSnapshot)> {
+        self.by_sector_kind.iter()
+    }
+}
+
 /// Eden's unified perception graph. Composed of typed sub-graphs, one
 /// per perceiver. Add new sub-graphs as detectors migrate off NDJSON.
 #[derive(Debug, Clone, Default)]
 pub struct PerceptionGraph {
     pub kl_surprise: KlSurpriseSubGraph,
+    pub sector_kinematics: SectorKinematicsSubGraph,
 }
 
 impl PerceptionGraph {
@@ -180,6 +243,114 @@ mod tests {
         assert_eq!(snap.magnitude, dec!(0.9));
         assert_eq!(snap.direction, dec!(1));
         assert_eq!(graph.kl_surprise.len(), 1);
+    }
+
+    #[test]
+    fn fresh_graph_has_empty_sector_kinematics() {
+        let graph = PerceptionGraph::new();
+        assert!(graph.sector_kinematics.is_empty());
+        assert_eq!(graph.sector_kinematics.len(), 0);
+    }
+
+    #[test]
+    fn upsert_sector_kinematics_then_read() {
+        let mut graph = PerceptionGraph::new();
+        graph.sector_kinematics.upsert(
+            "tech".into(),
+            "Pressure".into(),
+            SectorKinematicsSnapshot {
+                level_now: 0.42,
+                velocity: 0.05,
+                acceleration: -0.01,
+                classification: Some("TopForming".into()),
+                last_tick: 5,
+            },
+        );
+
+        let snap = graph
+            .sector_kinematics
+            .get("tech", "Pressure")
+            .expect("reading present after upsert");
+        assert_eq!(snap.level_now, 0.42);
+        assert_eq!(snap.velocity, 0.05);
+        assert_eq!(snap.acceleration, -0.01);
+        assert_eq!(snap.classification.as_deref(), Some("TopForming"));
+        assert_eq!(snap.last_tick, 5);
+    }
+
+    #[test]
+    fn distinct_sectors_keep_separate_kinematic_readings() {
+        let mut graph = PerceptionGraph::new();
+        graph.sector_kinematics.upsert(
+            "tech".into(),
+            "Pressure".into(),
+            SectorKinematicsSnapshot {
+                level_now: 0.5,
+                velocity: 0.0,
+                acceleration: 0.0,
+                classification: None,
+                last_tick: 1,
+            },
+        );
+        graph.sector_kinematics.upsert(
+            "energy".into(),
+            "Pressure".into(),
+            SectorKinematicsSnapshot {
+                level_now: -0.3,
+                velocity: -0.1,
+                acceleration: 0.0,
+                classification: Some("Decaying".into()),
+                last_tick: 1,
+            },
+        );
+
+        assert_eq!(graph.sector_kinematics.len(), 2);
+        assert_eq!(
+            graph.sector_kinematics.get("tech", "Pressure").unwrap().level_now,
+            0.5
+        );
+        assert_eq!(
+            graph
+                .sector_kinematics
+                .get("energy", "Pressure")
+                .unwrap()
+                .classification
+                .as_deref(),
+            Some("Decaying")
+        );
+    }
+
+    #[test]
+    fn same_sector_different_kind_kept_separate() {
+        let mut graph = PerceptionGraph::new();
+        graph.sector_kinematics.upsert(
+            "tech".into(),
+            "Pressure".into(),
+            SectorKinematicsSnapshot {
+                level_now: 0.5,
+                velocity: 0.0,
+                acceleration: 0.0,
+                classification: None,
+                last_tick: 1,
+            },
+        );
+        graph.sector_kinematics.upsert(
+            "tech".into(),
+            "Intent".into(),
+            SectorKinematicsSnapshot {
+                level_now: 0.9,
+                velocity: 0.0,
+                acceleration: 0.0,
+                classification: None,
+                last_tick: 1,
+            },
+        );
+
+        assert_eq!(graph.sector_kinematics.len(), 2);
+        assert_ne!(
+            graph.sector_kinematics.get("tech", "Pressure").unwrap().level_now,
+            graph.sector_kinematics.get("tech", "Intent").unwrap().level_now,
+        );
     }
 
     #[test]

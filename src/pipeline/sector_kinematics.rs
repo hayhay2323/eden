@@ -108,6 +108,56 @@ impl SectorKinematicsTracker {
         let v_prev = (mid - oldest) / half_span;
         Some(v_recent - v_prev)
     }
+
+    /// Publish current per-(sector, kind) kinematic state into the
+    /// perception graph. One snapshot per tracked (sector, kind), even
+    /// when this tick fired no turning-point event — Y / L4 readers
+    /// need the continuous state, not just the events. The
+    /// classification field is set only when the matching `events`
+    /// entry exists for this (sector, kind), so a "TopForming"
+    /// classification persists in the graph until the next event for
+    /// that sector slot overwrites it.
+    pub fn apply_to_perception_graph(
+        &self,
+        events: &[SectorKinematicsEvent],
+        graph: &mut crate::perception::PerceptionGraph,
+        tick: u64,
+    ) {
+        for ((sector_id, kind), history) in self.history.iter() {
+            if history.is_empty() {
+                continue;
+            }
+            let level_now = *history.back().unwrap_or(&0.0);
+            let velocity = Self::velocity(history).unwrap_or(0.0);
+            let acceleration = Self::acceleration(history).unwrap_or(0.0);
+            let kind_str = format!("{:?}", kind);
+            // Sticky classification: this tick's matching event wins;
+            // otherwise inherit the last reading the graph already
+            // holds. Y / L4 expect the latest classification, not
+            // "what happened this exact tick".
+            let classification = events
+                .iter()
+                .find(|e| e.sector_id == *sector_id && e.node_kind == kind_str)
+                .map(|e| format!("{:?}", e.kind))
+                .or_else(|| {
+                    graph
+                        .sector_kinematics
+                        .get(sector_id, &kind_str)
+                        .and_then(|s| s.classification)
+                });
+            graph.sector_kinematics.upsert(
+                sector_id.clone(),
+                kind_str,
+                crate::perception::SectorKinematicsSnapshot {
+                    level_now,
+                    velocity,
+                    acceleration,
+                    classification,
+                    last_tick: tick,
+                },
+            );
+        }
+    }
 }
 
 /// Update tracker with current snapshot's sector means and emit any
@@ -301,6 +351,112 @@ mod tests {
                 ev
             );
         }
+    }
+
+    #[test]
+    fn apply_to_perception_graph_writes_snapshot_for_each_observed_kind() {
+        let mut tracker = SectorKinematicsTracker::new();
+        let kind = NodeKind::Pressure;
+        for v in [0.1, 0.2, 0.3] {
+            let reg = mk_registry_at_mean("tech", kind, v);
+            let _ = update_and_detect("test", &reg, &mut tracker, Utc::now());
+        }
+        let mut graph = crate::perception::PerceptionGraph::new();
+        tracker.apply_to_perception_graph(&[], &mut graph, 7);
+
+        let snap = graph
+            .sector_kinematics
+            .get("tech", "Pressure")
+            .expect("graph should hold snapshot for tracked sector");
+        assert_eq!(snap.last_tick, 7);
+        // 3 samples, [0.1, 0.2, 0.3] → level_now=0.3, velocity=(0.3-0.1)/2=0.1
+        assert!((snap.level_now - 0.3).abs() < 1e-9, "got {}", snap.level_now);
+        assert!((snap.velocity - 0.1).abs() < 1e-9, "got {}", snap.velocity);
+        assert!(snap.classification.is_none(), "no events → no classification");
+    }
+
+    #[test]
+    fn apply_to_perception_graph_carries_classification_when_event_fires() {
+        let mut tracker = SectorKinematicsTracker::new();
+        let kind = NodeKind::Pressure;
+        // Mirror production: apply after each tick using only that
+        // tick's events. Final tick (0.55 after rising 0.6) should
+        // trigger TopForming, and the graph snapshot for that tick
+        // should carry the classification.
+        let mut graph = crate::perception::PerceptionGraph::new();
+        let mut last_events = Vec::new();
+        let mut last_tick = 0u64;
+        for (i, v) in [0.1, 0.3, 0.5, 0.6, 0.55].iter().enumerate() {
+            let reg = mk_registry_at_mean("tech", kind, *v);
+            last_events = update_and_detect("test", &reg, &mut tracker, Utc::now());
+            last_tick = i as u64;
+            tracker.apply_to_perception_graph(&last_events, &mut graph, last_tick);
+        }
+        // After the final tick (0.55 after 0.6), TopForming should fire.
+        let has_top_forming = last_events
+            .iter()
+            .any(|e| matches!(e.kind, SectorTurningPointKind::TopForming));
+        assert!(
+            has_top_forming,
+            "expected TopForming on final tick, got {:?}",
+            last_events.iter().map(|e| &e.kind).collect::<Vec<_>>()
+        );
+        let snap = graph.sector_kinematics.get("tech", "Pressure").unwrap();
+        assert_eq!(snap.classification.as_deref(), Some("TopForming"));
+        assert_eq!(snap.last_tick, last_tick);
+    }
+
+    #[test]
+    fn apply_to_perception_graph_no_op_on_empty_tracker() {
+        let tracker = SectorKinematicsTracker::new();
+        let mut graph = crate::perception::PerceptionGraph::new();
+        tracker.apply_to_perception_graph(&[], &mut graph, 1);
+        assert!(graph.sector_kinematics.is_empty());
+    }
+
+    #[test]
+    fn apply_to_perception_graph_classification_persists_across_event_free_ticks() {
+        // Pin the doc-claimed sticky semantics: once a TopForming
+        // classification is in the graph, a subsequent tick with no
+        // events for that (sector, kind) must NOT clear the
+        // classification. Y / L4 readers expect the latest
+        // classification, not "what happened this exact tick".
+        let mut tracker = SectorKinematicsTracker::new();
+        let kind = NodeKind::Pressure;
+        let mut graph = crate::perception::PerceptionGraph::new();
+
+        // First five ticks trigger TopForming on the last one.
+        let mut last_events = Vec::new();
+        for (i, v) in [0.1, 0.3, 0.5, 0.6, 0.55].iter().enumerate() {
+            let reg = mk_registry_at_mean("tech", kind, *v);
+            last_events = update_and_detect("test", &reg, &mut tracker, Utc::now());
+            tracker.apply_to_perception_graph(&last_events, &mut graph, i as u64);
+        }
+        assert_eq!(
+            graph
+                .sector_kinematics
+                .get("tech", "Pressure")
+                .unwrap()
+                .classification
+                .as_deref(),
+            Some("TopForming"),
+            "TopForming should be present after the trigger tick"
+        );
+
+        // Now a tick with no event (continuing the descent gently —
+        // velocity stays negative, no new zero-crossing).
+        let reg = mk_registry_at_mean("tech", kind, 0.50);
+        let next_events = update_and_detect("test", &reg, &mut tracker, Utc::now());
+        tracker.apply_to_perception_graph(&next_events, &mut graph, 6);
+
+        let snap = graph.sector_kinematics.get("tech", "Pressure").unwrap();
+        assert_eq!(
+            snap.classification.as_deref(),
+            Some("TopForming"),
+            "classification must persist across event-free ticks; \
+             this tick's events were {:?}",
+            next_events.iter().map(|e| &e.kind).collect::<Vec<_>>()
+        );
     }
 
     #[test]
