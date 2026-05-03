@@ -85,6 +85,9 @@ pub struct PendingProbe {
     pub probe_tick: u64,
     pub realized_at_tick: u64,
     pub forecast_per_neighbor: HashMap<String, ForecastEntry>,
+    /// Snapshot of which channels were active (and their signs) when
+    /// the probe was emitted. Used for gain calibration.
+    pub sensory_evidence: Vec<(String, f64)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -159,9 +162,21 @@ impl ActiveProbeRunner {
         current_tick: u64,
         now: DateTime<Utc>,
         market: &str,
+        graph: Option<&crate::perception::PerceptionGraph>,
     ) -> Vec<ProbeForecastRow> {
         let mut rows = Vec::with_capacity(targets.len());
         for target in targets {
+            // Snapshot current sensory evidence for this target to
+            // attribute credit later.
+            let mut sensory_evidence = Vec::new();
+            if let Some(g) = graph {
+                if let Some(snap) = g.sensory_flux.get(&crate::ontology::objects::Symbol(target.clone())) {
+                    for channel in &snap.active_channels {
+                        sensory_evidence.push((channel.clone(), 1.0));
+                    }
+                }
+            }
+
             // Bull intervention prior on target.
             let mut priors_bull = base_priors.clone();
             priors_bull.insert(
@@ -222,6 +237,7 @@ impl ActiveProbeRunner {
                 probe_tick: current_tick,
                 realized_at_tick: realized_at,
                 forecast_per_neighbor,
+                sensory_evidence,
             });
 
             rows.push(ProbeForecastRow {
@@ -245,6 +261,7 @@ impl ActiveProbeRunner {
         current_beliefs: &HashMap<String, [f64; N_STATES]>,
         now: DateTime<Utc>,
         market: &str,
+        mut graph: Option<&mut crate::perception::PerceptionGraph>,
     ) -> Vec<ProbeOutcomeRow> {
         let mut outcomes = Vec::new();
         while let Some(front) = self.pending.front() {
@@ -289,6 +306,25 @@ impl ActiveProbeRunner {
                 continue;
             }
             let mean_accuracy = total_acc / count as f64;
+
+            // --- Sensory Gain Calibration (Closed Loop) ---
+            if let Some(ref mut g) = graph {
+                let adjustment = (mean_accuracy - 0.5) * 0.1; // Scale factor
+                for (channel, _) in &probe.sensory_evidence {
+                    let old_gain = g.sensory_gain.get_gain(channel);
+                    let new_gain = (old_gain + adjustment).clamp(0.1, 2.0);
+                    g.sensory_gain.upsert(
+                        channel,
+                        crate::perception::SensoryGainSnapshot {
+                            channel_name: channel.clone(),
+                            current_gain: new_gain,
+                            recent_accuracy: mean_accuracy,
+                            last_calibrated: current_tick,
+                        },
+                    );
+                }
+            }
+
             let history = self
                 .accuracy_history
                 .entry(probe.probe_symbol.clone())
@@ -521,9 +557,10 @@ mod tests {
             probe_tick: 100,
             realized_at_tick: 105,
             forecast_per_neighbor: forecast,
+            sensory_evidence: Vec::new(),
         });
         let beliefs = HashMap::new();
-        let outcomes = runner.evaluate_due(102, &beliefs, Utc::now(), "test"); // before horizon
+        let outcomes = runner.evaluate_due(102, &beliefs, Utc::now(), "test", None); // before horizon
         assert!(outcomes.is_empty());
         assert_eq!(runner.pending_count(), 1);
     }
@@ -547,6 +584,7 @@ mod tests {
             probe_tick: 100,
             realized_at_tick: 105,
             forecast_per_neighbor: forecast,
+            sensory_evidence: Vec::new(),
         });
         let mut beliefs = HashMap::new();
         // A actually went bull
@@ -554,7 +592,7 @@ mod tests {
         // B actual bull mass = 0.78 (forecast was 0.80 — accuracy ≈ 0.98)
         beliefs.insert("B".into(), concentrated(0.78, 0.15));
 
-        let outcomes = runner.evaluate_due(105, &beliefs, Utc::now(), "test");
+        let outcomes = runner.evaluate_due(105, &beliefs, Utc::now(), "test", None);
         assert_eq!(outcomes.len(), 1);
         let outcome = &outcomes[0];
         assert_eq!(outcome.actual_direction, "bull");

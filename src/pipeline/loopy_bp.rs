@@ -379,6 +379,7 @@ pub fn prior_from_pressure_channels(
     structure: Option<f64>,
     option: Option<f64>,
     memory: Option<f64>,
+    sensory_gain: Option<&crate::perception::SensoryGainLedger>,
 ) -> NodePrior {
     let ob = order_book.unwrap_or(0.0);
     let cf = capital_flow.unwrap_or(0.0);
@@ -390,13 +391,36 @@ pub fn prior_from_pressure_channels(
     let mem = memory.unwrap_or(0.0);
 
     // Direction signal: dimensions agree → reinforce; disagree → cancel.
-    // Coefficients reflect the hierarchy of evidence:
-    // - cf/mo: Core trade-driven reality (1.0/0.5)
-    // - mem: Historical pattern memory (0.6) - Highly trusted if pattern matches.
-    // - opt: Institutional intent/risk pricing (0.4)
-    // - inst/ob/st: Structural/intent indicators (0.3/0.2)
+    // Dynamic Sensory Gain: weights are loaded from the PerceptionGraph's
+    // learning ledger. No hardcoded judgment templates.
+    let g = |name: &str| sensory_gain.map(|l| l.get_gain(name)).unwrap_or(1.0);
+
     let _ = vol; // vol is a size anomaly, not directional
-    let direction_raw = cf + 0.5 * mo + 0.6 * mem + 0.4 * opt + 0.3 * ob + 0.3 * inst + 0.2 * st;
+
+    // Core Physical Flux: Immediate reality from trade/orderbook activity.
+    let physical_raw = (g("CapitalFlow") * cf)
+        + (g("Momentum") * mo)
+        + (g("OrderBook") * ob)
+        + (g("Institutional") * inst)
+        + (g("Structure") * st)
+        + (g("Option") * opt);
+
+    // V7.5 Non-linear Modulation: Memory and Theme act as amplifiers/brakes.
+    // If the 'Ghosts of History' (Memory) agree with the current flux, 
+    // we accelerate the collapse.
+    let mut modulation = 1.0;
+    if physical_raw.abs() > 1e-6 {
+        // Memory alignment check
+        if mem.signum() == physical_raw.signum() {
+            modulation += g("Memory") * mem.abs();
+        } else {
+            // Ontological Brake: memory says bear, physics says bull -> dampen.
+            modulation -= 0.5 * g("Memory") * mem.abs();
+        }
+    }
+
+    let direction_raw = physical_raw * modulation.max(0.1);
+
     let base_magnitude = (direction_raw.abs() / 2.0).min(1.0);
     if base_magnitude < PRIOR_MAGNITUDE_FLOOR {
         return NodePrior::default();
@@ -701,6 +725,122 @@ pub fn build_inputs(
     }
 
     (priors, edges)
+}
+
+/// Autonomously discover novel market narratives (Synthetic Sectors).
+/// Identifies clusters of symbols connected by `EmergentCausality` edges
+/// that don't share a common ontological sector. Aggregates their
+/// sensory energy and coherence for reporting.
+pub fn detect_synthetic_sectors(
+    edges: &[GraphEdge],
+    graph: &mut crate::perception::PerceptionGraph,
+    store: &crate::ontology::store::ObjectStore,
+    tick: u64,
+) {
+    use crate::ontology::objects::Symbol;
+    use std::collections::HashSet;
+
+    // 1. Filter for emergent causality edges only
+    let emergent_edges: Vec<_> = edges
+        .iter()
+        .filter(|e| e.kind == BpEdgeKind::EmergentCausality)
+        .collect();
+
+    if emergent_edges.is_empty() {
+        graph.synthetic_sectors.clear();
+        return;
+    }
+
+    // 2. Simple Connected Components (Union-Find)
+    let mut parent: HashMap<String, String> = HashMap::new();
+    fn find(p: &mut HashMap<String, String>, i: &str) -> String {
+        if let Some(root) = p.get(i).cloned() {
+            if root == i {
+                i.to_string()
+            } else {
+                let r = find(p, &root);
+                p.insert(i.to_string(), r.clone());
+                r
+            }
+        } else {
+            p.insert(i.to_string(), i.to_string());
+            i.to_string()
+        }
+    }
+
+    fn union(p: &mut HashMap<String, String>, i: &str, j: &str) {
+        let root_i = find(p, i);
+        let root_j = find(p, j);
+        if root_i != root_j {
+            p.insert(root_i, root_j);
+        }
+    }
+
+    for edge in emergent_edges {
+        union(&mut parent, &edge.from, &edge.to);
+    }
+
+    // 3. Group symbols by root
+    let mut clusters: HashMap<String, Vec<String>> = HashMap::new();
+    let symbols_in_edges: HashSet<String> = edges
+        .iter()
+        .flat_map(|e| vec![e.from.clone(), e.to.clone()])
+        .collect();
+
+    for sym in symbols_in_edges {
+        let root = find(&mut parent, &sym);
+        // Only include symbols that are part of an emergent edge
+        if parent.contains_key(&sym) {
+            clusters.entry(root).or_default().push(sym);
+        }
+    }
+
+    graph.synthetic_sectors.clear();
+
+    // 4. For each cluster, check if it's "Novel" (no common sector)
+    for (root, members) in clusters {
+        if members.len() < 2 {
+            continue;
+        }
+
+        let mut sectors: HashSet<String> = HashSet::new();
+        for m in &members {
+            if let Some(s) = store.sector_name_for_symbol(&Symbol(m.clone())) {
+                sectors.insert(s.to_string());
+            }
+        }
+
+        // A cluster is "Synthetic" if it spans multiple sectors or has NO sector.
+        // If all members are already in "tech", it's just a sector-sync event,
+        // already handled by cluster_sync.
+        if sectors.len() != 1 {
+            let mut total_energy = 0.0;
+            let mut sum_coherence = 0.0;
+            let mut valid_count = 0;
+
+            for m in &members {
+                if let Some(snap) = graph.sensory_flux.get(&Symbol(m.clone())) {
+                    total_energy += snap.total_flux;
+                    sum_coherence += snap.coherence;
+                    valid_count += 1;
+                }
+            }
+
+            if valid_count > 0 {
+                let synth_id = format!("SYNTH-{}", &root[..4].to_uppercase());
+                graph.synthetic_sectors.upsert(
+                    synth_id.clone(),
+                    crate::perception::SyntheticSectorSnapshot {
+                        synth_id,
+                        members,
+                        total_energy,
+                        collective_coherence: sum_coherence / valid_count as f64,
+                        last_tick: tick,
+                    },
+                );
+            }
+        }
+    }
 }
 
 pub fn build_pruning_shadow_summary(
@@ -1529,6 +1669,7 @@ mod tests {
             Some(0.0),  // st
             None,       // opt
             None,       // mem
+            None,       // gain
         );
         // With vol no longer in direction_raw and all other channels at zero,
         // base_magnitude will be 0 and prior should be unobserved.

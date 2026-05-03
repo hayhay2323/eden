@@ -639,6 +639,14 @@ pub async fn run() {
                 rest_updated: &mut rest_updated,
                 pressure_event_bus: Some(std::sync::Arc::clone(&pressure_event_bus)),
             };
+
+            // V7.4 Energy Persistence: Decay the field before adding new pressure.
+            // Simulates physical inertia of the world model.
+            {
+                let mut graph = runtime.perception_graph.write().unwrap();
+                graph.decay_energy();
+            }
+
             match runtime
                 .begin_tick(
                     &mut bootstrap_pending,
@@ -2482,6 +2490,18 @@ pub async fn run() {
                         &lead_lag_evs,
                         Some(&edge_ledger),
                     );
+
+                    // V7.3 Fluid Topology: Detect Synthetic Sectors (novel narratives)
+                    {
+                        let mut graph = runtime.perception_graph.write().unwrap();
+                        eden::pipeline::loopy_bp::detect_synthetic_sectors(
+                            &edges,
+                            &mut graph,
+                            &store,
+                            tick as u64,
+                        );
+                    }
+
                     let bp_pruning_shadow =
                         eden::pipeline::loopy_bp::build_pruning_shadow_summary(&priors, &edges);
                     let bp_build_inputs_elapsed = bp_build_inputs_start.elapsed();
@@ -2665,7 +2685,13 @@ pub async fn run() {
                     // V2 Phase 4: active probing — counterfactual BP
                     // experiments. Mirrors US wiring.
                     if converged {
-                        probe_outcomes = hk_active_probe.evaluate_due(tick, &beliefs, now, "hk");
+                        probe_outcomes = hk_active_probe.evaluate_due(
+                            tick,
+                            &beliefs,
+                            now,
+                            "hk",
+                            Some(&mut *runtime.perception_graph.write().unwrap()),
+                        );
                         eden::core::runtime_artifacts::record_artifact_result(
                             &mut artifact_write_errors,
                             "active_probe_outcomes",
@@ -2687,6 +2713,7 @@ pub async fn run() {
                             tick,
                             now,
                             "hk",
+                            Some(&*runtime.perception_graph.read().unwrap()),
                         );
                         eden::core::runtime_artifacts::record_artifact_result(
                             &mut artifact_write_errors,

@@ -68,7 +68,6 @@ pub fn spawn_aggregator(
                 );
                 memory_cache.clear();
                 for r in replays {
-                    // Use +5 tick expected belief change as the memory pressure
                     memory_cache.insert(r.symbol, r.mean_forward_belief_5tick);
                 }
                 last_memory_refresh = std::time::Instant::now();
@@ -137,7 +136,7 @@ pub fn spawn_aggregator(
                 0.0
             };
 
-            // 4. Update the unified perception graph and project Bottom-Up energy
+            // 4. Update the unified perception graph
             let mut collective_bonus = 0.0;
             {
                 let mut graph = perception_graph.write().unwrap();
@@ -152,65 +151,69 @@ pub fn spawn_aggregator(
                     },
                 );
 
-                if let Some(sector_id) = store.stocks.get(&sym_obj).and_then(|s| s.sector_id.clone()) {
-                    let sector_name = store.sectors.get(&sector_id).map(|s| s.name.clone()).unwrap_or_else(|| sector_id.0.clone());
-                    
-                    let mut sector_total_energy = 0.0;
-                    let mut sector_sum_coherence = 0.0;
-                    let mut sector_member_count = 0;
-                    let mut leader_symbol = None;
-                    let mut leader_energy = -1.0;
+                // Attention Gating: Only trigger expensive Ontological Projection
+                // if the symbol's energy is significant (> 0.2). 
+                if total_flux > 0.2 {
+                    if let Some(sector_id) = store.stocks.get(&sym_obj).and_then(|s| s.sector_id.clone()) {
+                        let sector_name = store.sectors.get(&sector_id).map(|s| s.name.clone()).unwrap_or_else(|| sector_id.0.clone());
+                        
+                        let mut sector_total_energy = 0.0;
+                        let mut sector_sum_coherence = 0.0;
+                        let mut sector_member_count = 0;
+                        let mut leader_symbol = None;
+                        let mut leader_energy = -1.0;
 
-                    for stock in store.stocks_in_sector(&sector_id) {
-                        if let Some(snap) = graph.sensory_flux.get(&stock.symbol) {
-                            sector_total_energy += snap.total_flux;
-                            sector_sum_coherence += snap.coherence;
-                            sector_member_count += 1;
-                            if snap.total_flux > leader_energy {
-                                leader_energy = snap.total_flux;
-                                leader_symbol = Some(stock.symbol.0.clone());
+                        for stock in store.stocks_in_sector(&sector_id) {
+                            if let Some(snap) = graph.sensory_flux.get(&stock.symbol) {
+                                sector_total_energy += snap.total_flux;
+                                sector_sum_coherence += snap.coherence;
+                                sector_member_count += 1;
+                                if snap.total_flux > leader_energy {
+                                    leader_energy = snap.total_flux;
+                                    leader_symbol = Some(stock.symbol.0.clone());
+                                }
                             }
                         }
-                    }
 
-                    if sector_member_count > 0 {
-                        let collective_coherence = sector_sum_coherence / sector_member_count as f64;
-                        graph.thematic_flux.upsert(
-                            sector_id.0.clone(),
-                            crate::perception::ThematicFluxSnapshot {
-                                theme_id: sector_id.0.clone(),
-                                theme_name: sector_name,
-                                total_energy: sector_total_energy,
-                                collective_coherence,
-                                active_member_count: sector_member_count as u32,
-                                leader_symbol,
-                                last_tick: 0,
-                            },
-                        );
+                        if sector_member_count > 0 {
+                            let collective_coherence = sector_sum_coherence / sector_member_count as f64;
+                            graph.thematic_flux.upsert(
+                                sector_id.0.clone(),
+                                crate::perception::ThematicFluxSnapshot {
+                                    theme_id: sector_id.0.clone(),
+                                    theme_name: sector_name,
+                                    total_energy: sector_total_energy,
+                                    collective_coherence,
+                                    active_member_count: sector_member_count as u32,
+                                    leader_symbol,
+                                    last_tick: 0,
+                                },
+                            );
 
-                        // 5. Y-Archetype: Top-Down Collective Feedback
-                        // If the theme has a powerful vortex (high energy + high coherence), 
-                        // individual members get a "Thematic Momentum" bonus to accelerate their collapse.
-                        if sector_total_energy > 2.0 && collective_coherence > 0.85 {
-                            // Sum of signs across the sector would be better, but mean coherence is a proxy.
-                            // We use a small bonus (0.2) to push the member in the direction of the leader.
-                            collective_bonus = 0.2; 
+                            // 5. Y-Archetype: Top-Down Collective Feedback
+                            if sector_total_energy > 2.0 && collective_coherence > 0.85 {
+                                collective_bonus = 0.2; 
+                            }
                         }
                     }
                 }
             }
 
             // 6. BP Prior Calculation (incorporating Memory and Collective Feedback)
-            let prior = loopy_bp::prior_from_pressure_channels(
-                Some(ob_f),
-                Some(cf_value),
-                Some(inst_f),
-                Some(mo_value),
-                Some(vol_value),
-                Some(st_f),
-                Some(opt_f),
-                Some(mem_f + (sum_signs.signum() * collective_bonus)),
-            );
+            let prior = {
+                let graph = perception_graph.read().unwrap();
+                loopy_bp::prior_from_pressure_channels(
+                    Some(ob_f),
+                    Some(cf_value),
+                    Some(inst_f),
+                    Some(mo_value),
+                    Some(vol_value),
+                    Some(st_f),
+                    Some(opt_f),
+                    Some(mem_f + (sum_signs.signum() * collective_bonus)),
+                    Some(&graph.sensory_gain),
+                )
+            };
 
             if !prior.observed {
                 continue;

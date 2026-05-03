@@ -450,7 +450,7 @@ mod tests {
             last_events.iter().map(|e| &e.kind).collect::<Vec<_>>()
         );
         let snap = graph.sector_kinematics.get("tech", "Pressure").unwrap();
-        assert_eq!(snap.classification.as_deref(), Some("TopForming"));
+        assert_eq!(snap.classification.as_str(), "TopForming");
         assert_eq!(snap.last_tick, last_tick);
     }
 
@@ -526,8 +526,8 @@ mod tests {
                 .get("tech", "Pressure")
                 .unwrap()
                 .classification
-                .as_deref(),
-            Some("TopForming"),
+                .as_str(),
+                "TopForming",
             "TopForming should be present after the trigger tick"
         );
 
@@ -539,8 +539,8 @@ mod tests {
 
         let snap = graph.sector_kinematics.get("tech", "Pressure").unwrap();
         assert_eq!(
-            snap.classification.as_deref(),
-            Some("TopForming"),
+            snap.classification.as_str(),
+            "TopForming",
             "classification must persist across event-free ticks; \
              this tick's events were {:?}",
             next_events.iter().map(|e| &e.kind).collect::<Vec<_>>()

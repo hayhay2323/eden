@@ -355,6 +355,13 @@ impl SensoryFluxSubGraph {
     pub fn iter(&self) -> impl Iterator<Item = (&Symbol, &SensoryFluxSnapshot)> {
         self.by_symbol.iter()
     }
+    pub fn decay(&mut self, factor: f64) {
+        for snap in self.by_symbol.values_mut() {
+            snap.total_flux *= factor;
+            snap.coherence *= factor;
+        }
+        self.by_symbol.retain(|_, s| s.total_flux > 0.05);
+    }
 }
 
 /// Snapshot of aggregated energy for an ontological theme or sector.
@@ -388,6 +395,117 @@ impl ThematicFluxSubGraph {
     pub fn iter(&self) -> impl Iterator<Item = (&String, &ThematicFluxSnapshot)> {
         self.by_theme.iter()
     }
+    pub fn decay(&mut self, factor: f64) {
+        for snap in self.by_theme.values_mut() {
+            snap.total_energy *= factor;
+            snap.collective_coherence *= factor;
+        }
+        self.by_theme.retain(|_, s| s.total_energy > 0.1);
+    }
+}
+
+/// Snapshot of a synthetic (emergent) sector.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyntheticSectorSnapshot {
+    pub synth_id: String,
+    pub members: Vec<String>,
+    pub total_energy: f64,
+    pub collective_coherence: f64,
+    pub last_tick: u64,
+}
+
+/// Synthetic sector sub-graph keyed by synth_id.
+#[derive(Debug, Clone, Default)]
+pub struct SyntheticSectorSubGraph {
+    by_id: HashMap<String, SyntheticSectorSnapshot>,
+}
+
+impl SyntheticSectorSubGraph {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn upsert(&mut self, id: String, snapshot: SyntheticSectorSnapshot) {
+        self.by_id.insert(id, snapshot);
+    }
+    pub fn clear(&mut self) {
+        self.by_id.clear();
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &SyntheticSectorSnapshot)> {
+        self.by_id.iter()
+    }
+    pub fn decay(&mut self, factor: f64) {
+        for snap in self.by_id.values_mut() {
+            snap.total_energy *= factor;
+            snap.collective_coherence *= factor;
+        }
+        self.by_id.retain(|_, s| s.total_energy > 0.1);
+    }
+}
+
+/// Snapshot of the dynamic trust (gain) allocated to a sensory channel.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SensoryGainSnapshot {
+    pub channel_name: String,
+    pub current_gain: f64,
+    pub recent_accuracy: f64,
+    pub last_calibrated: u64,
+}
+
+/// Sensory gain ledger: tracks the dynamic weights of the 6+1 channels.
+///
+/// **Closed-loop learning**: gains are updated by `active_probe.rs:310-326`
+/// after each probe outcome — `(mean_accuracy - 0.5) * 0.1` adjustment,
+/// clamped to `[0.1, 2.0]`. Read by `prior_from_pressure_channels` in
+/// `loopy_bp.rs:382` so BP priors reflect learned channel trust.
+///
+/// **Persistence gap**: this ledger lives only in `PerceptionGraph`
+/// in-memory. Session restart resets all gains to the seed defaults
+/// below. Sync-contract doc:
+/// `docs/architecture/perception-graph-sync-contract.md`.
+#[derive(Debug, Clone, Default)]
+pub struct SensoryGainLedger {
+    by_channel: HashMap<String, SensoryGainSnapshot>,
+}
+
+impl SensoryGainLedger {
+    pub fn new() -> Self {
+        let mut s = Self::default();
+        // Seed with First Principle defaults (overwritten by learning;
+        // see `active_probe.rs:310` for the closed-loop update path).
+        let defaults = [
+            ("OrderBook", 0.3),
+            ("Structure", 0.2),
+            ("CapitalFlow", 1.0),
+            ("Momentum", 0.5),
+            ("Institutional", 0.3),
+            ("Option", 0.4),
+            ("Memory", 0.6),
+        ];
+        for (name, gain) in defaults {
+            s.by_channel.insert(
+                name.to_string(),
+                SensoryGainSnapshot {
+                    channel_name: name.to_string(),
+                    current_gain: gain,
+                    recent_accuracy: 0.5, // Informed but neutral
+                    last_calibrated: 0,
+                },
+            );
+        }
+        s
+    }
+    pub fn upsert(&mut self, name: &str, snapshot: SensoryGainSnapshot) {
+        self.by_channel.insert(name.to_string(), snapshot);
+    }
+    pub fn get_gain(&self, name: &str) -> f64 {
+        self.by_channel
+            .get(name)
+            .map(|s| s.current_gain)
+            .unwrap_or(0.1)
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &SensoryGainSnapshot)> {
+        self.by_channel.iter()
+    }
 }
 
 /// Eden's unified perception graph. Composed of typed sub-graphs, one
@@ -403,11 +521,25 @@ pub struct PerceptionGraph {
     pub symbol_contrast: SymbolContrastSubGraph,
     pub sensory_flux: SensoryFluxSubGraph,
     pub thematic_flux: ThematicFluxSubGraph,
+    pub synthetic_sectors: SyntheticSectorSubGraph,
+    pub sensory_gain: SensoryGainLedger,
 }
 
 impl PerceptionGraph {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            sensory_gain: SensoryGainLedger::new(),
+            ..Default::default()
+        }
+    }
+
+    /// Apply energy decay to the entire graph. Simulates 'Inertia' in the
+    /// sensory field. Strong vortices take time to dissipate.
+    pub fn decay_energy(&mut self) {
+        let decay_factor = 0.90; // 10% energy loss per tick
+        self.sensory_flux.decay(decay_factor);
+        self.thematic_flux.decay(decay_factor);
+        self.synthetic_sectors.decay(decay_factor);
     }
 
     /// Project the unified perception graph into a serializable EdenPerception report.
@@ -445,9 +577,25 @@ impl PerceptionGraph {
             thematic_vortices: Vec::new(),
         };
 
+        // -2. Synthetic Sectors (Fluid Narratives)
+        for (_, snap) in self.synthetic_sectors.iter() {
+            // Lower threshold for SYNTH: any significant group energy (> 0.5)
+            if snap.total_energy > 0.5 {
+                report.thematic_vortices.push(ThematicVortex {
+                    theme_id: snap.synth_id.clone(),
+                    theme_name: format!("Emergent Narrative {}", snap.synth_id),
+                    total_energy: snap.total_energy,
+                    collective_coherence: snap.collective_coherence,
+                    active_member_count: snap.members.len() as u32,
+                    leader_symbol: snap.members.first().cloned(),
+                });
+            }
+        }
+
         // -1. Thematic Flux (Semantic Energy Centers)
         for (_, snap) in self.thematic_flux.iter() {
-            if snap.total_energy > 1.0 {
+            // Lower threshold: 0.5 energy shows the 'pre-vortex' heating.
+            if snap.total_energy > 0.5 {
                 report.thematic_vortices.push(ThematicVortex {
                     theme_id: snap.theme_id.clone(),
                     theme_name: snap.theme_name.clone(),
@@ -466,8 +614,8 @@ impl PerceptionGraph {
 
         // 0. Sensory Flux (Energy Vortices)
         for (symbol, snap) in self.sensory_flux.iter() {
-            // High flux + High coherence = Vortex (Collapse of Certainty)
-            if snap.total_flux > 0.5 && snap.coherence > 0.8 {
+            // Relax thresholds to show the full energy gradient.
+            if snap.total_flux > 0.1 {
                 report.sensory_vortices.push(SensoryFlux {
                     symbol: symbol.0.clone(),
                     flux_magnitude: snap.total_flux,
@@ -504,9 +652,10 @@ impl PerceptionGraph {
 
         // 2. Symbol Contrast (Sector Leaders / Standouts)
         for (key, snap) in self.symbol_contrast.iter() {
-            if snap.contrast >= cfg.min_leader_contrast {
+            // 1.0 contrast is already noticeable in the field.
+            if snap.contrast >= 1.0 {
                 report.sector_leaders.push(SymbolContrast {
-                    symbol: key.0.0.clone(),
+                    symbol: key.0 .0.clone(),
                     sector: snap.sector_id.clone(),
                     center_activation: snap.center_activation,
                     sector_mean: snap.surround_mean,
@@ -525,8 +674,9 @@ impl PerceptionGraph {
 
         // 3. Lead-Lag (Causal Chains)
         for (_, snap) in self.lead_lag.iter() {
-            if snap.correlation.abs() >= cfg.min_chain_correlation
-                && snap.n_samples >= cfg.min_chain_samples
+            // Any meaningful correlation (> 0.3) is part of the field topology.
+            if snap.correlation.abs() >= 0.3
+                && snap.n_samples >= 8
             {
                 report.causal_chains.push(LeadLagEdge {
                     leader: snap.leader.clone(),
@@ -549,7 +699,8 @@ impl PerceptionGraph {
         // 4. Surprise (Anomaly Alerts)
         for (symbol, snap) in self.kl_surprise.iter() {
             let mag_f64 = snap.magnitude.to_f64().unwrap_or(0.0);
-            if mag_f64 >= cfg.min_anomaly_surprise_ratio {
+            // 1.0 surprise is the statistical 'Gaussian' first principle threshold.
+            if mag_f64 >= 1.0 {
                 report.anomaly_alerts.push(SurpriseAlert {
                     symbol: symbol.0.clone(),
                     channel: "KLSurprise".to_string(),

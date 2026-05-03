@@ -908,6 +908,13 @@ pub async fn run() {
                 rest: &mut rest,
                 pressure_event_bus: Some(std::sync::Arc::clone(&pressure_event_bus)),
             };
+
+            // V7.4 Energy Persistence: Decay the field before adding new pressure.
+            {
+                let mut graph = runtime.perception_graph.write().unwrap();
+                graph.decay_energy();
+            }
+
             match runtime
                 .begin_tick(
                     &mut bootstrap_pending,
@@ -3561,6 +3568,18 @@ pub async fn run() {
                             &lead_lag_evs,
                             Some(&edge_ledger),
                         );
+
+                        // V7.3 Fluid Topology: Detect Synthetic Sectors (novel narratives)
+                        {
+                            let mut graph = runtime.perception_graph.write().unwrap();
+                            crate::pipeline::loopy_bp::detect_synthetic_sectors(
+                                &edges,
+                                &mut graph,
+                                &store,
+                                tick as u64,
+                            );
+                        }
+
                         let bp_pruning_shadow =
                             crate::pipeline::loopy_bp::build_pruning_shadow_summary(
                                 &priors, &edges,
@@ -3760,7 +3779,13 @@ pub async fn run() {
                         // ticks. Pure Pearl do-calculus subset — no learning.
                         if converged {
                             probe_outcomes =
-                                us_active_probe.evaluate_due(tick, &beliefs, now_utc, "us");
+                                us_active_probe.evaluate_due(
+                                    tick,
+                                    &beliefs,
+                                    now_utc,
+                                    "us",
+                                    Some(&mut *runtime.perception_graph.write().unwrap()),
+                                );
                             crate::core::runtime_artifacts::record_artifact_result(
                                 &mut artifact_write_errors,
                                 "active_probe_outcomes",
@@ -3785,6 +3810,7 @@ pub async fn run() {
                                 tick,
                                 now_utc,
                                 "us",
+                                Some(&*runtime.perception_graph.read().unwrap()),
                             );
                             crate::core::runtime_artifacts::record_artifact_result(
                                 &mut artifact_write_errors,
