@@ -54,6 +54,7 @@ use eden::pipeline::reasoning::ReasoningSnapshot;
 use eden::pipeline::signals::{
     broker_events_from_delta, DerivedSignalSnapshot, EventSnapshot, ObservationSnapshot,
 };
+use eden::perception::PerceptionGraph;
 use eden::pipeline::tension::TensionSnapshot;
 use eden::temporal::buffer::TickHistory;
 use eden::temporal::record::TickRecord;
@@ -118,6 +119,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut seen_symbols = HashSet::new();
     let mut regression_report = ReplayRegressionReport::new();
     let mut latest_replay_snapshot: Option<(LiveSnapshot, ProjectionBundle)> = None;
+    let perception_graph = std::sync::RwLock::new(PerceptionGraph::new());
     let total_archives = archives.len();
     let first_tick = archives.first().map(|a| a.tick_number);
     let last_tick = archives.last().map(|a| a.tick_number);
@@ -440,6 +442,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 previous_agent_snapshot: None,
                 previous_agent_session: None,
                 previous_agent_scoreboard: None,
+                perception_graph: &perception_graph,
             });
             latest_replay_snapshot = Some((live_snapshot, projection_bundle));
 
