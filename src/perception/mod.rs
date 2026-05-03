@@ -443,7 +443,7 @@ impl SyntheticSectorSubGraph {
 }
 
 /// Snapshot of the dynamic trust (gain) allocated to a sensory channel.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SensoryGainSnapshot {
     pub channel_name: String,
     pub current_gain: f64,
@@ -458,9 +458,13 @@ pub struct SensoryGainSnapshot {
 /// clamped to `[0.1, 2.0]`. Read by `prior_from_pressure_channels` in
 /// `loopy_bp.rs:382` so BP priors reflect learned channel trust.
 ///
-/// **Persistence gap**: this ledger lives only in `PerceptionGraph`
-/// in-memory. Session restart resets all gains to the seed defaults
-/// below. Sync-contract doc:
+/// **Persistence**: snapshots survive session restarts via
+/// `sensory_gain_ledger_path(slug)` (a small JSON file, atomic
+/// overwrite). `PerceptionGraph::persistent(slug)` loads the file on
+/// startup; `save_sensory_gain_to_path` is called by
+/// `active_probe::evaluate_due` after every gain update so the next
+/// session resumes from learned weights instead of the First Principle
+/// seed defaults below. Sync-contract doc:
 /// `docs/architecture/perception-graph-sync-contract.md`.
 #[derive(Debug, Clone, Default)]
 pub struct SensoryGainLedger {
@@ -506,6 +510,68 @@ impl SensoryGainLedger {
     pub fn iter(&self) -> impl Iterator<Item = (&String, &SensoryGainSnapshot)> {
         self.by_channel.iter()
     }
+
+    /// Snapshot the ledger to a deterministic-order `Vec` for
+    /// serialization. Sorted by `channel_name` so successive saves of
+    /// the same ledger produce identical JSON on disk (useful for
+    /// `git diff` and content-addressed comparisons).
+    pub fn to_records(&self) -> Vec<SensoryGainSnapshot> {
+        let mut out: Vec<_> = self.by_channel.values().cloned().collect();
+        out.sort_by(|a, b| a.channel_name.cmp(&b.channel_name));
+        out
+    }
+
+    /// Rebuild a ledger from previously-serialized records.
+    pub fn from_records(records: Vec<SensoryGainSnapshot>) -> Self {
+        let mut s = Self::default();
+        for r in records {
+            s.by_channel.insert(r.channel_name.clone(), r);
+        }
+        s
+    }
+}
+
+/// Path of the sensory-gain persistence file for a given market slug
+/// (`"hk"` / `"us"`). Mirrors the `world_reflection_ledger_path`
+/// pattern but is a single JSON snapshot rather than an append-only
+/// NDJSON tail — gains are state, not events.
+pub fn sensory_gain_ledger_path(market_slug: &str) -> String {
+    format!(".run/sensory-gain-{}.json", market_slug)
+}
+
+/// Atomically overwrite the sensory-gain JSON for `path`. Writes the
+/// ledger as a `Vec<SensoryGainSnapshot>` so the file can be inspected
+/// or hand-edited.
+///
+/// Returns `Ok(())` even if the parent dir didn't exist (created on
+/// demand). Errors only propagate when serialization or the actual
+/// write fails.
+pub fn save_sensory_gain_to_path(
+    ledger: &SensoryGainLedger,
+    path: &str,
+) -> std::io::Result<()> {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let records = ledger.to_records();
+    let payload = serde_json::to_string(&records)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(path, payload)
+}
+
+/// Load a sensory-gain ledger from disk; if the file is missing,
+/// unreadable, or malformed, fall back to `SensoryGainLedger::new()`
+/// (the First Principle seed defaults). Logging the load failure is
+/// the caller's job — this function is fail-soft so a corrupt or
+/// missing file never prevents runtime startup.
+pub fn load_sensory_gain_from_path(path: &str) -> SensoryGainLedger {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return SensoryGainLedger::new();
+    };
+    match serde_json::from_str::<Vec<SensoryGainSnapshot>>(&content) {
+        Ok(records) if !records.is_empty() => SensoryGainLedger::from_records(records),
+        _ => SensoryGainLedger::new(),
+    }
 }
 
 /// Eden's unified perception graph. Composed of typed sub-graphs, one
@@ -531,6 +597,20 @@ impl PerceptionGraph {
             sensory_gain: SensoryGainLedger::new(),
             ..Default::default()
         }
+    }
+
+    /// Build a `PerceptionGraph` whose `sensory_gain` ledger is loaded
+    /// from `sensory_gain_ledger_path(market_slug)`. All other
+    /// sub-graphs start empty as in `new()` — only the ledger
+    /// persists across sessions.
+    ///
+    /// `market_slug` should be `"hk"` or `"us"` (matches what
+    /// `MarketId::slug()` returns).
+    pub fn persistent(market_slug: &str) -> Self {
+        let path = sensory_gain_ledger_path(market_slug);
+        let mut graph = Self::new();
+        graph.sensory_gain = load_sensory_gain_from_path(&path);
+        graph
     }
 
     /// Apply energy decay to the entire graph. Simulates 'Inertia' in the
@@ -870,5 +950,86 @@ mod tests {
 
         let view = graph.world(Market::Hk);
         assert!(view.world_intent.is_some());
+    }
+
+    #[test]
+    fn sensory_gain_records_round_trip_preserves_state() {
+        let mut ledger = SensoryGainLedger::new();
+        ledger.upsert(
+            "CapitalFlow",
+            SensoryGainSnapshot {
+                channel_name: "CapitalFlow".to_string(),
+                current_gain: 1.42,
+                recent_accuracy: 0.78,
+                last_calibrated: 17,
+            },
+        );
+        ledger.upsert(
+            "OrderBook",
+            SensoryGainSnapshot {
+                channel_name: "OrderBook".to_string(),
+                current_gain: 0.13,
+                recent_accuracy: 0.41,
+                last_calibrated: 23,
+            },
+        );
+
+        let records = ledger.to_records();
+        // Sorted by channel_name for deterministic on-disk format.
+        assert_eq!(records[0].channel_name, "CapitalFlow");
+        let cf_idx = records
+            .iter()
+            .position(|r| r.channel_name == "CapitalFlow")
+            .unwrap();
+        let ob_idx = records
+            .iter()
+            .position(|r| r.channel_name == "OrderBook")
+            .unwrap();
+        assert!(cf_idx < ob_idx, "records sorted alphabetically");
+
+        let restored = SensoryGainLedger::from_records(records);
+        assert!((restored.get_gain("CapitalFlow") - 1.42).abs() < 1e-9);
+        assert!((restored.get_gain("OrderBook") - 0.13).abs() < 1e-9);
+        // A channel never inserted reads the unknown-default 0.1.
+        assert!((restored.get_gain("NotInLedger") - 0.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sensory_gain_persistence_round_trip_via_disk() {
+        let dir = std::env::temp_dir().join(format!(
+            "eden-sensory-gain-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("sensory-gain.json");
+        let path_str = path.to_string_lossy().to_string();
+
+        let mut original = SensoryGainLedger::new();
+        original.upsert(
+            "Memory",
+            SensoryGainSnapshot {
+                channel_name: "Memory".to_string(),
+                current_gain: 1.85,
+                recent_accuracy: 0.92,
+                last_calibrated: 999,
+            },
+        );
+
+        save_sensory_gain_to_path(&original, &path_str).expect("save");
+        let loaded = load_sensory_gain_from_path(&path_str);
+        assert!((loaded.get_gain("Memory") - 1.85).abs() < 1e-9);
+
+        // Cleanup; failure to clean is fine.
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn load_sensory_gain_from_missing_path_returns_seed_defaults() {
+        let path = "/nonexistent/path/that/does/not/exist.json";
+        let ledger = load_sensory_gain_from_path(path);
+        // Seed defaults populate the seven canonical channels.
+        assert!((ledger.get_gain("CapitalFlow") - 1.0).abs() < 1e-9);
+        assert!((ledger.get_gain("OrderBook") - 0.3).abs() < 1e-9);
     }
 }

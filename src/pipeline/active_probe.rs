@@ -323,6 +323,21 @@ impl ActiveProbeRunner {
                         },
                     );
                 }
+                // FP6 (synaptic vitality): persist the updated ledger
+                // so the next session resumes from learned weights
+                // instead of seed defaults. Atomic full-file overwrite,
+                // small payload (~7 channels). Fail-soft — log and
+                // carry on if the disk write fails; in-memory gains
+                // are still valid.
+                let path = crate::perception::sensory_gain_ledger_path(market);
+                if let Err(error) =
+                    crate::perception::save_sensory_gain_to_path(&g.sensory_gain, &path)
+                {
+                    eprintln!(
+                        "Warning: failed to persist sensory_gain ledger to {}: {}",
+                        path, error
+                    );
+                }
             }
 
             let history = self

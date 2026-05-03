@@ -164,8 +164,12 @@ pub async fn prepare_runtime_context(
         #[cfg(feature = "persistence")]
         persistence_limit,
         current_regime_buckets: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+        // FP6 (synaptic vitality): load the SensoryGainLedger from disk
+        // so this session resumes from previously-learned channel
+        // weights instead of the seed defaults. All other sub-graphs
+        // start empty.
         perception_graph: Arc::new(std::sync::RwLock::new(
-            crate::perception::PerceptionGraph::new(),
+            crate::perception::PerceptionGraph::persistent(market.slug()),
         )),
     })
 }
