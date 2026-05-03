@@ -1690,6 +1690,8 @@ mod tests {
             Some(0.0), // vol
             Some(0.0), // st
             None,      // opt
+            None,      // memory (signature_replay)
+            None,      // sensory_gain ledger
         );
         assert!(prior.observed, "strong cf should produce observed prior");
         // belief[STATE_BULL] should be highest

@@ -239,10 +239,21 @@ pub fn build_us_agent_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::types::state::AgentSymbolState;
+    use crate::agent::{AgentActionExpectancies, AgentSymbolState};
 
     fn previous_symbol_with_status(status: &str, streak: u64) -> AgentSymbolState {
-        let mut symbol = AgentSymbolState::new("AAPL.US");
+        let mut symbol = AgentSymbolState {
+            symbol: "AAPL.US".to_string(),
+            sector: None,
+            structure: None,
+            signal: None,
+            depth: None,
+            brokers: None,
+            invalidation: None,
+            pressure: None,
+            active_position: None,
+            latest_events: Vec::new(),
+        };
         symbol.structure = Some(AgentStructureState {
             symbol: "AAPL.US".to_string(),
             sector: None,
@@ -250,6 +261,7 @@ mod tests {
             title: "".to_string(),
             action: "".to_string(),
             status: Some(status.to_string()),
+            age_ticks: None,
             status_streak: Some(streak),
             confidence: Decimal::ZERO,
             confidence_change: None,
@@ -259,7 +271,7 @@ mod tests {
             leader_streak: None,
             leader_transition_summary: None,
             thesis_family: None,
-            action_expectancies: Vec::new(),
+            action_expectancies: AgentActionExpectancies::default(),
             expected_net_alpha: None,
             alpha_horizon: None,
             invalidation_rule: None,

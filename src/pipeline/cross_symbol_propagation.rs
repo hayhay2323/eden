@@ -189,7 +189,7 @@ mod tests {
             Utc::now(),
         );
         reg.upsert("B.HK", Utc::now()); // empty sub-KG
-        let edges = vec![MasterEdge {
+        let edges = vec![BpInputEdge {
             from: "A.HK".into(),
             to: "B.HK".into(),
             weight: 0.5,
@@ -223,13 +223,13 @@ mod tests {
         );
         reg.upsert("B.HK", Utc::now());
         let edges = vec![
-            MasterEdge {
+            BpInputEdge {
                 from: "A.HK".into(),
                 to: "B.HK".into(),
                 weight: 0.5,
                 edge_type: "Peer".into(),
             },
-            MasterEdge {
+            BpInputEdge {
                 from: "C.HK".into(),
                 to: "B.HK".into(),
                 weight: 0.3,
@@ -250,7 +250,7 @@ mod tests {
         reg.upsert("A.HK", Utc::now())
             .set_node_value(NodeId::LastPrice, dec!(50.0), Utc::now());
         reg.upsert("B.HK", Utc::now());
-        let edges = vec![MasterEdge {
+        let edges = vec![BpInputEdge {
             from: "A.HK".into(),
             to: "B.HK".into(),
             weight: 1.0,

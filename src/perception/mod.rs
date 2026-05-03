@@ -847,7 +847,7 @@ mod tests {
                 intent_id: "test".to_string(),
                 kind: IntentKind::Accumulation,
                 direction: IntentDirection::Buy,
-                state: IntentState::Informed,
+                state: IntentState::Active,
                 confidence: dec!(0.8),
                 urgency: dec!(0.5),
                 persistence: dec!(0.9),

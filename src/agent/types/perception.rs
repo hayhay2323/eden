@@ -260,6 +260,8 @@ mod tests {
             signature_replays: vec![],
             pre_market_movers: vec![],
             catalysts: vec![],
+            sensory_vortices: vec![],
+            thematic_vortices: vec![],
         };
         let json = serde_json::to_string(&original).expect("serialise");
         let recovered: EdenPerception = serde_json::from_str(&json).expect("deserialise");
@@ -356,6 +358,8 @@ mod tests {
                 source: "earnings_calendar".to_string(),
                 importance: 4,
             }],
+            sensory_vortices: vec![],
+            thematic_vortices: vec![],
         };
         let json = serde_json::to_string(&original).expect("serialise");
         let recovered: EdenPerception = serde_json::from_str(&json).expect("deserialise");

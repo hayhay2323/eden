@@ -68,6 +68,8 @@ mod tests {
             signature_replays: vec![],
             pre_market_movers: vec![],
             catalysts: vec![],
+            sensory_vortices: vec![],
+            thematic_vortices: vec![],
         };
         let snapshot = AgentSnapshot {
             tick: 42,

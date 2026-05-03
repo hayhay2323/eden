@@ -417,9 +417,10 @@ mod tests {
             snap.level_now
         );
         assert!((snap.velocity - 0.1).abs() < 1e-9, "got {}", snap.velocity);
-        assert!(
-            snap.classification.is_none(),
-            "no events → no classification"
+        assert_eq!(
+            snap.classification.as_str(),
+            "unclassified",
+            "no events and no prior reading → default unclassified"
         );
     }
 
