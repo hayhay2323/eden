@@ -111,34 +111,7 @@ What survives session restart:
 | `belief_snapshot`, `tactical_setup`, `hypothesis_track` | yes | SQLite |
 | `case_resolution`, `case_reasoning_assessment` | yes | SQLite |
 | `kl_surprise`, `sector_kinematics`, `sector_contrast`, `emergence`, `lead_lag`, `symbol_contrast`, `sensory_flux`, `thematic_flux`, `synthetic_sectors` | **no** | ephemeral with `decay_energy(0.90)` per tick |
-| `sensory_gain` | **no — gap** | see below |
-
-### Known gap: SensoryGainLedger does not persist
-
-`SensoryGainLedger` lives in `PerceptionGraph` in-memory only. The
-closed-loop learning at `active_probe.rs:310-326` updates gains each
-probe outcome, but on session restart `SensoryGainLedger::new()`
-re-seeds the seven channels back to the hardcoded defaults
-(`OrderBook=0.3, Structure=0.2, CapitalFlow=1.0, Momentum=0.5,
-Institutional=0.3, Option=0.4, Memory=0.6`). Eden forgets what it
-learned about which channels to trust.
-
-**Why this matters:** the hardcoded defaults are the very "First
-Principle" templates the architecture explicitly rejects. The whole
-point of the gain ledger is for those weights to become
-data-driven. Without persistence, eden re-imposes the prior every
-session.
-
-**Recommended fix (next plan, not this contract):**
-- Mirror the `WorldIntentReflectionLedger` pattern — NDJSON tail at
-  `sensory_gain_ledger_path(market)`.
-- Load on `PerceptionGraph::persistent(market)` (new constructor).
-- Save on a cadence (every N ticks, or on graceful shutdown).
-- Replay binary stays with `PerceptionGraph::new()` (offline, no
-  persistence) so backtests are reproducible.
-
-Until that lands, **do not treat `sensory_gain` as accumulated
-learning** in any analysis or metric.
+| `sensory_gain` | yes | single JSON snapshot at `sensory_gain_ledger_path(market_slug)` (`.run/sensory-gain-{slug}.json`); `PerceptionGraph::persistent(slug)` loads on startup, `active_probe::evaluate_due` saves after each closed-loop update |
 
 ## Concurrency contract
 
