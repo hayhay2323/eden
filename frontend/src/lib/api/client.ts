@@ -1,6 +1,7 @@
 import type {
   CaseWorkflowState,
   ContextStatus,
+  EdenPerception,
   OperatorWorkItem,
   OperationalGraphNodeResponse,
   OperationalHistoryRecord,
@@ -318,5 +319,24 @@ export function postCaseQueuePin(
   return postJson<CaseWorkflowState>(
     `/api/cases/${market}/${encodeURIComponent(setupId)}/queue-pin`,
     body,
+  );
+}
+
+/**
+ * Fetches eden's canonical perception report — the unified read
+ * surface for `Y` (human, CLI, LLM) per the eden thesis. Returns
+ * `null` if the runtime hasn't ticked yet.
+ *
+ * Prefer this over reading `recommendations` from
+ * `OperationalSnapshot`, which is FP2-deprecated. Backend contract:
+ * `docs/architecture/perception-graph-sync-contract.md`.
+ */
+export function fetchAgentPerception(
+  market: string,
+  signal?: AbortSignal,
+): Promise<EdenPerception | null> {
+  return fetchJson<EdenPerception | null>(
+    `/api/perception/${encodeURIComponent(market)}`,
+    { signal },
   );
 }

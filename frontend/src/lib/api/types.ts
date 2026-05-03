@@ -1066,3 +1066,34 @@ export interface CaseWorkflowState {
   queue_pin?: string | null;
   note?: string | null;
 }
+
+/**
+ * Eden's canonical perception report. Top-level fields are guaranteed
+ * by the `/api/perception/:market` contract; nested element shapes are
+ * intentionally `unknown[]` here to avoid a tight coupling with the
+ * Rust schema. Refine to specific element types when a feature
+ * actually consumes them.
+ *
+ * Per the eden thesis (FP1 / FP2): this is the canonical Y read
+ * surface. Prefer this over fields embedded in `OperationalSnapshot`
+ * or `/api/agent/:market/recommendations` (deprecated).
+ *
+ * Backend reference: `src/perception/mod.rs` `PerceptionGraph::to_report`.
+ */
+export interface EdenPerception {
+  schema_version: number;
+  market: "Hk" | "Us";
+  tick: number;
+  timestamp: string;
+  emergent_clusters?: unknown[];
+  sector_leaders?: unknown[];
+  causal_chains?: unknown[];
+  anomaly_alerts?: unknown[];
+  regime?: unknown;
+  belief_kinetics?: unknown[];
+  signature_replays?: unknown[];
+  pre_market_movers?: unknown[];
+  catalysts?: unknown[];
+  sensory_vortices?: unknown[];
+  thematic_vortices?: unknown[];
+}
