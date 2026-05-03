@@ -46,9 +46,21 @@ mod context;
 mod investigations;
 mod io;
 mod judgments;
+// Lens engine: designed but never wired into production paths. Kept
+// for the planned signal-lens composition layer; allow dead_code so
+// the module's tests still validate the internals without fighting
+// the unused-warning cascade.
+#[allow(dead_code)]
 mod lens;
 mod macro_events;
 // option_inference deleted — T25 rule-based narrative assembly
+// `recommendations` is the deprecated heuristic builder retained for
+// legacy artifact loading and test coverage of historical behavior.
+// Production callers migrated to `AgentRecommendations::empty()` in
+// 512a36c (FP2). The subsystem (decision_model, market, outcomes,
+// symbol) was only ever called by `build_recommendations` itself,
+// so it appears dead under cargo's analysis — that is expected.
+#[allow(dead_code)]
 mod recommendations;
 pub(crate) mod shared;
 // symbol_inference deleted — T22 rule-based narrative assembly
