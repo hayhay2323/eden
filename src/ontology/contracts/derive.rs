@@ -199,6 +199,17 @@ pub fn derive_agent_briefing(snapshot: &OperationalSnapshot) -> AgentBriefing {
     }
 }
 
+/// Derives `AgentRecommendations` from an operational snapshot. This is
+/// the "new" path that `architecture_invariants_tests` enforces over the
+/// fully-deprecated `agent::recommendations::build_recommendations`.
+///
+/// **FP2 caveat (eden thesis):** even this path violates the principle
+/// that eden does not decide. The thesis-aligned Y read surface is
+/// `GET /perception/:market` (or `eden perception <hk|us>` from CLI) —
+/// Y reads the perception report and produces decisions externally.
+/// `derive_agent_recommendations` is migration-tier deprecated:
+/// load-bearing for frontend/scoreboard consumers, but should be
+/// retired once those consumers migrate to /perception.
 pub fn derive_agent_recommendations(snapshot: &OperationalSnapshot) -> AgentRecommendations {
     let mut decisions = Vec::new();
     if let Some(item) = snapshot.market_recommendation.clone() {

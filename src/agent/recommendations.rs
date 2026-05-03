@@ -1,9 +1,22 @@
 // 2026-05-01: DEPRECATED. Produces legacy agent_recommendations.json
 // using 1990s breadth + sector-synchrony heuristics. Does NOT consume
-// eden's emergence/contrast/lead-lag/surprise streams. Use
-// `agent/perception.rs` (AgentPerceptionReport, data/agent_perception.json)
-// for the canonical Y-facing surface. Retained for backwards-compat
-// with existing consumers (frontend, scripts) only.
+// eden's emergence/contrast/lead-lag/surprise streams.
+//
+// Per the eden thesis (memory/eden_unified_thesis.md): eden does NOT
+// decide. Eden perceives; Y decides. ANY function that emits a
+// "recommendation" is architecturally misplaced. This file is the most
+// flagrant violation; `ontology::contracts::derive::derive_agent_recommendations`
+// is the still-load-bearing "new" path that also violates FP2 but is
+// migrated incrementally.
+//
+// Canonical Y read surfaces (use these instead):
+//   * HTTP:  GET /perception/:market   -> EdenPerception JSON
+//   * CLI:   eden perception <hk|us>   -> EdenPerception JSON to stdout
+//   * Code:  graph.to_report(market, tick, ts, &cfg)  in PerceptionGraph
+//
+// Retained only for backwards-compat with existing frontend/script
+// consumers. Schedule for removal once consumers migrate to /perception.
+// Sync contract: docs/architecture/perception-graph-sync-contract.md.
 use super::*;
 mod decision_model;
 mod market;

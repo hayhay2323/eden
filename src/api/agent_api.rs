@@ -8,9 +8,9 @@ use crate::agent::llm::{
 };
 use crate::agent::{
     self, AgentAlertScoreboard, AgentBriefing, AgentBrokerState, AgentDepthState, AgentEodReview,
-    AgentInvalidationState, AgentRecommendations, AgentSectorFlow, AgentSession, AgentSnapshot,
-    AgentStructureState, AgentSymbolState, AgentThread, AgentToolOutput, AgentToolRequest,
-    AgentToolSpec, AgentToolSurfaceRefs, AgentTurn, AgentWakeState, AgentWatchlist,
+    AgentInvalidationState, AgentSectorFlow, AgentSession, AgentSnapshot, AgentStructureState,
+    AgentSymbolState, AgentThread, AgentToolOutput, AgentToolRequest, AgentToolSpec,
+    AgentToolSurfaceRefs, AgentTurn, AgentWakeState, AgentWatchlist,
 };
 use crate::ontology::world::{BackwardInvestigation, WorldStateSnapshot};
 use crate::ontology::{IntentDirection, IntentKind};
@@ -163,10 +163,29 @@ pub(super) async fn get_agent_watchlist(
     Ok(Json(load_agent_watchlist_for_market(&market).await?))
 }
 
+/// **DEPRECATED (FP2):** eden does not decide; Y decides. The
+/// thesis-aligned Y read surface is `GET /perception/:market`. This
+/// endpoint is retained for backwards-compat with frontend/script
+/// consumers and signals deprecation via RFC 8594 headers.
 pub(super) async fn get_agent_recommendations(
     Path(market): Path<String>,
-) -> Result<Json<AgentRecommendations>, ApiError> {
-    Ok(Json(load_agent_recommendations_for_market(&market).await?))
+) -> Result<axum::response::Response, ApiError> {
+    use axum::http::header;
+    use axum::response::IntoResponse;
+    let body = Json(load_agent_recommendations_for_market(&market).await?);
+    let mut response = body.into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        "Deprecation",
+        axum::http::HeaderValue::from_static("true"),
+    );
+    headers.insert(
+        header::LINK,
+        axum::http::HeaderValue::from_static(
+            "</perception/:market>; rel=\"successor-version\"",
+        ),
+    );
+    Ok(response)
 }
 
 pub(super) async fn get_agent_scoreboard(
