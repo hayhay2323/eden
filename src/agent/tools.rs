@@ -12,6 +12,18 @@ const COMPAT_QUERY_ALLOWLIST: &[&str] = &[
 pub fn tool_catalog() -> Vec<AgentToolSpec> {
     let mut tools = vec![
         AgentToolSpec {
+            name: "perception".into(),
+            category: AgentToolCategory::ObjectQuery,
+            route: "/api/perception/:market".into(),
+            method: "GET".into(),
+            description:
+                "Returns eden's canonical perception report: emergent clusters, sector leaders, lead-lag causal chains, KL-surprise anomaly alerts, regime memory with historical forward outcomes, belief kinetics, sensory & thematic vortices. This is the ground-truth Y read surface — graph-derived observation, not a derived analyst view."
+                    .into(),
+            deprecated: false,
+            replacement: None,
+            args: vec![],
+        },
+        AgentToolSpec {
             name: "market_session".into(),
             category: AgentToolCategory::ObjectQuery,
             route: "/api/ontology/:market/market-session".into(),
