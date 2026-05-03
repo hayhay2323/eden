@@ -32,6 +32,13 @@ pub(crate) use outcomes::{
 use symbol::build_symbol_recommendation;
 pub(crate) use symbol::{agent_bias_for_symbol, decision_alert_record, symbol_status};
 
+#[deprecated(
+    since = "2026-05-04",
+    note = "Eden does not decide; Y decides. Read `snapshot.perception` (the EdenPerception report) instead. \
+            For programmatic Y consumers, use the `/api/perception/:market` HTTP endpoint or `eden perception <hk|us>` CLI. \
+            This function is retained only for legacy callers (agent::judgments fallback, agent::llm narration / fallback) \
+            and will be removed once they migrate."
+)]
 pub fn build_recommendations(
     snapshot: &AgentSnapshot,
     session: Option<&AgentSession>,
