@@ -18,6 +18,7 @@ mod ontology_history_enrichment;
 mod ontology_history_support;
 mod ontology_query_api;
 mod ontology_query_surface;
+mod perception_api;
 mod runtime_graph_api;
 mod runtime_tasks_api;
 mod server;

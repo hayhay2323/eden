@@ -72,6 +72,7 @@ use super::super::ontology_query_api::{
     get_ontology_knowledge_links, get_ontology_macro_event_candidates, get_ontology_world,
 };
 use super::super::ontology_query_surface::stream_ontology_world;
+use super::super::perception_api::get_perception;
 use super::super::runtime_graph_api::{
     get_runtime_graph_ego, get_runtime_graph_frame, get_runtime_graph_influence,
 };
@@ -86,6 +87,10 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
     let root_state = state.clone();
     let api_routes = Router::new()
         .route("/live", get(get_live_snapshot))
+        // Y reader — canonical perception query surface (eden thesis).
+        // Returns just the EdenPerception slice from the latest
+        // AgentSnapshot. See `docs/architecture/perception-graph-sync-contract.md`.
+        .route("/perception/:market", get(get_perception))
         .route("/agent/:market/live", get(get_agent_snapshot))
         .route("/agent/:market/tools", get(get_agent_tools))
         .route("/agent/:market/wake", get(get_agent_wake))
