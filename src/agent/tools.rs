@@ -146,10 +146,14 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             route: "/api/agent/:market/recommendations".into(),
             method: "GET".into(),
             description:
-                "Returns standardized action recommendations tied to the current regime."
+                "DEPRECATED (FP2): legacy 1990s-style action recommendations. \
+                 Eden does not decide; Y decides. Read the `perception` tool \
+                 (the canonical ground-truth Y read surface) and apply your own \
+                 judgment instead. This endpoint sends RFC 8594 `Deprecation: true` \
+                 headers and may be retired."
                     .into(),
-            deprecated: false,
-            replacement: None,
+            deprecated: true,
+            replacement: Some("perception".into()),
             args: vec![
                 AgentToolArgSpec {
                     name: "symbol".into(),
