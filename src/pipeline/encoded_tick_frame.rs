@@ -167,12 +167,7 @@ impl EncodedTickFrame {
         self.normalize();
     }
 
-    pub fn attach_pressure(
-        &mut self,
-        symbol: &Symbol,
-        scale: TimeScale,
-        pressure: &NodePressure,
-    ) {
+    pub fn attach_pressure(&mut self, symbol: &Symbol, scale: TimeScale, pressure: &NodePressure) {
         let sym = self.symbol_mut(&symbol.0);
         insert_provenance(sym, EncodedProvenance::PressureField);
         for (channel, channel_pressure) in &pressure.channels {

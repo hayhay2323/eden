@@ -481,8 +481,8 @@ fn scorecard_records_emit_from_tactical_setups_once_per_setup_id() {
     assert!(records[0].is_actionable_tier);
 }
 
-#[test]
-fn rest_update_backfills_missing_prev_close() {
+#[tokio::test]
+async fn rest_update_backfills_missing_prev_close() {
     let mut live = UsLiveState::new();
     live.quotes.insert(
         Symbol("AAPL.US".into()),
@@ -506,6 +506,7 @@ fn rest_update_backfills_missing_prev_close() {
     let mut tick_state = UsTickState {
         live: &mut live,
         rest: &mut rest,
+        pressure_event_bus: None,
     };
 
     tick_state.apply_update(UsRestSnapshot {
@@ -613,8 +614,8 @@ fn observation_snapshot_from_canonical_skips_zero_prev_close_quotes() {
     assert_eq!(quote_symbols, vec![Symbol("MSFT.US".into())]);
 }
 
-#[test]
-fn rest_update_refreshes_existing_quote_fields() {
+#[tokio::test]
+async fn rest_update_refreshes_existing_quote_fields() {
     let mut live = UsLiveState::new();
     live.quotes.insert(
         Symbol("AAPL.US".into()),
@@ -638,6 +639,7 @@ fn rest_update_refreshes_existing_quote_fields() {
     let mut tick_state = UsTickState {
         live: &mut live,
         rest: &mut rest,
+        pressure_event_bus: None,
     };
 
     tick_state.apply_update(UsRestSnapshot {

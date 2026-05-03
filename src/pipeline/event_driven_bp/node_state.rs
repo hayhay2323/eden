@@ -120,7 +120,10 @@ mod tests {
         // payload exceeds the 16-byte lock-free bound, so we expect
         // false. If this ever flips to true (e.g., 64-byte CMPXCHG
         // landed), it's worth re-evaluating the SeqLock fallback path.
-        assert!(!actual, "NodeStateLite unexpectedly became lock-free; revisit substrate hot path assumptions");
+        assert!(
+            !actual,
+            "NodeStateLite unexpectedly became lock-free; revisit substrate hot path assumptions"
+        );
     }
 
     #[test]

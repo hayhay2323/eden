@@ -29,9 +29,15 @@ pub enum PressureEvent {
     /// Broker queue update. Drives Institutional channel.
     Broker {
         symbol: String,
-        broker_id: i32,
-        side: TradeSide,
-        position: i32,
+        bid_broker_ids: Vec<i32>,
+        ask_broker_ids: Vec<i32>,
+        ts: DateTime<Utc>,
+    },
+    /// Option surface update. Drives Option channel.
+    Option {
+        symbol: String,
+        put_call_ratio: Option<Decimal>,
+        iv_skew: Option<Decimal>,
         ts: DateTime<Utc>,
     },
     /// Quote (last/volume/turnover). Drives CapitalFlow (turnover delta)
@@ -95,26 +101,20 @@ pub fn demux_push_event(evt: &PushEvent) -> Vec<PressureEvent> {
             })
             .collect(),
         PushEventDetail::Brokers(b) => {
-            let mut out = Vec::with_capacity(b.bid_brokers.len() + b.ask_brokers.len());
-            for seat in &b.bid_brokers {
-                out.push(PressureEvent::Broker {
-                    symbol: symbol.clone(),
-                    broker_id: seat.broker_ids.first().copied().unwrap_or(0),
-                    side: TradeSide::Buy,
-                    position: seat.position,
-                    ts,
-                });
-            }
-            for seat in &b.ask_brokers {
-                out.push(PressureEvent::Broker {
-                    symbol: symbol.clone(),
-                    broker_id: seat.broker_ids.first().copied().unwrap_or(0),
-                    side: TradeSide::Sell,
-                    position: seat.position,
-                    ts,
-                });
-            }
-            out
+            vec![PressureEvent::Broker {
+                symbol,
+                bid_broker_ids: b
+                    .bid_brokers
+                    .iter()
+                    .filter_map(|s| s.broker_ids.first().copied())
+                    .collect(),
+                ask_broker_ids: b
+                    .ask_brokers
+                    .iter()
+                    .filter_map(|s| s.broker_ids.first().copied())
+                    .collect(),
+                ts,
+            }]
         }
         // Candlesticks (and any future longport variants) are not
         // pressure-relevant — they're handled by the tick-bound

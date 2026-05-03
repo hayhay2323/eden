@@ -151,7 +151,7 @@ impl SectorKinematicsTracker {
                     graph
                         .sector_kinematics
                         .get(sector_id, &kind_str)
-                        .and_then(|s| s.classification)
+                        .map(|s| s.classification)
                 });
             // Per-entry last_tick: when this (sector, kind) was last
             // observed by `observe()`, NOT the apply-call tick. A
@@ -169,7 +169,7 @@ impl SectorKinematicsTracker {
                     level_now,
                     velocity,
                     acceleration,
-                    classification,
+                    classification: classification.unwrap_or_else(|| "unclassified".to_string()),
                     last_tick,
                 },
             );
@@ -322,7 +322,13 @@ mod tests {
         let mut all = Vec::new();
         for (i, v) in [0.1, 0.3, 0.5, 0.6, 0.55].iter().enumerate() {
             let reg = mk_registry_at_mean("tech", kind, *v);
-            all.extend(update_and_detect("test", &reg, &mut tracker, Utc::now(), i as u64));
+            all.extend(update_and_detect(
+                "test",
+                &reg,
+                &mut tracker,
+                Utc::now(),
+                i as u64,
+            ));
         }
         let top = all.iter().find(|e| {
             e.sector_id == "tech" && matches!(e.kind, SectorTurningPointKind::TopForming)
@@ -341,7 +347,13 @@ mod tests {
         let mut all = Vec::new();
         for (i, v) in [0.6, 0.4, 0.2, 0.1, 0.15].iter().enumerate() {
             let reg = mk_registry_at_mean("finance", kind, *v);
-            all.extend(update_and_detect("test", &reg, &mut tracker, Utc::now(), i as u64));
+            all.extend(update_and_detect(
+                "test",
+                &reg,
+                &mut tracker,
+                Utc::now(),
+                i as u64,
+            ));
         }
         let bot = all.iter().find(|e| {
             e.sector_id == "finance" && matches!(e.kind, SectorTurningPointKind::BottomForming)
@@ -360,7 +372,13 @@ mod tests {
         let mut all_evs = Vec::new();
         for (i, v) in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7].iter().enumerate() {
             let reg = mk_registry_at_mean("energy", kind, *v);
-            all_evs.extend(update_and_detect("test", &reg, &mut tracker, Utc::now(), i as u64));
+            all_evs.extend(update_and_detect(
+                "test",
+                &reg,
+                &mut tracker,
+                Utc::now(),
+                i as u64,
+            ));
         }
         for ev in &all_evs {
             assert!(
@@ -393,9 +411,16 @@ mod tests {
             "last_tick must come from the last observe(), not the apply call"
         );
         // 3 samples, [0.1, 0.2, 0.3] → level_now=0.3, velocity=(0.3-0.1)/2=0.1
-        assert!((snap.level_now - 0.3).abs() < 1e-9, "got {}", snap.level_now);
+        assert!(
+            (snap.level_now - 0.3).abs() < 1e-9,
+            "got {}",
+            snap.level_now
+        );
         assert!((snap.velocity - 0.1).abs() < 1e-9, "got {}", snap.velocity);
-        assert!(snap.classification.is_none(), "no events → no classification");
+        assert!(
+            snap.classification.is_none(),
+            "no events → no classification"
+        );
     }
 
     #[test]

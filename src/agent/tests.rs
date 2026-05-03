@@ -351,6 +351,11 @@ fn tool_catalog_includes_core_queries() {
             && item.route == "/api/ontology/:market/world"
     }));
     assert!(catalog.iter().any(|item| {
+        item.name == "world_reflection"
+            && item.category == AgentToolCategory::ObjectQuery
+            && item.route == "/api/agent/:market/world/reflection"
+    }));
+    assert!(catalog.iter().any(|item| {
         item.name == "symbol_state"
             && item.deprecated
             && item.replacement.as_deref() == Some("symbol_contract")

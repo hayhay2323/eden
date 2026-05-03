@@ -212,6 +212,7 @@ mod tests {
         let world_state = WorldStateSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             entities: vec![],
+            world_intents: vec![],
             perceptual_states: vec![],
             vortices: vec![Vortex {
                 vortex_id: "vortex:700.HK".into(),

@@ -252,7 +252,9 @@ mod tests {
         assert_eq!(expired, 0, "neither record should expire on this pass");
         assert_eq!(records[0].attempts_remaining, 4);
         assert_eq!(records[1].attempts_remaining, 1);
-        assert!(records.iter().all(|r| r.status == EvaluationStatus::Pending));
+        assert!(records
+            .iter()
+            .all(|r| r.status == EvaluationStatus::Pending));
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::agent::{
     self, AgentAlertScoreboard, AgentBriefing, AgentBrokerState, AgentDepthState, AgentEodReview,
     AgentInvalidationState, AgentRecommendations, AgentSectorFlow, AgentSession, AgentSnapshot,
     AgentStructureState, AgentSymbolState, AgentThread, AgentToolOutput, AgentToolRequest,
-    AgentToolSpec, AgentTurn, AgentWakeState, AgentWatchlist,
+    AgentToolSpec, AgentToolSurfaceRefs, AgentTurn, AgentWakeState, AgentWatchlist,
 };
 use crate::ontology::world::{BackwardInvestigation, WorldStateSnapshot};
 use crate::ontology::{IntentDirection, IntentKind};
@@ -188,8 +188,39 @@ pub(super) async fn get_agent_query(
     let _ = parse_case_market(&market)?;
     let snapshot = load_agent_snapshot_for_market(&market).await?;
     let session = load_agent_session_for_market(&market).await.ok();
-    let result =
-        agent::execute_tool(&snapshot, session.as_ref(), &query).map_err(ApiError::bad_request)?;
+    let recommendations = match query.tool.as_str() {
+        "investigations"
+        | "judgments"
+        | "watchlist"
+        | "recommendations"
+        | "knowledge_links"
+        | "graph_knowledge_links" => load_agent_recommendations_for_market(&market).await.ok(),
+        _ => None,
+    };
+    let watchlist = match query.tool.as_str() {
+        "watchlist" => load_agent_watchlist_for_market(&market).await.ok(),
+        _ => None,
+    };
+    let scoreboard = match query.tool.as_str() {
+        "alert_scoreboard" => load_agent_scoreboard_for_market(&market).await.ok(),
+        _ => None,
+    };
+    let eod_review = match query.tool.as_str() {
+        "eod_review" => load_agent_eod_review_for_market(&market).await.ok(),
+        _ => None,
+    };
+    let result = agent::execute_tool_with_surfaces(
+        &snapshot,
+        session.as_ref(),
+        &query,
+        AgentToolSurfaceRefs {
+            recommendations: recommendations.as_ref(),
+            watchlist: watchlist.as_ref(),
+            scoreboard: scoreboard.as_ref(),
+            eod_review: eod_review.as_ref(),
+        },
+    )
+    .map_err(ApiError::bad_request)?;
     Ok(Json(result))
 }
 
@@ -218,16 +249,8 @@ pub(super) async fn post_agent_analyze(
         )
         .await
     };
-    let recommendations = agent::build_recommendations(&snapshot, Some(&session));
-    let watchlist = agent::build_watchlist(&snapshot, Some(&session), Some(&recommendations), 8);
-    let narration = crate::agent::llm::build_narration(
-        &snapshot,
-        &briefing,
-        &session,
-        Some(&watchlist),
-        Some(&recommendations),
-        Some(&analysis),
-    );
+    let operational = load_or_build_operational_snapshot(market).await?;
+    let narration = crate::ontology::derive_agent_narration(&operational, Some(&analysis));
 
     Ok(Json(AgentAnalyzeResponse {
         analysis,

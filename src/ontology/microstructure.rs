@@ -242,6 +242,8 @@ pub struct ArchivedBrokerEntry {
 /// Stored separately from TickRecord to keep the hot path (TickHistory ring buffer) lean.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TickArchive {
+    #[serde(default)]
+    pub market: String,
     pub tick_number: u64,
     #[serde(with = "rfc3339")]
     pub timestamp: OffsetDateTime,
@@ -264,6 +266,17 @@ impl TickArchive {
     /// Convert a RawSnapshot into a full-fidelity archive.
     /// Pure function — no I/O, fully testable.
     pub fn from_raw(tick_number: u64, raw: &RawSnapshot) -> Self {
+        Self::from_raw_for_market("unknown", tick_number, raw)
+    }
+
+    /// Convert a RawSnapshot into a full-fidelity market-scoped archive.
+    /// Production writers must use this so HK and US tick numbers cannot
+    /// collide in persistence/replay storage.
+    pub fn from_raw_for_market(
+        market: impl Into<String>,
+        tick_number: u64,
+        raw: &RawSnapshot,
+    ) -> Self {
         let timestamp = raw.timestamp;
 
         let calc_indexes = archive_calc_indexes(raw);
@@ -279,6 +292,7 @@ impl TickArchive {
         let broker_queues = archive_broker_queues(raw);
 
         TickArchive {
+            market: market.into(),
             tick_number,
             timestamp,
             calc_indexes,
@@ -367,10 +381,6 @@ fn archive_trades(raw: &RawSnapshot) -> Vec<ArchivedTrade> {
             })
         })
         .collect()
-}
-
-pub fn archive_trades_pub(raw: &RawSnapshot) -> Vec<ArchivedTrade> {
-    archive_trades(raw)
 }
 
 fn archive_capital_flows(raw: &RawSnapshot) -> Vec<ArchivedCapitalFlowSeries> {
@@ -514,10 +524,6 @@ fn archive_market_temperature(raw: &RawSnapshot) -> Option<ArchivedMarketTempera
         })
 }
 
-pub fn archive_quotes_pub(raw: &RawSnapshot) -> Vec<ArchivedQuote> {
-    archive_quotes(raw)
-}
-
 fn archive_broker_queues(raw: &RawSnapshot) -> Vec<ArchivedBrokerEntry> {
     let mut entries = Vec::new();
     for (symbol, sec_brokers) in &raw.brokers {
@@ -543,10 +549,6 @@ fn archive_broker_queues(raw: &RawSnapshot) -> Vec<ArchivedBrokerEntry> {
         }
     }
     entries
-}
-
-pub fn archive_broker_queues_pub(raw: &RawSnapshot) -> Vec<ArchivedBrokerEntry> {
-    archive_broker_queues(raw)
 }
 
 // ── Diff capability ──
@@ -700,6 +702,17 @@ mod tests {
         assert!(archive.capital_flows.is_empty());
         assert!(archive.capital_distributions.is_empty());
         assert!(archive.quotes.is_empty());
+        assert_eq!(archive.market, "unknown");
+    }
+
+    #[test]
+    fn market_scoped_raw_archive_preserves_market() {
+        let raw = RawSnapshot::empty();
+        let archive = TickArchive::from_raw_for_market("us", 7, &raw);
+        let json = serde_json::to_string(&archive).unwrap();
+        let restored: TickArchive = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.market, "us");
+        assert_eq!(restored.tick_number, 7);
     }
 
     #[test]

@@ -129,11 +129,11 @@ pub struct BpInputEdge {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum BpEdgeKind {
     StockToStock,
     PeerSimilarity,
     CrossMarket,
+    EmergentCausality,
     Unknown,
 }
 
@@ -143,6 +143,7 @@ impl BpEdgeKind {
             "StockToStock" => Self::StockToStock,
             "PeerSimilarity" => Self::PeerSimilarity,
             "CrossMarket" => Self::CrossMarket,
+            "EmergentCausality" => Self::EmergentCausality,
             _ => Self::Unknown,
         }
     }
@@ -320,8 +321,7 @@ pub fn observe_from_subkg(kg: &crate::pipeline::symbol_sub_kg::SymbolSubKG) -> N
     // accuracy + KL surprise magnitude + option ATM IV (each [0,1]) —
     // additive boost toward saturation, NOT a gate. Pure Pressure+Intent
     // alone still anchors the prior; new NodeKind values just sharpen it.
-    let evidence_boost =
-        (wl_confidence + sample_count + forecast_acc + kl_mag + iv_evidence) / 5.0;
+    let evidence_boost = (wl_confidence + sample_count + forecast_acc + kl_mag + iv_evidence) / 5.0;
 
     // Belief entropy dampens (high entropy = Eden uncertain about its
     // own belief = pull toward uniform). Halving max effect keeps
@@ -377,6 +377,8 @@ pub fn prior_from_pressure_channels(
     momentum: Option<f64>,
     volume: Option<f64>,
     structure: Option<f64>,
+    option: Option<f64>,
+    memory: Option<f64>,
 ) -> NodePrior {
     let ob = order_book.unwrap_or(0.0);
     let cf = capital_flow.unwrap_or(0.0);
@@ -384,20 +386,17 @@ pub fn prior_from_pressure_channels(
     let mo = momentum.unwrap_or(0.0);
     let vol = volume.unwrap_or(0.0);
     let st = structure.unwrap_or(0.0);
+    let opt = option.unwrap_or(0.0);
+    let mem = memory.unwrap_or(0.0);
 
     // Direction signal: dimensions agree → reinforce; disagree → cancel.
-    // Coefficients echo observe_from_subkg's pcf + 0.5*pm weighting; the
-    // remaining channels are added as supportive evidence with smaller
-    // weights so the dominant tick-bound prior (CapitalFlow/Momentum-led)
-    // continues to drive the magnitude when those are wired.
-    //
-    // 2026-04-30: vol channel removed from direction_raw — it computes
-    // (volume / ema_volume) - 1, which is a SIZE anomaly, NOT a
-    // directional signal. Including it as 0.2*vol biased priors toward
-    // bear whenever a small odd-lot print happened to be the most
-    // recent trade. cf already encodes signed volume direction.
-    let _ = vol; // vol is a size anomaly, not directional; retained in signature for back-compat
-    let direction_raw = cf + 0.5 * mo + 0.3 * ob + 0.3 * inst + 0.2 * st;
+    // Coefficients reflect the hierarchy of evidence:
+    // - cf/mo: Core trade-driven reality (1.0/0.5)
+    // - mem: Historical pattern memory (0.6) - Highly trusted if pattern matches.
+    // - opt: Institutional intent/risk pricing (0.4)
+    // - inst/ob/st: Structural/intent indicators (0.3/0.2)
+    let _ = vol; // vol is a size anomaly, not directional
+    let direction_raw = cf + 0.5 * mo + 0.6 * mem + 0.4 * opt + 0.3 * ob + 0.3 * inst + 0.2 * st;
     let base_magnitude = (direction_raw.abs() / 2.0).min(1.0);
     if base_magnitude < PRIOR_MAGNITUDE_FLOOR {
         return NodePrior::default();
@@ -619,20 +618,88 @@ pub fn build_inputs(
     registry: &SubKgRegistry,
     master_edges: &[BpInputEdge],
     lead_lag_events: &[LeadLagEvent],
+    edge_ledger: Option<&crate::graph::edge_learning::EdgeLearningLedger>,
 ) -> (HashMap<String, NodePrior>, Vec<GraphEdge>) {
     let mut priors: HashMap<String, NodePrior> = HashMap::new();
     for (sym, kg) in &registry.graphs {
         priors.insert(sym.clone(), observe_from_subkg(kg));
     }
-    let edges: Vec<GraphEdge> = master_edges
+
+    let mut edges: Vec<GraphEdge> = master_edges
         .iter()
-        .map(|edge| GraphEdge {
-            from: edge.from.clone(),
-            to: edge.to.clone(),
-            weight: directional_message_weight(&edge.from, &edge.to, edge.weight, lead_lag_events),
-            kind: BpEdgeKind::from_edge_type(&edge.edge_type),
+        .map(|edge| {
+            let multiplier = edge_ledger.and_then(|ledger| {
+                // Try to resolve the edge to a key for the ledger
+                let kind = BpEdgeKind::from_edge_type(&edge.edge_type);
+                let key = match kind {
+                    BpEdgeKind::StockToStock => {
+                        let mut symbols = [
+                            crate::ontology::objects::Symbol(edge.from.clone()),
+                            crate::ontology::objects::Symbol(edge.to.clone()),
+                        ];
+                        symbols.sort_by(|a, b| a.0.cmp(&b.0));
+                        Some(crate::graph::edge_learning::EdgeKey::StockToStock {
+                            a: symbols[0].clone(),
+                            b: symbols[1].clone(),
+                        })
+                    }
+                    _ => None, // Only StockToStock supported for now in EdgeKey mapping
+                };
+                key.map(|k| ledger.weight_multiplier(&k).to_f64().unwrap_or(1.0))
+            });
+
+            GraphEdge {
+                from: edge.from.clone(),
+                to: edge.to.clone(),
+                weight: directional_message_weight(
+                    &edge.from,
+                    &edge.to,
+                    edge.weight,
+                    lead_lag_events,
+                    multiplier,
+                ),
+                kind: BpEdgeKind::from_edge_type(&edge.edge_type),
+            }
         })
         .collect();
+
+    // V7.3 Fluid Topology: Autonomously grow edges for high-confidence
+    // emergent correlations that do NOT exist in the static master graph.
+    // If two seemingly unrelated symbols begin to resonate, the pressure
+    // field adapts its own topology.
+    let mut existing_pairs = std::collections::HashSet::new();
+    for edge in master_edges {
+        existing_pairs.insert((edge.from.clone(), edge.to.clone()));
+        existing_pairs.insert((edge.to.clone(), edge.from.clone()));
+    }
+
+    for ev in lead_lag_events {
+        // High confidence threshold for topology mutation (1σ+ equivalent)
+        if ev.correlation_at_lag.abs() > 0.6 && ev.n_samples >= 15 {
+            let pair = (ev.from_symbol.clone(), ev.to_symbol.clone());
+            if !existing_pairs.contains(&pair) {
+                // Grow a new causal edge. Base weight starts at 0.15 
+                // so it doesn't immediately drown out fundamental topology,
+                // but directional_message_weight will scale it further.
+                let new_edge = GraphEdge {
+                    from: ev.from_symbol.clone(),
+                    to: ev.to_symbol.clone(),
+                    weight: directional_message_weight(
+                        &ev.from_symbol,
+                        &ev.to_symbol,
+                        0.15,
+                        lead_lag_events,
+                        None, // New edges start with neutral vitality
+                    ),
+                    kind: BpEdgeKind::EmergentCausality,
+                };
+                edges.push(new_edge);
+                existing_pairs.insert(pair.clone());
+                existing_pairs.insert((pair.1, pair.0)); // Prevent duplicate reverse edges
+            }
+        }
+    }
+
     (priors, edges)
 }
 
@@ -660,6 +727,7 @@ pub fn build_pruning_shadow_summary(
             BpEdgeKind::PeerSimilarity => peer_similarity_edges += 1,
             BpEdgeKind::CrossMarket => cross_market_edges += 1,
             BpEdgeKind::Unknown => unknown_edges += 1,
+            BpEdgeKind::EmergentCausality => (), // Keep separate or aggregate into a counter if needed
         }
         let abs_weight = edge.weight.abs();
         weight_sum += abs_weight;
@@ -698,11 +766,13 @@ pub fn build_pruning_shadow_summary(
 
 /// Directional lead-lag evidence modifies the message weight in the
 /// direction of observed lead and dampens the reverse direction.
+/// Also applies an optional vitality multiplier from EdgeLearning.
 pub fn directional_message_weight(
     from: &str,
     to: &str,
     base_weight: f64,
     lead_lag_events: &[LeadLagEvent],
+    vitality_multiplier: Option<f64>,
 ) -> f64 {
     let mut weight = base_weight;
     for event in lead_lag_events {
@@ -722,6 +792,11 @@ pub fn directional_message_weight(
             weight *= multiplier;
         }
     }
+
+    if let Some(vm) = vitality_multiplier {
+        weight *= vm;
+    }
+
     weight.clamp(MIN_MESSAGE_WEIGHT, MAX_MESSAGE_WEIGHT)
 }
 
@@ -1193,7 +1268,7 @@ mod tests {
             edge_type: "PeerSimilarity".to_string(),
         }];
 
-        let (_, edges) = build_inputs(&registry, &input_edges, &[]);
+        let (_, edges) = build_inputs(&registry, &input_edges, &[], None);
 
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].kind, BpEdgeKind::PeerSimilarity);
@@ -1452,28 +1527,39 @@ mod tests {
             Some(0.0),  // mo
             Some(-1.0), // vol — should NOT drive direction
             Some(0.0),  // st
+            None,       // opt
+            None,       // mem
         );
         // With vol no longer in direction_raw and all other channels at zero,
         // base_magnitude will be 0 and prior should be unobserved.
-        assert!(!prior.observed, "lone vol-only signal must not produce observed prior");
+        assert!(
+            !prior.observed,
+            "lone vol-only signal must not produce observed prior"
+        );
     }
 
     #[test]
     fn cf_drives_direction() {
         // cf = +1 should produce bullish prior.
         let prior = prior_from_pressure_channels(
-            Some(0.0),  // ob
-            Some(1.0),  // cf — strong positive
-            Some(0.0),  // institutional
-            Some(0.0),  // mo
-            Some(0.0),  // vol
-            Some(0.0),  // st
+            Some(0.0), // ob
+            Some(1.0), // cf — strong positive
+            Some(0.0), // institutional
+            Some(0.0), // mo
+            Some(0.0), // vol
+            Some(0.0), // st
+            None,      // opt
         );
         assert!(prior.observed, "strong cf should produce observed prior");
         // belief[STATE_BULL] should be highest
         let p_bull = prior.belief[STATE_BULL];
         let p_bear = prior.belief[STATE_BEAR];
-        assert!(p_bull > p_bear, "cf=+1 must produce bullish belief; got bull={} bear={}", p_bull, p_bear);
+        assert!(
+            p_bull > p_bear,
+            "cf=+1 must produce bullish belief; got bull={} bear={}",
+            p_bull,
+            p_bear
+        );
     }
 
     #[test]
@@ -1489,8 +1575,8 @@ mod tests {
             n_samples: 12,
             direction: "from_leads".to_string(),
         };
-        let ab = directional_message_weight("A.US", "B.US", 0.5, &[event.clone()]);
-        let ba = directional_message_weight("B.US", "A.US", 0.5, &[event]);
+        let ab = directional_message_weight("A.US", "B.US", 0.5, &[event.clone()], None);
+        let ba = directional_message_weight("B.US", "A.US", 0.5, &[event], None);
 
         assert!(ab > 0.5, "leader-to-lagger direction should strengthen");
         assert!(ba < 0.5, "lagger-to-leader direction should dampen");

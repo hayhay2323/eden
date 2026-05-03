@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use time::serde::rfc3339;
 use time::OffsetDateTime;
 
-use super::{reasoning::ReasoningScope, ProvenanceMetadata};
+use super::{
+    reasoning::{IntentHypothesis, ReasoningScope},
+    ProvenanceMetadata,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorldLayer {
@@ -290,6 +293,8 @@ pub struct WorldStateSnapshot {
     pub timestamp: OffsetDateTime,
     pub entities: Vec<EntityState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub world_intents: Vec<IntentHypothesis>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub perceptual_states: Vec<PerceptualState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vortices: Vec<Vortex>,
@@ -482,6 +487,7 @@ mod tests {
                 propagated_support: dec!(0.18),
                 drivers: vec!["local flow stayed positive".into()],
             }],
+            world_intents: vec![],
             perceptual_states: vec![],
             vortices: vec![],
         };

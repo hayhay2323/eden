@@ -15,6 +15,380 @@ fn combined_knowledge_links(
         .collect()
 }
 
+fn effective_recommendations_for_contracts(
+    snapshot: &AgentSnapshot,
+    recommendations: &AgentRecommendations,
+    cases: &[CaseSummary],
+) -> AgentRecommendations {
+    let mut effective = recommendations.clone();
+    effective.tick = snapshot.tick;
+    effective.timestamp = snapshot.timestamp.clone();
+    effective.market = snapshot.market;
+    effective.regime_bias = snapshot.market_regime.bias.clone();
+
+    if effective.items.is_empty() && !cases.is_empty() {
+        effective.items = cases
+            .iter()
+            .map(|case| agent_recommendation_from_case(snapshot, case))
+            .collect();
+        effective
+            .decisions
+            .retain(|decision| !matches!(decision, AgentDecision::Symbol(_)));
+        effective
+            .decisions
+            .extend(effective.items.iter().cloned().map(AgentDecision::Symbol));
+    } else if effective.decisions.is_empty() && !effective.items.is_empty() {
+        effective.decisions = effective
+            .items
+            .iter()
+            .cloned()
+            .map(AgentDecision::Symbol)
+            .collect();
+    }
+
+    effective.total = effective.decisions.len();
+    effective
+}
+
+fn agent_recommendation_from_case(
+    snapshot: &AgentSnapshot,
+    case: &CaseSummary,
+) -> AgentRecommendation {
+    let action = case.recommended_action.clone();
+    let best_action = case_best_action(&action);
+    let horizon_ticks = case_horizon_ticks(&action);
+    let expected_net_alpha = case_expected_net_alpha(case, &best_action);
+    let mut action_expectancies = AgentActionExpectancies {
+        wait_expectancy: Some(Decimal::ZERO),
+        ..AgentActionExpectancies::default()
+    };
+    match best_action.as_str() {
+        "follow" => action_expectancies.follow_expectancy = expected_net_alpha,
+        "fade" => action_expectancies.fade_expectancy = expected_net_alpha,
+        _ => {}
+    }
+
+    let policy = case
+        .execution_policy
+        .unwrap_or_else(|| case_execution_policy(&action));
+    let governance = case
+        .governance
+        .clone()
+        .unwrap_or_else(|| ActionGovernanceContract::for_recommendation(policy));
+    let severity = case_severity(case, policy);
+    let governance_reason_code = case
+        .governance_reason_code
+        .unwrap_or_else(|| default_case_governance_reason_code(policy, &best_action, &severity));
+    let governance_reason = case.governance_reason.clone().unwrap_or_else(|| {
+        format!(
+            "policy={} governs operational case {}",
+            policy, case.setup_id
+        )
+    });
+    let decisive_factors = case_decisive_factors(case);
+    let invalidation_rule = case.invalidation_rules.first().cloned();
+
+    AgentRecommendation {
+        recommendation_id: format!(
+            "rec:{}:{}:{}",
+            snapshot.tick,
+            normalized_symbol_id(&case.symbol),
+            recommendation_id_fragment(&case.setup_id)
+        ),
+        tick: snapshot.tick,
+        symbol: case.symbol.clone(),
+        sector: case.sector.clone(),
+        title: Some(case.title.clone()),
+        action,
+        action_label: None,
+        bias: case_bias(case, &best_action),
+        severity,
+        confidence: case.confidence,
+        score: case_score(case),
+        horizon_ticks,
+        regime_bias: case.market_regime_bias.clone(),
+        status: case_status(case),
+        why: if case.why_now.trim().is_empty() {
+            case.title.clone()
+        } else {
+            case.why_now.clone()
+        },
+        why_components: case_why_components(case),
+        primary_lens: case.primary_lens.clone(),
+        supporting_lenses: case_supporting_lenses(case),
+        review_lens: matches!(policy, ActionExecutionPolicy::ReviewRequired)
+            .then(|| case.primary_lens.clone())
+            .flatten(),
+        watch_next: case_watch_next(case),
+        do_not: case_do_not(case),
+        fragility: case_fragility(case),
+        transition: case_transition(case),
+        thesis_family: case.family_label.clone(),
+        matched_success_pattern_signature: None,
+        state_transition: case.state_reason_codes.first().cloned(),
+        best_action,
+        action_expectancies: action_expectancies.clone(),
+        decision_attribution: AgentDecisionAttribution {
+            historical_expectancies: AgentActionExpectancies {
+                wait_expectancy: Some(Decimal::ZERO),
+                ..AgentActionExpectancies::default()
+            },
+            live_expectancy_shift: expected_net_alpha.unwrap_or(Decimal::ZERO),
+            decisive_factors,
+        },
+        expected_net_alpha,
+        alpha_horizon: format!("intraday:{}t", horizon_ticks),
+        price_at_decision: None,
+        resolution: None,
+        invalidation_rule,
+        invalidation_components: case_invalidation_components(case),
+        execution_policy: governance.execution_policy,
+        governance,
+        governance_reason_code,
+        governance_reason,
+    }
+}
+
+fn recommendation_id_fragment(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    out.trim_matches('_').to_string()
+}
+
+fn case_best_action(action: &str) -> String {
+    match action {
+        "enter" | "add" => "follow",
+        "trim" | "hedge" | "exit" | "reduce" => "fade",
+        _ => "wait",
+    }
+    .into()
+}
+
+fn case_horizon_ticks(action: &str) -> u64 {
+    match action {
+        "enter" | "add" => 15,
+        "trim" | "hedge" | "exit" | "reduce" => 12,
+        "review" => 10,
+        "watch" => 8,
+        _ => 6,
+    }
+}
+
+fn case_execution_policy(action: &str) -> ActionExecutionPolicy {
+    match action {
+        "enter" | "add" => ActionExecutionPolicy::ReviewRequired,
+        _ => ActionExecutionPolicy::ManualOnly,
+    }
+}
+
+fn case_expected_net_alpha(case: &CaseSummary, best_action: &str) -> Option<Decimal> {
+    if best_action == "wait" {
+        return None;
+    }
+    let mut alpha = case.heuristic_edge.abs();
+    if alpha <= Decimal::ZERO {
+        alpha = case.confidence_gap.abs();
+    }
+    if alpha <= Decimal::ZERO {
+        alpha = case.actionability_score.unwrap_or(Decimal::ZERO).abs();
+    }
+    (alpha > Decimal::ZERO).then_some(alpha.round_dp(4))
+}
+
+fn case_severity(case: &CaseSummary, policy: ActionExecutionPolicy) -> String {
+    if case.priority_rank.is_some_and(|rank| rank <= 2) || case.confidence >= Decimal::new(8, 1) {
+        "critical"
+    } else if matches!(policy, ActionExecutionPolicy::ReviewRequired)
+        || case.confidence >= Decimal::new(65, 2)
+    {
+        "high"
+    } else if case.confidence >= Decimal::new(4, 1) {
+        "medium"
+    } else {
+        "normal"
+    }
+    .into()
+}
+
+fn case_bias(case: &CaseSummary, best_action: &str) -> String {
+    match (best_action, case.heuristic_edge.cmp(&Decimal::ZERO)) {
+        ("follow", std::cmp::Ordering::Less) => "short",
+        ("follow", _) => "long",
+        ("fade", std::cmp::Ordering::Less) => "long",
+        ("fade", _) => "short",
+        _ => "neutral",
+    }
+    .into()
+}
+
+fn case_score(case: &CaseSummary) -> Decimal {
+    let actionability = case.actionability_score.unwrap_or(Decimal::ZERO);
+    (case.confidence + case.heuristic_edge.abs() + actionability).round_dp(4)
+}
+
+fn case_status(case: &CaseSummary) -> Option<String> {
+    case.actionability_state
+        .clone()
+        .or_else(|| case.freshness_state.clone())
+        .or_else(|| case.local_state.clone())
+        .or_else(|| Some(case.workflow_state.clone()))
+}
+
+fn push_unique_line(items: &mut Vec<String>, value: impl Into<String>) {
+    let value = value.into();
+    if value.trim().is_empty() || items.iter().any(|item| item == &value) {
+        return;
+    }
+    items.push(value);
+}
+
+fn case_decisive_factors(case: &CaseSummary) -> Vec<String> {
+    let mut factors = Vec::new();
+    for evidence in case.key_evidence.iter().take(3) {
+        push_unique_line(&mut factors, evidence.description.clone());
+    }
+    for reason in case.state_reason_codes.iter().take(3) {
+        push_unique_line(&mut factors, reason.clone());
+    }
+    if let Some(driver) = case.primary_driver.as_ref() {
+        push_unique_line(&mut factors, format!("primary_driver={driver}"));
+    }
+    if let Some(state) = case.timing_state.as_ref() {
+        push_unique_line(&mut factors, format!("timing_state={state}"));
+    }
+    factors.truncate(5);
+    factors
+}
+
+fn case_why_components(case: &CaseSummary) -> Vec<AgentLensComponent> {
+    case.key_evidence
+        .iter()
+        .take(4)
+        .map(|evidence| AgentLensComponent {
+            lens_name: case
+                .primary_lens
+                .clone()
+                .unwrap_or_else(|| "case_evidence".into()),
+            confidence: evidence.weight.abs().min(Decimal::ONE),
+            content: evidence.description.clone(),
+            tags: vec![format!("direction={}", evidence.direction.round_dp(2))],
+        })
+        .collect()
+}
+
+fn case_supporting_lenses(case: &CaseSummary) -> Vec<String> {
+    let mut lenses = Vec::new();
+    if let Some(driver) = case.primary_driver.as_ref() {
+        push_unique_line(&mut lenses, driver.clone());
+    }
+    if let Some(family) = case.family_label.as_ref() {
+        push_unique_line(&mut lenses, family.clone());
+    }
+    if let Some(leader) = case.current_leader.as_ref() {
+        push_unique_line(&mut lenses, format!("leader={leader}"));
+    }
+    lenses.truncate(3);
+    lenses
+}
+
+fn case_watch_next(case: &CaseSummary) -> Vec<String> {
+    let mut items = Vec::new();
+    if let Some(summary) = case.competition_summary.as_ref() {
+        push_unique_line(&mut items, summary.clone());
+    }
+    if let Some(summary) = case.absence_summary.as_ref() {
+        push_unique_line(&mut items, summary.clone());
+    }
+    for reason in case.state_reason_codes.iter().take(3) {
+        push_unique_line(&mut items, reason.clone());
+    }
+    items.truncate(4);
+    items
+}
+
+fn case_do_not(case: &CaseSummary) -> Vec<String> {
+    let mut items = case
+        .invalidation_rules
+        .iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(reason) = case.governance_reason.as_ref() {
+        push_unique_line(&mut items, reason.clone());
+    }
+    items.truncate(4);
+    items
+}
+
+fn case_fragility(case: &CaseSummary) -> Vec<String> {
+    let mut items = case.review_reason_subreasons.clone();
+    if let Some(reason) = case.review_reason_family.as_ref() {
+        push_unique_line(&mut items, reason.clone());
+    }
+    if let Some(summary) = case.competition_summary.as_ref() {
+        push_unique_line(&mut items, summary.clone());
+    }
+    if let Some(summary) = case.absence_summary.as_ref() {
+        push_unique_line(&mut items, summary.clone());
+    }
+    items.truncate(4);
+    items
+}
+
+fn case_transition(case: &CaseSummary) -> Option<String> {
+    case.hypothesis_status
+        .as_ref()
+        .map(|status| format!("hypothesis_status={status}"))
+        .or_else(|| {
+            case.local_state
+                .as_ref()
+                .map(|state| format!("local_state={state}"))
+        })
+}
+
+fn case_invalidation_components(case: &CaseSummary) -> Vec<AgentLensComponent> {
+    case.invalidation_rules
+        .iter()
+        .take(3)
+        .map(|rule| AgentLensComponent {
+            lens_name: "invalidation".into(),
+            confidence: case.confidence,
+            content: rule.clone(),
+            tags: vec!["operational_case".into()],
+        })
+        .collect()
+}
+
+fn default_case_governance_reason_code(
+    policy: ActionExecutionPolicy,
+    best_action: &str,
+    severity: &str,
+) -> ActionGovernanceReasonCode {
+    match policy {
+        ActionExecutionPolicy::ManualOnly => {
+            if matches!(best_action, "wait" | "ignore" | "review" | "observe") {
+                ActionGovernanceReasonCode::AdvisoryAction
+            } else {
+                ActionGovernanceReasonCode::OperatorActionRequired
+            }
+        }
+        ActionExecutionPolicy::ReviewRequired => {
+            if matches!(severity, "high" | "critical") {
+                ActionGovernanceReasonCode::SeverityRequiresReview
+            } else {
+                ActionGovernanceReasonCode::OperatorActionRequired
+            }
+        }
+        ActionExecutionPolicy::AutoEligible => ActionGovernanceReasonCode::AutoExecutionEligible,
+    }
+}
+
 fn graph_node_endpoint(market: LiveMarket, node_id: &str) -> String {
     format!("/api/ontology/{}/graph/node/{node_id}", market_slug(market))
 }
@@ -2564,8 +2938,10 @@ pub fn build_operational_snapshot(
         .iter()
         .map(|item| (item.setup_id.as_str(), item))
         .collect::<HashMap<_, _>>();
+    let effective_recommendations =
+        effective_recommendations_for_contracts(snapshot, recommendations, &case_summaries);
     let recommendation_links =
-        link_recommendations_to_cases(&case_summaries, &recommendations.items);
+        link_recommendations_to_cases(&case_summaries, &effective_recommendations.items);
     let cases = case_summaries
         .iter()
         .map(|item| {
@@ -2701,7 +3077,7 @@ pub fn build_operational_snapshot(
         })
         .collect::<Vec<_>>();
 
-    let recommendation_contracts = recommendations
+    let recommendation_contracts = effective_recommendations
         .items
         .iter()
         .cloned()
@@ -2832,7 +3208,7 @@ pub fn build_operational_snapshot(
             live_snapshot.world_summary.as_ref(),
         )),
         macro_event_candidates: snapshot.macro_event_candidates.clone(),
-        knowledge_links: combined_knowledge_links(snapshot, recommendations),
+        knowledge_links: combined_knowledge_links(snapshot, &effective_recommendations),
         operator_workflows: Vec::new(),
         operator_work_items,
         cohort_signals,
@@ -2855,8 +3231,8 @@ pub fn build_operational_snapshot(
         attention_allocations,
         perceptual_uncertainties,
         cases,
-        market_recommendation: recommendations.market_recommendation.clone(),
-        sector_recommendations: recommendations
+        market_recommendation: effective_recommendations.market_recommendation.clone(),
+        sector_recommendations: effective_recommendations
             .decisions
             .iter()
             .filter_map(|item| {

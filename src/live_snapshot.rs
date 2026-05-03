@@ -3500,9 +3500,11 @@ pub fn read_emergent_clusters(
     path: &std::path::Path,
     cfg: &crate::agent::PerceptionFilterConfig,
 ) -> Vec<crate::agent::EmergentCluster> {
-    let raw: Vec<RawEmergenceRecord> = tail_records(path, PERCEPTION_TAIL_BYTES, EMERGENCE_MAX_RECORDS);
+    let raw: Vec<RawEmergenceRecord> =
+        tail_records(path, PERCEPTION_TAIL_BYTES, EMERGENCE_MAX_RECORDS);
     // Dedup: keep latest record per cluster_key (later in file = newer).
-    let mut latest: std::collections::HashMap<String, RawEmergenceRecord> = std::collections::HashMap::new();
+    let mut latest: std::collections::HashMap<String, RawEmergenceRecord> =
+        std::collections::HashMap::new();
     for rec in raw {
         latest.insert(rec.cluster_key.clone(), rec);
     }
@@ -3522,8 +3524,16 @@ pub fn read_emergent_clusters(
                 sync_pct,
                 strongest_member: rec.strongest_member,
                 strongest_activation: rec.strongest_member_mean_activation,
-                mean_activation_intent: rec.mean_activation_per_kind.get("Intent").copied().unwrap_or(0.0),
-                mean_activation_pressure: rec.mean_activation_per_kind.get("Pressure").copied().unwrap_or(0.0),
+                mean_activation_intent: rec
+                    .mean_activation_per_kind
+                    .get("Intent")
+                    .copied()
+                    .unwrap_or(0.0),
+                mean_activation_pressure: rec
+                    .mean_activation_per_kind
+                    .get("Pressure")
+                    .copied()
+                    .unwrap_or(0.0),
                 members: rec.sync_members,
             })
         })
@@ -3547,9 +3557,11 @@ pub fn read_sector_leaders(
     path: &std::path::Path,
     cfg: &crate::agent::PerceptionFilterConfig,
 ) -> Vec<crate::agent::SymbolContrast> {
-    let raw: Vec<RawContrastRecord> = tail_records(path, PERCEPTION_TAIL_BYTES, CONTRAST_MAX_RECORDS);
+    let raw: Vec<RawContrastRecord> =
+        tail_records(path, PERCEPTION_TAIL_BYTES, CONTRAST_MAX_RECORDS);
     // Dedup: keep record with highest contrast per (symbol, node_kind).
-    let mut best: std::collections::HashMap<(String, String), RawContrastRecord> = std::collections::HashMap::new();
+    let mut best: std::collections::HashMap<(String, String), RawContrastRecord> =
+        std::collections::HashMap::new();
     for rec in raw {
         let key = (rec.symbol.clone(), rec.node_kind.clone());
         match best.get(&key) {
@@ -3597,12 +3609,21 @@ pub fn read_causal_chains(
     path: &std::path::Path,
     cfg: &crate::agent::PerceptionFilterConfig,
 ) -> Vec<crate::agent::LeadLagEdge> {
-    let raw: Vec<RawLeadLagRecord> = tail_records(path, PERCEPTION_TAIL_BYTES, LEAD_LAG_MAX_RECORDS);
+    let raw: Vec<RawLeadLagRecord> =
+        tail_records(path, PERCEPTION_TAIL_BYTES, LEAD_LAG_MAX_RECORDS);
     // Dedup: keep latest record per (from, to, lag) tuple. Order in `raw` is
     // oldest -> newest, so later inserts overwrite.
-    let mut latest: std::collections::HashMap<(String, String, i32), RawLeadLagRecord> = std::collections::HashMap::new();
+    let mut latest: std::collections::HashMap<(String, String, i32), RawLeadLagRecord> =
+        std::collections::HashMap::new();
     for rec in raw {
-        latest.insert((rec.from_symbol.clone(), rec.to_symbol.clone(), rec.dominant_lag), rec);
+        latest.insert(
+            (
+                rec.from_symbol.clone(),
+                rec.to_symbol.clone(),
+                rec.dominant_lag,
+            ),
+            rec,
+        );
     }
     let mut filtered: Vec<crate::agent::LeadLagEdge> = latest
         .into_values()
@@ -3646,9 +3667,11 @@ pub fn read_anomaly_alerts(
     path: &std::path::Path,
     cfg: &crate::agent::PerceptionFilterConfig,
 ) -> Vec<crate::agent::SurpriseAlert> {
-    let raw: Vec<RawSurpriseRecord> = tail_records(path, PERCEPTION_TAIL_BYTES, SURPRISE_MAX_RECORDS);
+    let raw: Vec<RawSurpriseRecord> =
+        tail_records(path, PERCEPTION_TAIL_BYTES, SURPRISE_MAX_RECORDS);
     // Dedup: keep record with highest total_surprise per (symbol, max_node).
-    let mut best: std::collections::HashMap<(String, String), RawSurpriseRecord> = std::collections::HashMap::new();
+    let mut best: std::collections::HashMap<(String, String), RawSurpriseRecord> =
+        std::collections::HashMap::new();
     for rec in raw {
         let key = (rec.symbol.clone(), rec.max_node.clone());
         match best.get(&key) {
@@ -3688,9 +3711,19 @@ pub fn read_anomaly_alerts(
         })
         .collect();
     filtered.sort_by(|a, b| {
-        let a_ratio = if a.floor < 1e-12 { a.total_surprise } else { a.total_surprise / a.floor };
-        let b_ratio = if b.floor < 1e-12 { b.total_surprise } else { b.total_surprise / b.floor };
-        b_ratio.partial_cmp(&a_ratio).unwrap_or(std::cmp::Ordering::Equal)
+        let a_ratio = if a.floor < 1e-12 {
+            a.total_surprise
+        } else {
+            a.total_surprise / a.floor
+        };
+        let b_ratio = if b.floor < 1e-12 {
+            b.total_surprise
+        } else {
+            b.total_surprise / b.floor
+        };
+        b_ratio
+            .partial_cmp(&a_ratio)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     filtered.truncate(cfg.max_anomalies);
     filtered
@@ -3783,9 +3816,7 @@ pub fn read_belief_kinetics(
             continue;
         }
         let belief_signed = rec.payload.p_bull - rec.payload.p_bear;
-        let entry = per_symbol
-            .entry(rec.payload.symbol)
-            .or_default();
+        let entry = per_symbol.entry(rec.payload.symbol).or_default();
         entry.push(belief_signed);
         if entry.len() > 3 {
             entry.remove(0);
@@ -3855,16 +3886,20 @@ pub fn read_perception_streams(
         regime: read_regime_perception(&regime_path),
         belief_kinetics: read_belief_kinetics(&marginals_path, cfg),
         // Reader returns empty if no observations have accumulated yet.
-        // The post-BP runtime hook (observe_and_replay) writes
-        // observations + computes replays in one shot — the perception
-        // builder here just shows whatever has accumulated by now.
-        signature_replays: Vec::new(),
+        // Runtime writes observations after converged BP; the perception
+        // builder is read-only and joins the latest signatures with the
+        // accumulated observation stream.
+        signature_replays: crate::pipeline::signature_replay::read_latest_signature_replays(
+            market, tick, 20,
+        ),
         // P2 skeleton — populated when snapshot builder integrates
         // pre/post-market quote data. Empty until then.
         pre_market_movers: Vec::new(),
         // P3 skeleton — populated when external feeds (earnings calendar,
         // news, macro events) wired. Empty until then.
         catalysts: Vec::new(),
+        sensory_vortices: Vec::new(),
+        thematic_vortices: Vec::new(),
     }
 }
 
@@ -4043,7 +4078,11 @@ mod perception_reader_tests {
         assert_eq!(regime.historical_visits, 188);
         assert_eq!(regime.last_seen_tick, Some(28));
         assert_eq!(regime.forward_outcomes.len(), 2);
-        let h5 = regime.forward_outcomes.iter().find(|f| f.horizon_ticks == 5).unwrap();
+        let h5 = regime
+            .forward_outcomes
+            .iter()
+            .find(|f| f.horizon_ticks == 5)
+            .unwrap();
         assert_eq!(h5.n_samples, 169);
         assert!((h5.mean_stress_delta + 0.003).abs() < 1e-6);
     }
@@ -4080,7 +4119,10 @@ mod perception_reader_tests {
         let cfg = crate::agent::PerceptionFilterConfig::default();
         let out = read_sector_leaders(f.path(), &cfg);
         assert_eq!(out.len(), 1, "must dedup");
-        assert!((out[0].vs_sector_contrast - 10.0).abs() < 1e-9, "must keep highest");
+        assert!(
+            (out[0].vs_sector_contrast - 10.0).abs() < 1e-9,
+            "must keep highest"
+        );
     }
 
     #[test]
@@ -4108,7 +4150,10 @@ mod perception_reader_tests {
         let cfg = crate::agent::PerceptionFilterConfig::default();
         let out = read_anomaly_alerts(f.path(), &cfg);
         assert_eq!(out.len(), 1, "must dedup");
-        assert!((out[0].total_surprise - 5.0).abs() < 1e-9, "must keep highest");
+        assert!(
+            (out[0].total_surprise - 5.0).abs() < 1e-9,
+            "must keep highest"
+        );
     }
 
     #[test]

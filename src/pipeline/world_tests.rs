@@ -439,6 +439,7 @@ fn backward_reasoning_demotes_leading_cause_when_contradiction_pressure_rises() 
     };
     let world_state = WorldStateSnapshot {
         timestamp: OffsetDateTime::UNIX_EPOCH,
+        world_intents: vec![],
         entities: vec![
             EntityState {
                 entity_id: "world:market".into(),

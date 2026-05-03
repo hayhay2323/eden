@@ -239,7 +239,12 @@ impl EdenStore {
         &self,
         archive: &crate::ontology::microstructure::TickArchive,
     ) -> Result<(), StoreError> {
-        let id = format!("tick_archive_{}", archive.tick_number);
+        let market = if archive.market.trim().is_empty() {
+            "unknown"
+        } else {
+            archive.market.as_str()
+        };
+        let id = format!("tick_archive_{}_{}", market, archive.tick_number);
         crate::persistence::store_helpers::upsert_record_checked(
             &self.db,
             "tick_archive",
@@ -320,18 +325,66 @@ impl EdenStore {
         after_tick: Option<u64>,
         limit: usize,
     ) -> Result<Vec<crate::ontology::microstructure::TickArchive>, StoreError> {
+        self.replay_market_tick_archives_after(None, after_tick, limit)
+            .await
+    }
+
+    /// Load a replay batch for one market strictly after the provided tick_number.
+    pub async fn replay_market_tick_archives_after(
+        &self,
+        market: Option<&str>,
+        after_tick: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<crate::ontology::microstructure::TickArchive>, StoreError> {
+        self.replay_market_tick_archives_after_cursor(
+            market,
+            after_tick.map(|tick| ("~", tick)),
+            limit,
+        )
+        .await
+    }
+
+    /// Load a replay batch after a stable `(market, tick_number)` cursor.
+    ///
+    /// When no market filter is supplied, ordering by `(tick_number, market)`
+    /// prevents mixed HK/US archives with the same tick number from being
+    /// skipped between pages. Market-scoped replay also includes legacy
+    /// archives whose market field is missing/empty/unknown so old DBs remain
+    /// replayable after migration 043.
+    pub async fn replay_market_tick_archives_after_cursor(
+        &self,
+        market: Option<&str>,
+        after_cursor: Option<(&str, u64)>,
+        limit: usize,
+    ) -> Result<Vec<crate::ontology::microstructure::TickArchive>, StoreError> {
         if limit == 0 {
             return Ok(Vec::new());
         }
 
-        let mut result = self
-            .db
-            .query(
-                "SELECT * FROM tick_archive WHERE tick_number > $after ORDER BY tick_number ASC LIMIT $limit",
-            )
-            .bind(("after", after_tick.unwrap_or(0)))
-            .bind(("limit", limit))
-            .await?;
+        let has_cursor = after_cursor.is_some();
+        let mut query = match (market.is_some(), has_cursor) {
+            (true, true) => self.db.query(
+                "SELECT * FROM tick_archive WHERE (market = $market OR market = 'unknown' OR market = '' OR market = NONE) AND tick_number > $after_tick ORDER BY tick_number ASC, market ASC LIMIT $limit",
+            ),
+            (true, false) => self.db.query(
+                "SELECT * FROM tick_archive WHERE market = $market OR market = 'unknown' OR market = '' OR market = NONE ORDER BY tick_number ASC, market ASC LIMIT $limit",
+            ),
+            (false, true) => self.db.query(
+                "SELECT * FROM tick_archive WHERE tick_number > $after_tick OR (tick_number = $after_tick AND market > $after_market) ORDER BY tick_number ASC, market ASC LIMIT $limit",
+            ),
+            (false, false) => self
+                .db
+                .query("SELECT * FROM tick_archive ORDER BY tick_number ASC, market ASC LIMIT $limit"),
+        };
+        if let Some(market) = market {
+            query = query.bind(("market", market.to_string()));
+        }
+        if let Some((after_market, after_tick)) = after_cursor {
+            query = query
+                .bind(("after_market", after_market.to_string()))
+                .bind(("after_tick", after_tick));
+        }
+        let mut result = query.bind(("limit", limit)).await?;
         let records: Vec<crate::ontology::microstructure::TickArchive> = result.take(0)?;
         Ok(records)
     }

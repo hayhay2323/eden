@@ -1305,14 +1305,17 @@ mod tests {
         assert_eq!(vortices[1].hour_direction, dec!(0.0)); // MID.US (median)
         assert_eq!(vortices[2].hour_direction, dec!(-0.10)); // WEAK1.US
         assert_eq!(vortices[3].hour_direction, dec!(-0.25)); // WEAK2.US
-        // Critical: at least one vortex now has positive hour_direction
-        // → bridge will map to Long → Eden can fire Long entries even in
-        // red session. Sign distribution is no longer collapsed.
+                                                             // Critical: at least one vortex now has positive hour_direction
+                                                             // → bridge will map to Long → Eden can fire Long entries even in
+                                                             // red session. Sign distribution is no longer collapsed.
         let positives = vortices
             .iter()
             .filter(|v| v.hour_direction > dec!(0))
             .count();
-        assert!(positives >= 1, "expected ≥1 Long candidate after recentering");
+        assert!(
+            positives >= 1,
+            "expected ≥1 Long candidate after recentering"
+        );
     }
 
     #[test]

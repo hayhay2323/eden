@@ -255,6 +255,28 @@ pub fn write_events(market: &str, events: &[LeadLagEvent]) -> std::io::Result<us
     Ok(written)
 }
 
+/// Project per-tick lead-lag events into the unified PerceptionGraph.
+pub fn apply_to_perception_graph(
+    events: &[LeadLagEvent],
+    graph: &mut crate::perception::PerceptionGraph,
+    tick: u64,
+) {
+    for ev in events {
+        graph.lead_lag.upsert(
+            (ev.from_symbol.clone(), ev.to_symbol.clone(), ev.dominant_lag),
+            crate::perception::LeadLagSnapshot {
+                leader: ev.from_symbol.clone(),
+                follower: ev.to_symbol.clone(),
+                lag_ticks: ev.dominant_lag,
+                correlation: ev.correlation_at_lag,
+                n_samples: ev.n_samples,
+                direction: ev.direction.clone(),
+                last_tick: tick,
+            },
+        );
+    }
+}
+
 // ---------------- Tests ----------------
 
 #[cfg(test)]

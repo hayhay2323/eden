@@ -15,10 +15,10 @@ use crate::core::runtime::prepare_runtime_context_or_exit;
 use crate::core::runtime::PreparedRuntimeContext;
 use crate::core::runtime_loop::TickState;
 use crate::live_snapshot::{
-    spawn_write_snapshot, LiveBackwardChain, LiveCausalLeader, LiveCrossMarketAnomaly,
-    LiveCrossMarketSignal, LiveEvent, LiveHypothesisTrack, LiveLineageMetric, LiveMarket,
-    LiveMarketRegime, LivePressure, LivePropagationSense, LiveScorecard, LiveSignal, LiveSnapshot,
-    LiveStressSnapshot, LiveStructuralDelta, LiveTacticalCase,
+    LiveBackwardChain, LiveCausalLeader, LiveCrossMarketAnomaly, LiveCrossMarketSignal, LiveEvent,
+    LiveHypothesisTrack, LiveLineageMetric, LiveMarket, LiveMarketRegime, LivePressure,
+    LivePropagationSense, LiveScorecard, LiveSignal, LiveSnapshot, LiveStressSnapshot,
+    LiveStructuralDelta, LiveTacticalCase,
 };
 use crate::ontology::objects::{SectorId, Stock, Symbol};
 use crate::ontology::reasoning::TacticalSetup;
@@ -487,14 +487,20 @@ pub async fn run() {
     // tokio tasks. See HK runtime equivalent + src/core/ndjson_writer.rs.
     let bp_marginals_writer = crate::core::ndjson_writer::NdjsonWriter::<
         Vec<crate::pipeline::loopy_bp::MarginalRow>,
-    >::spawn("us:bp_marginals", |rows: Vec<
-        crate::pipeline::loopy_bp::MarginalRow,
-    >| crate::pipeline::loopy_bp::write_marginals("us", &rows));
+    >::spawn(
+        "us:bp_marginals",
+        |rows: Vec<crate::pipeline::loopy_bp::MarginalRow>| {
+            crate::pipeline::loopy_bp::write_marginals("us", &rows)
+        },
+    );
     let bp_message_trace_writer = crate::core::ndjson_writer::NdjsonWriter::<
         Vec<crate::pipeline::loopy_bp::BpMessageTraceRow>,
-    >::spawn("us:bp_message_trace", |rows: Vec<
-        crate::pipeline::loopy_bp::BpMessageTraceRow,
-    >| crate::pipeline::loopy_bp::write_message_trace("us", &rows));
+    >::spawn(
+        "us:bp_message_trace",
+        |rows: Vec<crate::pipeline::loopy_bp::BpMessageTraceRow>| {
+            crate::pipeline::loopy_bp::write_message_trace("us", &rows)
+        },
+    );
     let subkg_writer = crate::core::ndjson_writer::NdjsonWriter::<Vec<String>>::spawn(
         "us:subkg",
         |lines: Vec<String>| {
@@ -509,35 +515,51 @@ pub async fn run() {
     );
     let visual_frame_writer = crate::core::ndjson_writer::NdjsonWriter::<
         crate::pipeline::visual_graph_frame::VisualGraphFrame,
-    >::spawn("us:visual_graph_frame", |frame: crate::pipeline::visual_graph_frame::VisualGraphFrame| {
-        crate::pipeline::visual_graph_frame::write_frame("us", &frame)
-    });
+    >::spawn(
+        "us:visual_graph_frame",
+        |frame: crate::pipeline::visual_graph_frame::VisualGraphFrame| {
+            crate::pipeline::visual_graph_frame::write_frame("us", &frame)
+        },
+    );
     let temporal_delta_writer = crate::core::ndjson_writer::NdjsonWriter::<
         crate::pipeline::temporal_graph_delta::TemporalGraphDelta,
-    >::spawn("us:temporal_delta", |delta: crate::pipeline::temporal_graph_delta::TemporalGraphDelta| {
-        crate::pipeline::temporal_graph_delta::write_delta("us", &delta)
-    });
+    >::spawn(
+        "us:temporal_delta",
+        |delta: crate::pipeline::temporal_graph_delta::TemporalGraphDelta| {
+            crate::pipeline::temporal_graph_delta::write_delta("us", &delta)
+        },
+    );
     let cross_sector_writer = crate::core::ndjson_writer::NdjsonWriter::<
         Vec<crate::pipeline::cross_sector_contrast::SectorContrastEvent>,
-    >::spawn("us:cross_sector", |events: Vec<
-        crate::pipeline::cross_sector_contrast::SectorContrastEvent,
-    >| crate::pipeline::cross_sector_contrast::write_events("us", &events));
+    >::spawn(
+        "us:cross_sector",
+        |events: Vec<crate::pipeline::cross_sector_contrast::SectorContrastEvent>| {
+            crate::pipeline::cross_sector_contrast::write_events("us", &events)
+        },
+    );
     let sector_to_symbol_writer = crate::core::ndjson_writer::NdjsonWriter::<
         Vec<crate::pipeline::sector_to_symbol_propagation::MemberLagEvent>,
-    >::spawn("us:sector_to_symbol", |events: Vec<
-        crate::pipeline::sector_to_symbol_propagation::MemberLagEvent,
-    >| crate::pipeline::sector_to_symbol_propagation::write_events("us", &events));
+    >::spawn(
+        "us:sector_to_symbol",
+        |events: Vec<crate::pipeline::sector_to_symbol_propagation::MemberLagEvent>| {
+            crate::pipeline::sector_to_symbol_propagation::write_events("us", &events)
+        },
+    );
     let sector_kinematics_writer = crate::core::ndjson_writer::NdjsonWriter::<
         Vec<crate::pipeline::sector_kinematics::SectorKinematicsEvent>,
-    >::spawn("us:sector_kinematics", |events: Vec<
-        crate::pipeline::sector_kinematics::SectorKinematicsEvent,
-    >| crate::pipeline::sector_kinematics::write_events("us", &events));
+    >::spawn(
+        "us:sector_kinematics",
+        |events: Vec<crate::pipeline::sector_kinematics::SectorKinematicsEvent>| {
+            crate::pipeline::sector_kinematics::write_events("us", &events)
+        },
+    );
 
     // Wire all NDJSON writers into the runtime-level aggregate drop
     // counter so `tick_summary.ndjson_drops` surfaces sustained loss
     // across any artifact stream.
     let ndjson_drops_handle = runtime.counters.ndjson_drops_handle();
-    let bp_marginals_writer = bp_marginals_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let bp_marginals_writer =
+        bp_marginals_writer.with_aggregate_counter(ndjson_drops_handle.clone());
     let bp_message_trace_writer =
         bp_message_trace_writer.with_aggregate_counter(ndjson_drops_handle.clone());
     let subkg_writer = subkg_writer.with_aggregate_counter(ndjson_drops_handle.clone());
@@ -556,9 +578,7 @@ pub async fn run() {
 
     // Production BP substrate: event-driven (sync + shadow deleted 2026-04-29).
     let belief_substrate: std::sync::Arc<dyn crate::pipeline::event_driven_bp::BeliefSubstrate> =
-        std::sync::Arc::new(
-            crate::pipeline::event_driven_bp::EventDrivenSubstrate::default(),
-        );
+        std::sync::Arc::new(crate::pipeline::event_driven_bp::EventDrivenSubstrate::default());
 
     // 2026-04-29 Phase B + C1: pressure-event bus + per-channel
     // workers. Push handler demuxes each PushEvent into PressureEvent
@@ -570,21 +590,23 @@ pub async fn run() {
     // C4 fix: bus is now created in startup (before push forwarder) so
     // the upstream tap can publish even when the bounded batch channel
     // drops events; we receive it through `bootstrap.pressure_event_bus`.
-    let pressure_channel_states = std::sync::Arc::new(
-        crate::pipeline::pressure_events::ChannelStates::default(),
-    );
-    let setup_registry = std::sync::Arc::new(
-        crate::pipeline::pressure_events::SetupRegistry::new(),
-    );
+    let pressure_channel_states =
+        std::sync::Arc::new(crate::pipeline::pressure_events::ChannelStates::default());
+    let setup_registry =
+        std::sync::Arc::new(crate::pipeline::pressure_events::SetupRegistry::new());
     let pressure_aggregator = crate::pipeline::pressure_events::spawn_aggregator(
         std::sync::Arc::clone(&pressure_channel_states),
         std::sync::Arc::clone(&belief_substrate),
         std::sync::Arc::clone(&setup_registry),
+        std::sync::Arc::clone(&runtime.perception_graph),
+        std::sync::Arc::clone(&store),
+        "us".to_string(),
     );
     let _pressure_worker_pool = crate::pipeline::pressure_events::spawn_worker_pool(
         std::sync::Arc::clone(&pressure_event_bus),
         std::sync::Arc::clone(&pressure_channel_states),
         pressure_aggregator,
+        std::sync::Arc::clone(&store),
     );
 
     let mut previous_visual_frame: Option<crate::pipeline::visual_graph_frame::VisualGraphFrame> =
@@ -884,6 +906,7 @@ pub async fn run() {
             let mut tick_state = UsTickState {
                 live: &mut live,
                 rest: &mut rest,
+                pressure_event_bus: Some(std::sync::Arc::clone(&pressure_event_bus)),
             };
             match runtime
                 .begin_tick(
@@ -909,6 +932,7 @@ pub async fn run() {
         let now = tick_advance.now;
         let mut stage_timer = crate::core::runtime::TickStageTimer::new();
         // S01 trade_tape_feed — T4 parity raw trade tape feed.
+        #[cfg_attr(not(feature = "persistence"), allow(unused_variables))]
         let trades_this_tick = drain_live_trades_into_tape(&mut live, &mut raw_trade_tape);
         stage_timer.mark("S01_trade_tape_feed");
 
@@ -1922,6 +1946,7 @@ pub async fn run() {
             previous_agent_snapshot: runtime.projection_state.previous_agent_snapshot.as_ref(),
             previous_agent_session: runtime.projection_state.previous_agent_session.as_ref(),
             previous_agent_scoreboard: runtime.projection_state.previous_agent_scoreboard.as_ref(),
+            perception_graph: &runtime.perception_graph,
         });
         let mut us_setup_surface_dirty = false;
 
@@ -3107,7 +3132,9 @@ pub async fn run() {
                         let mut summary: Vec<_> = option_surfaces
                             .iter()
                             .filter_map(|(sym, f)| {
-                                f.atm_call_iv.map(|iv| (sym.clone(), iv, f.put_call_oi_ratio, f.put_call_skew))
+                                f.atm_call_iv.map(|iv| {
+                                    (sym.clone(), iv, f.put_call_oi_ratio, f.put_call_skew)
+                                })
                             })
                             .collect();
                         summary.sort_by(|a, b| b.1.cmp(&a.1));
@@ -3186,6 +3213,17 @@ pub async fn run() {
                     // substrate evidence build so the next BP pass picks up
                     // surprises that emerged this tick.
                     kl_surprise_tracker.observe_from_belief_field(&belief_field);
+                    {
+                        let mut graph = runtime
+                            .perception_graph
+                            .write()
+                            .expect("perception graph lock poisoned");
+                        kl_surprise_tracker.apply_to_perception_graph(
+                            &belief_field,
+                            &mut graph,
+                            tick,
+                        );
+                    }
                     let us_kl_surprise_by_symbol =
                         kl_surprise_tracker.surprise_summary(&belief_field);
                     let substrate_evidence =
@@ -3292,6 +3330,17 @@ pub async fn run() {
                             &sector_subkgs,
                             now_utc,
                         );
+                    {
+                        let mut graph = runtime
+                            .perception_graph
+                            .write()
+                            .expect("perception graph lock poisoned");
+                        crate::pipeline::cross_sector_contrast::apply_to_perception_graph(
+                            &sector_contrast_events,
+                            &mut graph,
+                            tick,
+                        );
+                    }
                     let _ = cross_sector_writer.try_send_batch(sector_contrast_events.clone());
                     // Backward propagation: hot sector → quiet members lag.
                     let member_lag_events =
@@ -3310,7 +3359,19 @@ pub async fn run() {
                         &sector_subkgs,
                         &mut sector_kinematics_tracker,
                         now_utc,
+                        tick,
                     );
+                    {
+                        let mut graph = runtime
+                            .perception_graph
+                            .write()
+                            .expect("perception graph lock poisoned");
+                        sector_kinematics_tracker.apply_to_perception_graph(
+                            &sector_kin_events,
+                            &mut graph,
+                            tick,
+                        );
+                    }
                     let _ = sector_kinematics_writer.try_send_batch(sector_kin_events.clone());
                     let symbol_to_sector_str: HashMap<String, String> = symbol_sector
                         .iter()
@@ -3332,11 +3393,20 @@ pub async fn run() {
                     );
                     if !cs_events.is_empty() {
                         let _ = crate::pipeline::cluster_sync::write_events("us", &cs_events);
+                        {
+                            let mut graph = runtime.perception_graph.write().unwrap();
+                            crate::pipeline::cluster_sync::apply_to_perception_graph(
+                                &cs_events,
+                                &mut graph,
+                                tick as u64,
+                            );
+                        }
                     }
 
                     // Cross-symbol propagation along UsGraph StockToStock
                     use crate::pipeline::cross_symbol_propagation as csp;
-                    let mut master_edges: Vec<csp::MasterEdge> = Vec::new();
+                    use crate::pipeline::loopy_bp::BpInputEdge;
+                    let mut master_edges: Vec<BpInputEdge> = Vec::new();
                     let mut bp_master_graph_edges = 0usize;
                     for edge_idx in graph.graph.edge_indices() {
                         if let crate::us::graph::graph::UsEdgeKind::StockToStock(s2s) =
@@ -3357,7 +3427,7 @@ pub async fn run() {
                             if let (Some(sa), Some(sb)) = (sa, sb) {
                                 let w = s2s.similarity.to_f64().unwrap_or(0.0);
                                 if w > 0.0 {
-                                    master_edges.push(csp::MasterEdge {
+                                    master_edges.push(BpInputEdge {
                                         from: sa,
                                         to: sb,
                                         weight: w,
@@ -3412,6 +3482,14 @@ pub async fn run() {
                             "lead_lag_events",
                             crate::pipeline::lead_lag_index::write_events("us", &lead_lag_evs),
                         );
+                        {
+                            let mut graph = runtime.perception_graph.write().unwrap();
+                            crate::pipeline::lead_lag_index::apply_to_perception_graph(
+                                &lead_lag_evs,
+                                &mut graph,
+                                tick as u64,
+                            );
+                        }
                         runtime_trace
                             .record_planned(stage_plan, RuntimeStage::LeadLagDetect)
                             .expect("US runtime stage is declared in canonical plan");
@@ -3479,8 +3557,9 @@ pub async fn run() {
                         let bp_build_inputs_start = Instant::now();
                         let (priors, edges) = crate::pipeline::loopy_bp::build_inputs(
                             &subkg_registry,
-                            &bp_input_edges,
+                            &master_edges,
                             &lead_lag_evs,
+                            Some(&edge_ledger),
                         );
                         let bp_pruning_shadow =
                             crate::pipeline::loopy_bp::build_pruning_shadow_summary(
@@ -3490,7 +3569,6 @@ pub async fn run() {
                         runtime_trace
                             .record_planned(stage_plan, RuntimeStage::BpBuildInputs)
                             .expect("US runtime stage is declared in canonical plan");
-                        use crate::pipeline::event_driven_bp::BeliefSubstrate as _;
                         let bp_run_start = Instant::now();
                         belief_substrate.observe_tick(&priors, &edges, tick as u64);
                         // C3 fix: barrier between observe_tick (fire-and-forget)
@@ -3498,7 +3576,7 @@ pub async fn run() {
                         // reads see either the previous tick's posterior or a
                         // freshly reset prior, never the converged tick-N
                         // posterior.
-                        let _quiesced = belief_substrate
+                        let bp_quiesced = belief_substrate
                             .wait_until_quiescent(std::time::Duration::from_millis(50))
                             .await;
                         let bp_run_elapsed = bp_run_start.elapsed();
@@ -3508,21 +3586,37 @@ pub async fn run() {
                             .expect("US runtime stage is declared in canonical plan");
                         let bp_message_trace_write_start = Instant::now();
                         let bp_trace_rows = crate::pipeline::loopy_bp::build_belief_only_trace_rows(
-                            "us", tick as u64, &priors, &edges, &view.beliefs, now_utc,
+                            "us",
+                            tick as u64,
+                            &priors,
+                            &edges,
+                            &view.beliefs,
+                            now_utc,
                         );
                         let _ = bp_message_trace_writer.try_send_batch(bp_trace_rows);
                         let bp_message_trace_write_elapsed = bp_message_trace_write_start.elapsed();
                         let iterations = view.iterations;
-                        let converged = view.converged;
-                        let visual_frame =
-                            crate::pipeline::visual_graph_frame::build_visual_graph_frame(
+                        let converged = bp_quiesced && view.converged;
+                        let mut encoded_tick_frame =
+                            crate::pipeline::encoded_tick_frame::EncodedTickFrame::from_pressure_field(
                                 "us",
                                 tick,
-                                &subkg_registry,
-                                &edges,
-                                &priors,
-                                &view.beliefs,
                                 now_utc,
+                                &pressure_field,
+                            );
+                        encoded_tick_frame.attach_subkg_registry(&subkg_registry);
+                        encoded_tick_frame.attach_bp_state(&priors, &view.beliefs, &edges);
+                        crate::core::runtime_artifacts::record_artifact_result(
+                            &mut artifact_write_errors,
+                            "encoded_tick_frame",
+                            crate::pipeline::encoded_tick_frame::write_frame(
+                                "us",
+                                &encoded_tick_frame,
+                            ),
+                        );
+                        let visual_frame =
+                            crate::pipeline::visual_graph_frame::build_visual_graph_frame_from_encoded(
+                                &encoded_tick_frame,
                             );
                         if let Some(previous) = previous_visual_frame.as_ref() {
                             let delta = crate::pipeline::temporal_graph_delta::build_delta(
@@ -3551,85 +3645,96 @@ pub async fn run() {
                             .record_planned(stage_plan, RuntimeStage::BpMarginalsWrite)
                             .expect("US runtime stage is declared in canonical plan");
                         let beliefs = view.beliefs.clone();
-                        // 2026-05-01: P1a — predict-realize calibration.
-                        // Naive-baseline (random-walk) predictions for
-                        // tick + horizon, plus realize predictions made
-                        // `horizon` ticks ago against current beliefs.
-                        let _ = crate::pipeline::prediction_calibration::write_predictions(
-                            "us",
-                            tick as u64,
-                            &beliefs,
-                            crate::pipeline::prediction_calibration::PREDICTION_HORIZON_TICKS,
-                        );
-                        let _ = crate::pipeline::prediction_calibration::realize_predictions(
-                            "us",
-                            tick as u64,
-                            &beliefs,
-                            crate::pipeline::prediction_calibration::PREDICTION_HORIZON_TICKS,
-                        );
-                        // 2026-05-01: P1b — signature replay accumulator.
-                        let _us_signature_replays =
-                            crate::pipeline::signature_replay::observe_and_replay(
+                        let mut us_bp_conf_applied = 0usize;
+                        let mut us_bp_conf_skipped = 0usize;
+                        let mut probe_outcomes = Vec::new();
+                        let mut probe_forecasts = Vec::new();
+                        let mut probe_mean_acc = None;
+                        if converged {
+                            // 2026-05-01: P1a — predict-realize calibration.
+                            // Naive-baseline (random-walk) predictions for
+                            // tick + horizon, plus realize predictions made
+                            // `horizon` ticks ago against current beliefs.
+                            let _ = crate::pipeline::prediction_calibration::write_predictions(
                                 "us",
                                 tick as u64,
                                 &beliefs,
-                                20,
+                                crate::pipeline::prediction_calibration::PREDICTION_HORIZON_TICKS,
                             );
-                        // 2026-05-01: feed BP posterior into lead-lag tracker.
-                        // sub-KG ingest path produced constant-zero history
-                        // for most symbols (channel nodes rarely populated)
-                        // → no lead-lag events ever written. (p_bull - p_bear)
-                        // is always populated and captures eden's directional
-                        // belief — what lead-lag wants to correlate.
-                        us_lead_lag_tracker.ingest_from_beliefs(&beliefs);
-                        // V2: BP posterior is the single source of truth.
-                        // No post-BP belief/history modulation — those
-                        // signals already entered BP via NodeId values.
-                        // V5.3 + 2026-04-29 ordering fix: reconcile_direction
-                        // must run BEFORE apply_posterior_confidence. The
-                        // confidence write reads setup.direction to pick which
-                        // posterior cell (Bull vs Bear) becomes p_target;
-                        // running reconcile after would leave emerge:* setups
-                        // whose direction got flipped with confidence stuck
-                        // on the pre-flip (now-wrong) side, systematically
-                        // losing the percentile race.
-                        let _us_emerge_dir_touched =
-                            crate::pipeline::sub_kg_emergence::reconcile_direction_with_bp(
-                                &mut reasoning.tactical_setups,
+                            let _ = crate::pipeline::prediction_calibration::realize_predictions(
+                                "us",
+                                tick as u64,
                                 &beliefs,
+                                crate::pipeline::prediction_calibration::PREDICTION_HORIZON_TICKS,
                             );
-                        let mut us_bp_conf_applied = 0usize;
-                        let mut us_bp_conf_skipped = 0usize;
-                        for setup in reasoning.tactical_setups.iter_mut() {
-                            if crate::pipeline::loopy_bp::apply_posterior_confidence(
-                                setup, &beliefs,
-                            ) {
-                                us_bp_conf_applied += 1;
-                            } else {
-                                us_bp_conf_skipped += 1;
+                            // 2026-05-01: P1b — signature replay accumulator.
+                            let _us_signature_replays =
+                                crate::pipeline::signature_replay::observe_and_replay(
+                                    "us",
+                                    tick as u64,
+                                    &beliefs,
+                                    20,
+                                );
+                            // 2026-05-01: feed BP posterior into lead-lag tracker.
+                            // sub-KG ingest path produced constant-zero history
+                            // for most symbols (channel nodes rarely populated)
+                            // → no lead-lag events ever written. (p_bull - p_bear)
+                            // is always populated and captures eden's directional
+                            // belief — what lead-lag wants to correlate.
+                            us_lead_lag_tracker.ingest_from_beliefs(&beliefs);
+                            // V2: BP posterior is the single source of truth.
+                            // No post-BP belief/history modulation — those
+                            // signals already entered BP via NodeId values.
+                            // V5.3 + 2026-04-29 ordering fix: reconcile_direction
+                            // must run BEFORE apply_posterior_confidence. The
+                            // confidence write reads setup.direction to pick which
+                            // posterior cell (Bull vs Bear) becomes p_target;
+                            // running reconcile after would leave emerge:* setups
+                            // whose direction got flipped with confidence stuck
+                            // on the pre-flip (now-wrong) side, systematically
+                            // losing the percentile race.
+                            let _us_emerge_dir_touched =
+                                crate::pipeline::sub_kg_emergence::reconcile_direction_with_bp(
+                                    &mut reasoning.tactical_setups,
+                                    &beliefs,
+                                );
+                            for setup in reasoning.tactical_setups.iter_mut() {
+                                if crate::pipeline::loopy_bp::apply_posterior_confidence(
+                                    setup, &beliefs,
+                                ) {
+                                    us_bp_conf_applied += 1;
+                                } else {
+                                    us_bp_conf_skipped += 1;
+                                }
                             }
+                            // V2/V4 cleanup: action upgrade (Observe→Review→
+                            // Enter) is data-driven on either the tick's
+                            // confidence distribution (default percentile) or
+                            // the per-symbol KL surprise z-score (opt-in via
+                            // EDEN_ACTION_PROMOTION=kl_surprise). Both modes
+                            // replace the deleted hardcoded tension thresholds.
+                            crate::pipeline::action_promotion::apply_action_promotion(
+                                &mut reasoning.tactical_setups,
+                                &kl_surprise_tracker,
+                                &belief_field,
+                            );
+                            // 2026-04-29 Phase D: hand the latest setups to
+                            // the sub-tick setup registry so the pressure
+                            // aggregator can compute confidence drift between
+                            // ticks. Read-only on the aggregator side; the
+                            // tick loop is the sole writer.
+                            setup_registry.refresh_from_setups(&reasoning.tactical_setups);
+                            us_setup_surface_dirty = true;
+                        } else {
+                            artifact_projection.agent_snapshot.wake.reasons.push(format!(
+                                "bp_posterior_confidence: skipped because BP did not converge within 50ms; bp_iters={} lead_lag_events={}",
+                                iterations,
+                                lead_lag_evs.len(),
+                            ));
                         }
                         runtime_trace
                             .record_planned(stage_plan, RuntimeStage::BpPosteriorConfidence)
                             .expect("US runtime stage is declared in canonical plan");
-                        // V2/V4 cleanup: action upgrade (Observe→Review→
-                        // Enter) is data-driven on either the tick's
-                        // confidence distribution (default percentile) or
-                        // the per-symbol KL surprise z-score (opt-in via
-                        // EDEN_ACTION_PROMOTION=kl_surprise). Both modes
-                        // replace the deleted hardcoded tension thresholds.
-                        crate::pipeline::action_promotion::apply_action_promotion(
-                            &mut reasoning.tactical_setups,
-                            &kl_surprise_tracker,
-                            &belief_field,
-                        );
-                        // 2026-04-29 Phase D: hand the latest setups to
-                        // the sub-tick setup registry so the pressure
-                        // aggregator can compute confidence drift between
-                        // ticks. Read-only on the aggregator side; the
-                        // tick loop is the sole writer.
-                        setup_registry.refresh_from_setups(&reasoning.tactical_setups);
-                        us_setup_surface_dirty = true;
                         if us_bp_conf_applied + us_bp_conf_skipped > 0 {
                             artifact_projection
                                 .agent_snapshot
@@ -3653,42 +3758,50 @@ pub async fn run() {
                         // (3) run bull/bear intervention BP per target,
                         // enqueue forecast for evaluation in PROBE_HORIZON
                         // ticks. Pure Pearl do-calculus subset — no learning.
-                        let probe_outcomes =
-                            us_active_probe.evaluate_due(tick, &beliefs, now_utc, "us");
-                        crate::core::runtime_artifacts::record_artifact_result(
-                            &mut artifact_write_errors,
-                            "active_probe_outcomes",
-                            crate::pipeline::active_probe::write_outcomes("us", &probe_outcomes),
-                        );
+                        if converged {
+                            probe_outcomes =
+                                us_active_probe.evaluate_due(tick, &beliefs, now_utc, "us");
+                            crate::core::runtime_artifacts::record_artifact_result(
+                                &mut artifact_write_errors,
+                                "active_probe_outcomes",
+                                crate::pipeline::active_probe::write_outcomes(
+                                    "us",
+                                    &probe_outcomes,
+                                ),
+                            );
+                        }
                         runtime_trace
                             .record_planned(stage_plan, RuntimeStage::ActiveProbeEvaluate)
                             .expect("US runtime stage is declared in canonical plan");
-                        let probe_targets = crate::pipeline::active_probe::pick_probe_targets(
-                            &beliefs,
-                            crate::pipeline::active_probe::PROBE_TARGETS_PER_TICK,
-                        );
-                        let probe_forecasts = us_active_probe.emit_probes(
-                            &probe_targets,
-                            &priors,
-                            &edges,
-                            tick,
-                            now_utc,
-                            "us",
-                        );
-                        crate::core::runtime_artifacts::record_artifact_result(
-                            &mut artifact_write_errors,
-                            "active_probe_forecasts",
-                            crate::pipeline::active_probe::write_forecasts("us", &probe_forecasts),
-                        );
+                        if converged {
+                            let probe_targets = crate::pipeline::active_probe::pick_probe_targets(
+                                &beliefs,
+                                crate::pipeline::active_probe::PROBE_TARGETS_PER_TICK,
+                            );
+                            probe_forecasts = us_active_probe.emit_probes(
+                                &probe_targets,
+                                &priors,
+                                &edges,
+                                tick,
+                                now_utc,
+                                "us",
+                            );
+                            crate::core::runtime_artifacts::record_artifact_result(
+                                &mut artifact_write_errors,
+                                "active_probe_forecasts",
+                                crate::pipeline::active_probe::write_forecasts(
+                                    "us",
+                                    &probe_forecasts,
+                                ),
+                            );
+                        }
                         runtime_trace
                             .record_planned(stage_plan, RuntimeStage::ActiveProbeEmit)
                             .expect("US runtime stage is declared in canonical plan");
-                        let probe_mean_acc = if probe_outcomes.is_empty() {
-                            None
-                        } else {
+                        if !probe_outcomes.is_empty() {
                             let sum: f64 = probe_outcomes.iter().map(|o| o.mean_accuracy).sum();
-                            Some(sum / probe_outcomes.len() as f64)
-                        };
+                            probe_mean_acc = Some(sum / probe_outcomes.len() as f64);
+                        }
                         if !probe_forecasts.is_empty() || !probe_outcomes.is_empty() {
                             let acc_str = probe_mean_acc
                                 .map(|a| format!("{:.2}", a))
@@ -3802,6 +3915,14 @@ pub async fn run() {
                             "us",
                             &contrast_events,
                         );
+                        {
+                            let mut graph = runtime.perception_graph.write().unwrap();
+                            crate::pipeline::structural_contrast::apply_to_perception_graph(
+                                &contrast_events,
+                                &mut graph,
+                                tick as u64,
+                            );
+                        }
                     }
 
                     // Kinematics
@@ -4101,10 +4222,7 @@ pub async fn run() {
                     &previous_cluster_states_for_surface,
                     previous_world_summary_for_surface.as_ref(),
                 );
-                augment_us_live_snapshot_with_raw_expectations(
-                    &mut live_snapshot,
-                    &raw_trade_tape,
-                );
+                augment_us_live_snapshot_with_raw_expectations(&mut live_snapshot, &raw_trade_tape);
                 previous_symbol_states = live_snapshot.symbol_states.clone();
                 previous_cluster_states = live_snapshot.cluster_states.clone();
                 previous_world_summary = live_snapshot.world_summary.clone();
@@ -4119,11 +4237,15 @@ pub async fn run() {
                         .projection_state
                         .previous_agent_snapshot
                         .as_ref(),
-                    previous_agent_session: runtime.projection_state.previous_agent_session.as_ref(),
+                    previous_agent_session: runtime
+                        .projection_state
+                        .previous_agent_session
+                        .as_ref(),
                     previous_agent_scoreboard: runtime
                         .projection_state
                         .previous_agent_scoreboard
                         .as_ref(),
+                    perception_graph: &runtime.perception_graph,
                 });
                 for reason in preserved_wake_reasons {
                     if !artifact_projection
@@ -4284,9 +4406,7 @@ pub async fn run() {
         }
         let stage_top_json: Vec<serde_json::Value> = stage_top
             .iter()
-            .map(|(name, dur)| {
-                json!({ "stage": name, "ms": dur.as_millis() })
-            })
+            .map(|(name, dur)| json!({ "stage": name, "ms": dur.as_millis() }))
             .collect();
         runtime.runtime_task_heartbeat(
             format!(

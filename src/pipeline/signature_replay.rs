@@ -65,22 +65,40 @@ pub fn observe_and_replay(
     beliefs: &HashMap<String, [f64; N_STATES]>,
     max_replays: usize,
 ) -> Vec<SignatureReplay> {
-    let wl_path = format!(".run/eden-wl-signatures-{}.ndjson", market);
-    let wl_path = std::path::Path::new(&wl_path);
-    // Tail-read recent wl-signatures (~latest tick worth)
-    let raw: Vec<RawWlSignature> = crate::live_snapshot::tail_records(wl_path, 256 * 1024, 1000);
-    if raw.is_empty() {
+    let current = read_latest_signatures(market);
+    if current.is_empty() {
         return Vec::new();
-    }
-    // Use the most-recent signature per symbol (later overwrites earlier)
-    let mut current: HashMap<String, String> = HashMap::new();
-    for sig in raw {
-        current.insert(sig.symbol, sig.signature_hash);
     }
     // Write observations for future ticks to replay against
     let _ = write_signature_observations(market, tick, &current, beliefs);
     // Compute current replays from accumulated history
     read_signature_replays(market, &current, tick, max_replays)
+}
+
+/// Read-only snapshot helper for agent perception surfaces. Unlike
+/// [`observe_and_replay`], this does not append observations; it only
+/// joins the latest symbol signatures with accumulated history.
+pub fn read_latest_signature_replays(
+    market: &str,
+    tick: u64,
+    max_replays: usize,
+) -> Vec<SignatureReplay> {
+    let current = read_latest_signatures(market);
+    if current.is_empty() {
+        return Vec::new();
+    }
+    read_signature_replays(market, &current, tick, max_replays)
+}
+
+fn read_latest_signatures(market: &str) -> HashMap<String, String> {
+    let wl_path = format!(".run/eden-wl-signatures-{}.ndjson", market);
+    let wl_path = std::path::Path::new(&wl_path);
+    // Tail-read recent wl-signatures (~latest tick worth)
+    let raw: Vec<RawWlSignature> = crate::live_snapshot::tail_records(wl_path, 256 * 1024, 1000);
+    // Use the most-recent signature per symbol (later overwrites earlier)
+    raw.into_iter()
+        .map(|sig| (sig.symbol, sig.signature_hash))
+        .collect()
 }
 
 /// Write per-symbol signature observations so future ticks can query
@@ -141,8 +159,7 @@ pub fn read_signature_replays(
         crate::live_snapshot::tail_records(path, 4 * 1024 * 1024, 50000);
 
     // Index by (signature_hash, symbol) → list of (tick, belief)
-    let mut by_sig_sym: HashMap<(String, String), Vec<(u64, [f64; N_STATES])>> =
-        HashMap::new();
+    let mut by_sig_sym: HashMap<(String, String), Vec<(u64, [f64; N_STATES])>> = HashMap::new();
     for obs in raw {
         by_sig_sym
             .entry((obs.signature_hash.clone(), obs.symbol.clone()))
@@ -220,11 +237,11 @@ pub fn read_signature_replays(
     }
     // Surface most-replay-confident first (highest visits × abs(mean delta))
     out.sort_by(|a, b| {
-        let score_a =
-            a.historical_visits as f64 * a.mean_forward_belief_5tick.abs();
-        let score_b =
-            b.historical_visits as f64 * b.mean_forward_belief_5tick.abs();
-        score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        let score_a = a.historical_visits as f64 * a.mean_forward_belief_5tick.abs();
+        let score_b = b.historical_visits as f64 * b.mean_forward_belief_5tick.abs();
+        score_b
+            .partial_cmp(&score_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     out.truncate(max_replays);
     out

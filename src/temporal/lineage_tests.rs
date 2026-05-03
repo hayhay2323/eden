@@ -98,6 +98,7 @@ fn lineage_stats_counts_top_patterns() {
         world_state: WorldStateSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             entities: vec![],
+            world_intents: vec![],
             perceptual_states: vec![],
             vortices: vec![],
         },
@@ -127,6 +128,7 @@ fn lineage_stats_counts_top_patterns() {
         world_state: WorldStateSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             entities: vec![],
+            world_intents: vec![],
             perceptual_states: vec![],
             vortices: vec![],
         },
@@ -197,6 +199,7 @@ fn family_context_outcomes_group_by_family_session_and_regime() {
         world_state: WorldStateSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             entities: vec![],
+            world_intents: vec![],
             perceptual_states: vec![],
             vortices: vec![],
         },
@@ -226,6 +229,7 @@ fn family_context_outcomes_group_by_family_session_and_regime() {
         world_state: WorldStateSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             entities: vec![],
+            world_intents: vec![],
             perceptual_states: vec![],
             vortices: vec![],
         },

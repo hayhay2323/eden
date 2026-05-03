@@ -4,9 +4,8 @@ use axum::extract::{Path, Query};
 use axum::Json;
 use serde::Deserialize;
 
-use crate::agent;
 use crate::agent::llm;
-use crate::agent::AgentSectorFlow;
+use crate::agent::{self, AgentRecommendations, AgentSectorFlow};
 use crate::cases;
 #[cfg(feature = "persistence")]
 use crate::cases::enrich_case_summaries;
@@ -52,9 +51,17 @@ pub(in crate::api) async fn load_or_build_operational_snapshot(
     let session = agent::load_session(market)
         .await
         .map_err(|error| ApiError::internal(format!("failed to load agent session: {error}")))?;
-    let recommendations = agent::load_recommendations(market)
-        .await
-        .unwrap_or_else(|_| agent::build_recommendations(&snapshot, Some(&session)));
+    let recommendations = AgentRecommendations {
+        tick: snapshot.tick,
+        timestamp: snapshot.timestamp.clone(),
+        market: snapshot.market,
+        regime_bias: snapshot.market_regime.bias.clone(),
+        total: 0,
+        market_recommendation: None,
+        decisions: Vec::new(),
+        items: Vec::new(),
+        knowledge_links: Vec::new(),
+    };
     let narration = llm::load_narration(market).await.ok();
 
     let operational = build_operational_snapshot(

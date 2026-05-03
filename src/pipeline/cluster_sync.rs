@@ -234,6 +234,38 @@ pub fn write_events(market: &str, events: &[ClusterSyncEvent]) -> std::io::Resul
     Ok(())
 }
 
+/// Project per-tick cluster sync events into the unified PerceptionGraph.
+pub fn apply_to_perception_graph(
+    events: &[ClusterSyncEvent],
+    graph: &mut crate::perception::PerceptionGraph,
+    tick: u64,
+) {
+    for ev in events {
+        graph.emergence.upsert(
+            ev.cluster_key.clone(),
+            crate::perception::EmergenceSnapshot {
+                sector: ev.cluster_key.clone(),
+                total_members: ev.cluster_total_members as u32,
+                sync_member_count: ev.sync_member_count as u32,
+                sync_members: ev.sync_members.clone(),
+                mean_activation_intent: ev
+                    .mean_activation_per_kind
+                    .get("Intent")
+                    .copied()
+                    .unwrap_or(0.0),
+                mean_activation_pressure: ev
+                    .mean_activation_per_kind
+                    .get("Pressure")
+                    .copied()
+                    .unwrap_or(0.0),
+                strongest_member: ev.strongest_member.clone().unwrap_or_default(),
+                strongest_activation: ev.strongest_member_mean_activation,
+                last_tick: tick,
+            },
+        );
+    }
+}
+
 // ---------------- Tests ----------------
 
 #[cfg(test)]

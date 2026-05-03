@@ -381,10 +381,7 @@ pub fn build_causal_chain(
             if intervened.contains(sym) {
                 continue;
             }
-            let baseline_bull = baseline
-                .get(sym)
-                .map(|b| b[STATE_BULL])
-                .unwrap_or(uniform);
+            let baseline_bull = baseline.get(sym).map(|b| b[STATE_BULL]).unwrap_or(uniform);
             let signed_dev = post[STATE_BULL] - baseline_bull;
             let deviation = signed_dev.abs();
             if deviation < SENSITIVITY_FLOOR {

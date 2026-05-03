@@ -81,10 +81,7 @@ mod tests {
             .get("alpha")
             .copied()
             .expect("alpha must be recorded");
-        let beta = entries
-            .get("beta")
-            .copied()
-            .expect("beta must be recorded");
+        let beta = entries.get("beta").copied().expect("beta must be recorded");
         // Wall-clock can drift but alpha > beta should be safe given
         // a 5x ratio in the sleep durations.
         assert!(

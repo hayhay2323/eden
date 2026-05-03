@@ -54,10 +54,26 @@ pub struct TradeFlowState {
     pub volume_value: f64,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct BrokerState {
+    pub last_updated: Option<DateTime<Utc>>,
+    /// Latest computed Institutional channel value (signed [-1, 1]).
+    pub institutional_value: Decimal,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OptionState {
+    pub last_updated: Option<DateTime<Utc>>,
+    /// Latest computed Option channel value (signed [-1, 1]).
+    pub option_value: Decimal,
+}
+
 #[derive(Debug, Default)]
 pub struct ChannelStates {
     pub orderbook: RwLock<HashMap<String, OrderBookState>>,
     pub tradeflow: RwLock<HashMap<String, TradeFlowState>>,
+    pub broker: RwLock<HashMap<String, BrokerState>>,
+    pub option: RwLock<HashMap<String, OptionState>>,
 }
 
 pub type SharedChannelStates = Arc<ChannelStates>;

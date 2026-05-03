@@ -186,14 +186,20 @@ pub async fn run() {
     // a counter increments. See src/core/ndjson_writer.rs.
     let bp_marginals_writer = eden::core::ndjson_writer::NdjsonWriter::<
         Vec<eden::pipeline::loopy_bp::MarginalRow>,
-    >::spawn("hk:bp_marginals", |rows: Vec<
-        eden::pipeline::loopy_bp::MarginalRow,
-    >| eden::pipeline::loopy_bp::write_marginals("hk", &rows));
+    >::spawn(
+        "hk:bp_marginals",
+        |rows: Vec<eden::pipeline::loopy_bp::MarginalRow>| {
+            eden::pipeline::loopy_bp::write_marginals("hk", &rows)
+        },
+    );
     let bp_message_trace_writer = eden::core::ndjson_writer::NdjsonWriter::<
         Vec<eden::pipeline::loopy_bp::BpMessageTraceRow>,
-    >::spawn("hk:bp_message_trace", |rows: Vec<
-        eden::pipeline::loopy_bp::BpMessageTraceRow,
-    >| eden::pipeline::loopy_bp::write_message_trace("hk", &rows));
+    >::spawn(
+        "hk:bp_message_trace",
+        |rows: Vec<eden::pipeline::loopy_bp::BpMessageTraceRow>| {
+            eden::pipeline::loopy_bp::write_message_trace("hk", &rows)
+        },
+    );
     let subkg_writer = eden::core::ndjson_writer::NdjsonWriter::<Vec<String>>::spawn(
         "hk:subkg",
         |lines: Vec<String>| {
@@ -208,29 +214,66 @@ pub async fn run() {
     );
     let visual_frame_writer = eden::core::ndjson_writer::NdjsonWriter::<
         eden::pipeline::visual_graph_frame::VisualGraphFrame,
-    >::spawn("hk:visual_graph_frame", |frame: eden::pipeline::visual_graph_frame::VisualGraphFrame| {
-        eden::pipeline::visual_graph_frame::write_frame("hk", &frame)
-    });
+    >::spawn(
+        "hk:visual_graph_frame",
+        |frame: eden::pipeline::visual_graph_frame::VisualGraphFrame| {
+            eden::pipeline::visual_graph_frame::write_frame("hk", &frame)
+        },
+    );
     let temporal_delta_writer = eden::core::ndjson_writer::NdjsonWriter::<
         eden::pipeline::temporal_graph_delta::TemporalGraphDelta,
-    >::spawn("hk:temporal_delta", |delta: eden::pipeline::temporal_graph_delta::TemporalGraphDelta| {
-        eden::pipeline::temporal_graph_delta::write_delta("hk", &delta)
-    });
+    >::spawn(
+        "hk:temporal_delta",
+        |delta: eden::pipeline::temporal_graph_delta::TemporalGraphDelta| {
+            eden::pipeline::temporal_graph_delta::write_delta("hk", &delta)
+        },
+    );
     let cross_sector_writer = eden::core::ndjson_writer::NdjsonWriter::<
         Vec<eden::pipeline::cross_sector_contrast::SectorContrastEvent>,
-    >::spawn("hk:cross_sector", |events: Vec<
-        eden::pipeline::cross_sector_contrast::SectorContrastEvent,
-    >| eden::pipeline::cross_sector_contrast::write_events("hk", &events));
+    >::spawn(
+        "hk:cross_sector",
+        |events: Vec<eden::pipeline::cross_sector_contrast::SectorContrastEvent>| {
+            eden::pipeline::cross_sector_contrast::write_events("hk", &events)
+        },
+    );
     let sector_to_symbol_writer = eden::core::ndjson_writer::NdjsonWriter::<
         Vec<eden::pipeline::sector_to_symbol_propagation::MemberLagEvent>,
-    >::spawn("hk:sector_to_symbol", |events: Vec<
-        eden::pipeline::sector_to_symbol_propagation::MemberLagEvent,
-    >| eden::pipeline::sector_to_symbol_propagation::write_events("hk", &events));
+    >::spawn(
+        "hk:sector_to_symbol",
+        |events: Vec<eden::pipeline::sector_to_symbol_propagation::MemberLagEvent>| {
+            eden::pipeline::sector_to_symbol_propagation::write_events("hk", &events)
+        },
+    );
     let sector_kinematics_writer = eden::core::ndjson_writer::NdjsonWriter::<
         Vec<eden::pipeline::sector_kinematics::SectorKinematicsEvent>,
-    >::spawn("hk:sector_kinematics", |events: Vec<
-        eden::pipeline::sector_kinematics::SectorKinematicsEvent,
-    >| eden::pipeline::sector_kinematics::write_events("hk", &events));
+    >::spawn(
+        "hk:sector_kinematics",
+        |events: Vec<eden::pipeline::sector_kinematics::SectorKinematicsEvent>| {
+            eden::pipeline::sector_kinematics::write_events("hk", &events)
+        },
+    );
+
+    // Wire all NDJSON writers into the runtime-level aggregate drop
+    // counter so `tick_summary.ndjson_drops` surfaces sustained loss
+    // across any artifact stream.
+    let ndjson_drops_handle = runtime.counters.ndjson_drops_handle();
+    let bp_marginals_writer =
+        bp_marginals_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let bp_message_trace_writer =
+        bp_message_trace_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let subkg_writer = subkg_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let sector_subkg_writer =
+        sector_subkg_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let visual_frame_writer =
+        visual_frame_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let temporal_delta_writer =
+        temporal_delta_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let cross_sector_writer =
+        cross_sector_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let sector_to_symbol_writer =
+        sector_to_symbol_writer.with_aggregate_counter(ndjson_drops_handle.clone());
+    let sector_kinematics_writer =
+        sector_kinematics_writer.with_aggregate_counter(ndjson_drops_handle.clone());
 
     // Production BP substrate: event-driven async residual scheduler
     // backed by Arc<DashMap> shared graph state, with wait-free
@@ -238,9 +281,7 @@ pub async fn run() {
     // deleted 2026-04-29 once the event substrate's per-tick fixpoint
     // semantics were restored (inbox-clear on prior change).
     let belief_substrate: std::sync::Arc<dyn eden::pipeline::event_driven_bp::BeliefSubstrate> =
-        std::sync::Arc::new(
-            eden::pipeline::event_driven_bp::EventDrivenSubstrate::default(),
-        );
+        std::sync::Arc::new(eden::pipeline::event_driven_bp::EventDrivenSubstrate::default());
 
     // 2026-04-29 Phase B + C1: pressure-event bus + per-channel
     // workers (OrderBook + Structure). See US runtime for the full
@@ -248,21 +289,22 @@ pub async fn run() {
     // (before push forwarder) so the upstream tap can publish even
     // when the bounded batch channel drops events; we just receive
     // it through `bootstrap.pressure_event_bus`.
-    let pressure_channel_states = std::sync::Arc::new(
-        eden::pipeline::pressure_events::ChannelStates::default(),
-    );
-    let setup_registry = std::sync::Arc::new(
-        eden::pipeline::pressure_events::SetupRegistry::new(),
-    );
+    let pressure_channel_states =
+        std::sync::Arc::new(eden::pipeline::pressure_events::ChannelStates::default());
+    let setup_registry = std::sync::Arc::new(eden::pipeline::pressure_events::SetupRegistry::new());
     let pressure_aggregator = eden::pipeline::pressure_events::spawn_aggregator(
         std::sync::Arc::clone(&pressure_channel_states),
         std::sync::Arc::clone(&belief_substrate),
         std::sync::Arc::clone(&setup_registry),
+        std::sync::Arc::clone(&runtime.perception_graph),
+        std::sync::Arc::clone(&store),
+        "hk".to_string(),
     );
     let _pressure_worker_pool = eden::pipeline::pressure_events::spawn_worker_pool(
         std::sync::Arc::clone(&pressure_event_bus),
         std::sync::Arc::clone(&pressure_channel_states),
         pressure_aggregator,
+        std::sync::Arc::clone(&store),
     );
 
     let mut previous_visual_frame: Option<eden::pipeline::visual_graph_frame::VisualGraphFrame> =
@@ -595,6 +637,7 @@ pub async fn run() {
                 live: &mut live,
                 rest: &mut rest,
                 rest_updated: &mut rest_updated,
+                pressure_event_bus: Some(std::sync::Arc::clone(&pressure_event_bus)),
             };
             match runtime
                 .begin_tick(
@@ -2121,6 +2164,13 @@ pub async fn run() {
                     }
                 }
                 kl_surprise_tracker.observe_from_belief_field(&belief_field);
+                {
+                    let mut graph = runtime
+                        .perception_graph
+                        .write()
+                        .expect("perception graph lock poisoned");
+                    kl_surprise_tracker.apply_to_perception_graph(&belief_field, &mut graph, tick);
+                }
                 let hk_kl_surprise_by_symbol = kl_surprise_tracker.surprise_summary(&belief_field);
                 let substrate_evidence =
                     eden::pipeline::symbol_sub_kg::build_substrate_evidence_snapshots(
@@ -2207,10 +2257,8 @@ pub async fn run() {
                 runtime_trace
                     .record_planned(stage_plan, RuntimeStage::SectorSubKgBuild)
                     .expect("HK runtime stage is declared in canonical plan");
-                match eden::pipeline::sector_sub_kg::serialize_active_to_lines(
-                    &sector_subkgs,
-                    "hk",
-                ) {
+                match eden::pipeline::sector_sub_kg::serialize_active_to_lines(&sector_subkgs, "hk")
+                {
                     Ok(lines) => {
                         let _ = sector_subkg_writer.try_send_batch(lines);
                     }
@@ -2225,6 +2273,17 @@ pub async fn run() {
                         &sector_subkgs,
                         now,
                     );
+                {
+                    let mut graph = runtime
+                        .perception_graph
+                        .write()
+                        .expect("perception graph lock poisoned");
+                    eden::pipeline::cross_sector_contrast::apply_to_perception_graph(
+                        &sector_contrast_events,
+                        &mut graph,
+                        tick,
+                    );
+                }
                 let _ = cross_sector_writer.try_send_batch(sector_contrast_events.clone());
                 // Backward propagation: hot sector → quiet members lag.
                 // Closes Symbol↔Sector bidirectional loop. No mutation
@@ -2245,7 +2304,19 @@ pub async fn run() {
                     &sector_subkgs,
                     &mut sector_kinematics_tracker,
                     now,
+                    tick,
                 );
+                {
+                    let mut graph = runtime
+                        .perception_graph
+                        .write()
+                        .expect("perception graph lock poisoned");
+                    sector_kinematics_tracker.apply_to_perception_graph(
+                        &sector_kin_events,
+                        &mut graph,
+                        tick,
+                    );
+                }
                 let _ = sector_kinematics_writer.try_send_batch(sector_kin_events.clone());
                 let symbol_to_sector_str: std::collections::HashMap<String, String> = symbol_sector
                     .iter()
@@ -2264,8 +2335,9 @@ pub async fn run() {
                 // weighted by similarity. No rules, just topology.
                 {
                     use eden::pipeline::cross_symbol_propagation as csp;
+                    use eden::pipeline::loopy_bp::BpInputEdge;
                     use rust_decimal::prelude::ToPrimitive;
-                    let mut master_edges: Vec<csp::MasterEdge> = Vec::new();
+                    let mut master_edges: Vec<BpInputEdge> = Vec::new();
                     let mut bp_master_graph_edges = 0usize;
                     // Iterate StockToStock edges from BrainGraph
                     for edge_idx in brain.graph.edge_indices() {
@@ -2288,7 +2360,7 @@ pub async fn run() {
                             if let (Some(a), Some(b)) = (a_sym, b_sym) {
                                 let weight = s2s.similarity.to_f64().unwrap_or(0.0);
                                 if weight > 0.0 {
-                                    master_edges.push(csp::MasterEdge {
+                                    master_edges.push(BpInputEdge {
                                         from: a,
                                         to: b,
                                         weight,
@@ -2349,6 +2421,14 @@ pub async fn run() {
                         "lead_lag_events",
                         eden::pipeline::lead_lag_index::write_events("hk", &lead_lag_evs),
                     );
+                    {
+                        let mut graph = runtime.perception_graph.write().unwrap();
+                        eden::pipeline::lead_lag_index::apply_to_perception_graph(
+                            &lead_lag_evs,
+                            &mut graph,
+                            tick as u64,
+                        );
+                    }
                     runtime_trace
                         .record_planned(stage_plan, RuntimeStage::LeadLagDetect)
                         .expect("HK runtime stage is declared in canonical plan");
@@ -2398,8 +2478,9 @@ pub async fn run() {
                     let bp_build_inputs_start = Instant::now();
                     let (priors, edges) = eden::pipeline::loopy_bp::build_inputs(
                         &subkg_registry,
-                        &bp_input_edges,
+                        &master_edges,
                         &lead_lag_evs,
+                        Some(&edge_ledger),
                     );
                     let bp_pruning_shadow =
                         eden::pipeline::loopy_bp::build_pruning_shadow_summary(&priors, &edges);
@@ -2407,14 +2488,13 @@ pub async fn run() {
                     runtime_trace
                         .record_planned(stage_plan, RuntimeStage::BpBuildInputs)
                         .expect("HK runtime stage is declared in canonical plan");
-                    use eden::pipeline::event_driven_bp::BeliefSubstrate as _;
                     let bp_run_start = Instant::now();
                     belief_substrate.observe_tick(&priors, &edges, tick as u64);
                     // C3 fix: barrier between observe_tick (fire-and-forget)
                     // and posterior_snapshot — without this, downstream reads
                     // see either the previous tick's posterior or a freshly
                     // reset prior, never the converged tick-N posterior.
-                    let _quiesced = belief_substrate
+                    let bp_quiesced = belief_substrate
                         .wait_until_quiescent(std::time::Duration::from_millis(50))
                         .await;
                     let bp_run_elapsed = bp_run_start.elapsed();
@@ -2428,12 +2508,17 @@ pub async fn run() {
                     // sync substrate; trace is now a per-tick belief snapshot
                     // keyed by tick + symbol.
                     let bp_trace_rows = eden::pipeline::loopy_bp::build_belief_only_trace_rows(
-                        "hk", tick as u64, &priors, &edges, &view.beliefs, now,
+                        "hk",
+                        tick as u64,
+                        &priors,
+                        &edges,
+                        &view.beliefs,
+                        now,
                     );
                     let _ = bp_message_trace_writer.try_send_batch(bp_trace_rows);
                     let bp_message_trace_write_elapsed = bp_message_trace_write_start.elapsed();
                     let iterations = view.iterations;
-                    let converged = view.converged;
+                    let converged = bp_quiesced && view.converged;
                     let mut encoded_tick_frame =
                         eden::pipeline::encoded_tick_frame::EncodedTickFrame::from_pressure_field(
                             "hk",
@@ -2446,10 +2531,7 @@ pub async fn run() {
                     eden::core::runtime_artifacts::record_artifact_result(
                         &mut artifact_write_errors,
                         "encoded_tick_frame",
-                        eden::pipeline::encoded_tick_frame::write_frame(
-                            "hk",
-                            &encoded_tick_frame,
-                        ),
+                        eden::pipeline::encoded_tick_frame::write_frame("hk", &encoded_tick_frame),
                     );
                     let visual_frame =
                         eden::pipeline::visual_graph_frame::build_visual_graph_frame_from_encoded(
@@ -2482,80 +2564,92 @@ pub async fn run() {
                         .record_planned(stage_plan, RuntimeStage::BpMarginalsWrite)
                         .expect("HK runtime stage is declared in canonical plan");
                     let beliefs = view.beliefs.clone();
-                    // 2026-05-01: P1a — predict-realize calibration loop.
-                    // Write current beliefs as naive-baseline predictions
-                    // for tick + horizon (random-walk null model). Then
-                    // realize the prediction made `horizon` ticks ago.
-                    // Skeleton — future predictors swap in without
-                    // changing the on-disk schema.
-                    let _ = eden::pipeline::prediction_calibration::write_predictions(
-                        "hk",
-                        tick as u64,
-                        &beliefs,
-                        eden::pipeline::prediction_calibration::PREDICTION_HORIZON_TICKS,
-                    );
-                    let _ = eden::pipeline::prediction_calibration::realize_predictions(
-                        "hk",
-                        tick as u64,
-                        &beliefs,
-                        eden::pipeline::prediction_calibration::PREDICTION_HORIZON_TICKS,
-                    );
-                    // 2026-05-01: P1b — signature replay. Observe current
-                    // (signature, belief) pairs for future replay; lookup
-                    // historical occurrences for current symbols.
-                    let _hk_signature_replays =
-                        eden::pipeline::signature_replay::observe_and_replay(
+                    let mut hk_bp_conf_applied = 0usize;
+                    let mut hk_bp_conf_skipped = 0usize;
+                    let mut probe_outcomes = Vec::new();
+                    let mut probe_forecasts = Vec::new();
+                    let mut probe_mean_accuracy = None;
+                    if converged {
+                        // 2026-05-01: P1a — predict-realize calibration loop.
+                        // Write current beliefs as naive-baseline predictions
+                        // for tick + horizon (random-walk null model). Then
+                        // realize the prediction made `horizon` ticks ago.
+                        // Skeleton — future predictors swap in without
+                        // changing the on-disk schema.
+                        let _ = eden::pipeline::prediction_calibration::write_predictions(
                             "hk",
                             tick as u64,
                             &beliefs,
-                            20,
+                            eden::pipeline::prediction_calibration::PREDICTION_HORIZON_TICKS,
                         );
-                    // 2026-05-01: feed BP posterior into lead-lag tracker.
-                    // The original ingest path reads sub-KG channel nodes
-                    // (PressureCapitalFlow / Momentum / Intent*) which are
-                    // rarely populated for most symbols → tracker history
-                    // becomes constant zero → no events ever written.
-                    // (p_bull - p_bear) is always populated and captures
-                    // eden's directional belief — exactly what lead-lag
-                    // wants to correlate across the master KG edges.
-                    hk_lead_lag_tracker.ingest_from_beliefs(&beliefs);
-                    // V2: BP posterior is single source of truth for
-                    // setup.confidence. No post-BP belief/history
-                    // modulation — those signals already entered BP via
-                    // sub-KG NodeId values.
-                    // V5.3 + 2026-04-29 ordering fix: reconcile_direction
-                    // must run BEFORE apply_posterior_confidence. Mirrors
-                    // US runtime fix — confidence write reads
-                    // setup.direction to pick which posterior cell becomes
-                    // p_target; running reconcile after leaves emerge:*
-                    // setups whose direction got flipped with confidence
-                    // stuck on the pre-flip side.
-                    let _hk_emerge_dir_touched =
-                        eden::pipeline::sub_kg_emergence::reconcile_direction_with_bp(
-                            &mut reasoning_snapshot.tactical_setups,
+                        let _ = eden::pipeline::prediction_calibration::realize_predictions(
+                            "hk",
+                            tick as u64,
                             &beliefs,
+                            eden::pipeline::prediction_calibration::PREDICTION_HORIZON_TICKS,
                         );
-                    let mut hk_bp_conf_applied = 0usize;
-                    let mut hk_bp_conf_skipped = 0usize;
-                    for setup in reasoning_snapshot.tactical_setups.iter_mut() {
-                        if eden::pipeline::loopy_bp::apply_posterior_confidence(setup, &beliefs) {
-                            hk_bp_conf_applied += 1;
-                        } else {
-                            hk_bp_conf_skipped += 1;
+                        // 2026-05-01: P1b — signature replay. Observe current
+                        // (signature, belief) pairs for future replay; lookup
+                        // historical occurrences for current symbols.
+                        let _hk_signature_replays =
+                            eden::pipeline::signature_replay::observe_and_replay(
+                                "hk",
+                                tick as u64,
+                                &beliefs,
+                                20,
+                            );
+                        // 2026-05-01: feed BP posterior into lead-lag tracker.
+                        // The original ingest path reads sub-KG channel nodes
+                        // (PressureCapitalFlow / Momentum / Intent*) which are
+                        // rarely populated for most symbols → tracker history
+                        // becomes constant zero → no events ever written.
+                        // (p_bull - p_bear) is always populated and captures
+                        // eden's directional belief — exactly what lead-lag
+                        // wants to correlate across the master KG edges.
+                        hk_lead_lag_tracker.ingest_from_beliefs(&beliefs);
+                        // V2: BP posterior is single source of truth for
+                        // setup.confidence. No post-BP belief/history
+                        // modulation — those signals already entered BP via
+                        // sub-KG NodeId values.
+                        // V5.3 + 2026-04-29 ordering fix: reconcile_direction
+                        // must run BEFORE apply_posterior_confidence. Mirrors
+                        // US runtime fix — confidence write reads
+                        // setup.direction to pick which posterior cell becomes
+                        // p_target; running reconcile after leaves emerge:*
+                        // setups whose direction got flipped with confidence
+                        // stuck on the pre-flip side.
+                        let _hk_emerge_dir_touched =
+                            eden::pipeline::sub_kg_emergence::reconcile_direction_with_bp(
+                                &mut reasoning_snapshot.tactical_setups,
+                                &beliefs,
+                            );
+                        for setup in reasoning_snapshot.tactical_setups.iter_mut() {
+                            if eden::pipeline::loopy_bp::apply_posterior_confidence(setup, &beliefs)
+                            {
+                                hk_bp_conf_applied += 1;
+                            } else {
+                                hk_bp_conf_skipped += 1;
+                            }
                         }
+                        // V2/V4 cleanup: action upgrade is data-driven —
+                        // percentile by default, KL surprise when env-flag
+                        // EDEN_ACTION_PROMOTION=kl_surprise.
+                        eden::pipeline::action_promotion::apply_action_promotion(
+                            &mut reasoning_snapshot.tactical_setups,
+                            &kl_surprise_tracker,
+                            &belief_field,
+                        );
+                        setup_registry.refresh_from_setups(&reasoning_snapshot.tactical_setups);
+                    } else {
+                        eprintln!(
+                            "[hk] bp_posterior_confidence skipped: BP did not converge within 50ms; bp_iters={} lead_lag_events={}",
+                            iterations,
+                            lead_lag_evs.len(),
+                        );
                     }
                     runtime_trace
                         .record_planned(stage_plan, RuntimeStage::BpPosteriorConfidence)
                         .expect("HK runtime stage is declared in canonical plan");
-                    // V2/V4 cleanup: action upgrade is data-driven —
-                    // percentile by default, KL surprise when env-flag
-                    // EDEN_ACTION_PROMOTION=kl_surprise.
-                    eden::pipeline::action_promotion::apply_action_promotion(
-                        &mut reasoning_snapshot.tactical_setups,
-                        &kl_surprise_tracker,
-                        &belief_field,
-                    );
-                    setup_registry.refresh_from_setups(&reasoning_snapshot.tactical_setups);
                     if hk_bp_conf_applied + hk_bp_conf_skipped > 0 {
                         eprintln!(
                             "[hk] bp_posterior_confidence: applied={} skipped={} \
@@ -2570,41 +2664,43 @@ pub async fn run() {
 
                     // V2 Phase 4: active probing — counterfactual BP
                     // experiments. Mirrors US wiring.
-                    let probe_outcomes = hk_active_probe.evaluate_due(tick, &beliefs, now, "hk");
-                    eden::core::runtime_artifacts::record_artifact_result(
-                        &mut artifact_write_errors,
-                        "active_probe_outcomes",
-                        eden::pipeline::active_probe::write_outcomes("hk", &probe_outcomes),
-                    );
+                    if converged {
+                        probe_outcomes = hk_active_probe.evaluate_due(tick, &beliefs, now, "hk");
+                        eden::core::runtime_artifacts::record_artifact_result(
+                            &mut artifact_write_errors,
+                            "active_probe_outcomes",
+                            eden::pipeline::active_probe::write_outcomes("hk", &probe_outcomes),
+                        );
+                    }
                     runtime_trace
                         .record_planned(stage_plan, RuntimeStage::ActiveProbeEvaluate)
                         .expect("HK runtime stage is declared in canonical plan");
-                    let probe_targets = eden::pipeline::active_probe::pick_probe_targets(
-                        &beliefs,
-                        eden::pipeline::active_probe::PROBE_TARGETS_PER_TICK,
-                    );
-                    let probe_forecasts = hk_active_probe.emit_probes(
-                        &probe_targets,
-                        &priors,
-                        &edges,
-                        tick,
-                        now,
-                        "hk",
-                    );
-                    eden::core::runtime_artifacts::record_artifact_result(
-                        &mut artifact_write_errors,
-                        "active_probe_forecasts",
-                        eden::pipeline::active_probe::write_forecasts("hk", &probe_forecasts),
-                    );
+                    if converged {
+                        let probe_targets = eden::pipeline::active_probe::pick_probe_targets(
+                            &beliefs,
+                            eden::pipeline::active_probe::PROBE_TARGETS_PER_TICK,
+                        );
+                        probe_forecasts = hk_active_probe.emit_probes(
+                            &probe_targets,
+                            &priors,
+                            &edges,
+                            tick,
+                            now,
+                            "hk",
+                        );
+                        eden::core::runtime_artifacts::record_artifact_result(
+                            &mut artifact_write_errors,
+                            "active_probe_forecasts",
+                            eden::pipeline::active_probe::write_forecasts("hk", &probe_forecasts),
+                        );
+                    }
                     runtime_trace
                         .record_planned(stage_plan, RuntimeStage::ActiveProbeEmit)
                         .expect("HK runtime stage is declared in canonical plan");
-                    let probe_mean_accuracy = if probe_outcomes.is_empty() {
-                        None
-                    } else {
+                    if !probe_outcomes.is_empty() {
                         let sum: f64 = probe_outcomes.iter().map(|o| o.mean_accuracy).sum();
-                        Some(sum / probe_outcomes.len() as f64)
-                    };
+                        probe_mean_accuracy = Some(sum / probe_outcomes.len() as f64);
+                    }
                     if !probe_forecasts.is_empty() || !probe_outcomes.is_empty() {
                         let acc_str = probe_mean_accuracy
                             .map(|a| format!("{:.2}", a))
@@ -2702,6 +2798,14 @@ pub async fn run() {
                     if let Err(e) = eden::pipeline::cluster_sync::write_events("hk", &cs_events) {
                         eprintln!("[cluster_sync] hk write failed: {}", e);
                     }
+                    {
+                        let mut graph = runtime.perception_graph.write().unwrap();
+                        eden::pipeline::cluster_sync::apply_to_perception_graph(
+                            &cs_events,
+                            &mut graph,
+                            tick as u64,
+                        );
+                    }
                 }
                 // Structural contrast (spatial derivative along master KG).
                 // Symbol vs master-KG-neighbor mean activation per NodeKind.
@@ -2750,6 +2854,14 @@ pub async fn run() {
                             &contrast_events,
                         ) {
                             eprintln!("[contrast] hk write failed: {}", e);
+                        }
+                        {
+                            let mut graph = runtime.perception_graph.write().unwrap();
+                            eden::pipeline::structural_contrast::apply_to_perception_graph(
+                                &contrast_events,
+                                &mut graph,
+                                tick as u64,
+                            );
                         }
                     }
                 }
@@ -3607,6 +3719,7 @@ pub async fn run() {
                     .previous_agent_scoreboard
                     .as_ref(),
                 hk_momentum: Some(&hk_momentum),
+                perception_graph: &runtime.perception_graph,
             });
             // Y#7 — feed this tick's perception event counts into the
             // market wave tracker and append any accelerating / peaking /

@@ -42,7 +42,6 @@ pub mod perception;
 pub mod predicate_engine;
 pub mod prediction_calibration;
 pub mod pressure;
-pub mod signature_replay;
 pub mod pressure_events;
 pub mod raw_events;
 pub mod raw_expectation;
@@ -51,6 +50,7 @@ pub mod regime_classifier;
 pub mod regime_fingerprint;
 pub mod residual;
 pub mod runtime_stage_trace;
+pub mod signature_replay;
 // sector_alignment_modulation deleted — rule-based direction modulation
 pub mod action_promotion;
 pub mod active_probe;

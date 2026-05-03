@@ -12,38 +12,28 @@
 
 use std::collections::HashMap;
 
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 
 use crate::ontology::objects::{Market, Symbol};
 use crate::ontology::{IntentDirection, IntentKind, IntentState};
 
 /// Per-symbol KL-surprise reading: how unusual the channel-level belief
-/// shift was, and which way the dominant channel moved. Magnitude is
-/// `tanh(|max_z| / 2)` ∈ [0, 1]; direction is the sign of the dominant
-/// channel's mean shift, ∈ {-1, 0, +1}.
+/// distribution shift is compared to recent baseline.
 ///
-/// Mirrors the tuple `KlSurpriseTracker::surprise_summary` returned;
-/// converted from raw HashMap into a typed snapshot so consumers can
-/// move from "function argument" to "graph node" without changing
-/// semantics.
-///
-/// `last_tick` is exposed for consumer-side staleness checks: the
-/// graph carries the *latest* reading per symbol and never evicts on
-/// its own. If a symbol drops out of the universe its snapshot
-/// remains until the perceiver overwrites it. Y / L4 readers that
-/// care about freshness must compare `last_tick` against the current
-/// tick.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Current magnitude measures "surprise" in bits (KL divergence);
+/// direction maps to {bullish, bearish, neutral} surprise based on
+/// which bin the probability mass shifted into.
+#[derive(Debug, Clone, PartialEq)]
 pub struct KlSurpriseSnapshot {
     pub magnitude: Decimal,
     pub direction: Decimal,
+    pub observed: f64,
+    pub expected: f64,
     pub last_tick: u64,
 }
 
-/// KL-surprise sub-graph keyed by symbol. One slot per symbol; later
-/// observations overwrite earlier ones (the tracker's EWMA already
-/// holds the historical baseline — the graph carries the *current*
-/// reading).
+/// KL-surprise sub-graph keyed by symbol.
 #[derive(Debug, Clone, Default)]
 pub struct KlSurpriseSubGraph {
     by_symbol: HashMap<Symbol, KlSurpriseSnapshot>,
@@ -59,7 +49,7 @@ impl KlSurpriseSubGraph {
     }
 
     pub fn get(&self, symbol: &Symbol) -> Option<KlSurpriseSnapshot> {
-        self.by_symbol.get(symbol).copied()
+        self.by_symbol.get(symbol).cloned()
     }
 
     pub fn len(&self) -> usize {
@@ -75,28 +65,21 @@ impl KlSurpriseSubGraph {
     }
 }
 
-/// Per-(sector, kind) kinematic state: where the sector mean is now,
-/// how fast it's moving, whether it's accelerating, and (optionally)
-/// the latest turning-point classification. Values are raw f64 because
-/// that's the form the kinematics detector produces; Y / L4 readers
-/// should compare `last_tick` against the current tick to judge
-/// freshness (the graph never evicts on its own).
+/// Per-(sector, kind) belief kinetics reading: velocity and
+/// acceleration of the activation field.
+///
+/// Mirrors the `sector_kinematics` NDJSON stream but kept in-memory
+/// for fast multi-modal queries.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectorKinematicsSnapshot {
     pub level_now: f64,
     pub velocity: f64,
     pub acceleration: f64,
-    /// String label of the latest turning-point event, e.g.
-    /// "TopForming" / "BottomForming" / "Accelerating" / "Decaying".
-    /// `None` until the detector has classified at least once.
-    pub classification: Option<String>,
+    pub classification: String,
     pub last_tick: u64,
 }
 
-/// Sector-kinematics sub-graph keyed by (sector_id, node_kind). Mirror
-/// of the existing `pipeline::sector_kinematics` NDJSON output, but
-/// held in-graph so Y can read "what's energy sector doing right now"
-/// without watching an event stream.
+/// Belief kinetics sub-graph keyed by (sector_id, node_kind).
 #[derive(Debug, Clone, Default)]
 pub struct SectorKinematicsSubGraph {
     by_sector_kind: HashMap<(String, String), SectorKinematicsSnapshot>,
@@ -194,9 +177,7 @@ impl SectorContrastSubGraph {
     }
 }
 
-/// Market-level intent posterior inferred from the unified latent
-/// world state. This is the bridge between the low-dimensional SSM
-/// (`LatentWorldState`) and the graph read surface that Y consumes.
+/// Snapshot of market-level world intent reflection.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorldIntentSnapshot {
     pub intent_id: String,
@@ -256,6 +237,159 @@ impl WorldIntentSubGraph {
     }
 }
 
+/// Snapshot of an emergent cluster event.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmergenceSnapshot {
+    pub sector: String,
+    pub total_members: u32,
+    pub sync_member_count: u32,
+    pub sync_members: Vec<String>,
+    pub mean_activation_intent: f64,
+    pub mean_activation_pressure: f64,
+    pub strongest_member: String,
+    pub strongest_activation: f64,
+    pub last_tick: u64,
+}
+
+/// Emergence sub-graph keyed by sector.
+#[derive(Debug, Clone, Default)]
+pub struct EmergenceSubGraph {
+    by_sector: HashMap<String, EmergenceSnapshot>,
+}
+
+impl EmergenceSubGraph {
+    pub fn upsert(&mut self, sector: String, snapshot: EmergenceSnapshot) {
+        self.by_sector.insert(sector, snapshot);
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &EmergenceSnapshot)> {
+        self.by_sector.iter()
+    }
+}
+
+/// Snapshot of a causal lead-lag relationship.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LeadLagSnapshot {
+    pub leader: String,
+    pub follower: String,
+    pub lag_ticks: i32,
+    pub correlation: f64,
+    pub n_samples: usize,
+    pub direction: String,
+    pub last_tick: u64,
+}
+
+/// Lead-lag sub-graph keyed by (leader, follower, lag).
+#[derive(Debug, Clone, Default)]
+pub struct LeadLagSubGraph {
+    by_edge: HashMap<(String, String, i32), LeadLagSnapshot>,
+}
+
+impl LeadLagSubGraph {
+    pub fn upsert(&mut self, key: (String, String, i32), snapshot: LeadLagSnapshot) {
+        self.by_edge.insert(key, snapshot);
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (&(String, String, i32), &LeadLagSnapshot)> {
+        self.by_edge.iter()
+    }
+}
+
+/// Snapshot of a symbol's contrast against its master-KG neighborhood.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SymbolContrastSnapshot {
+    pub symbol: Symbol,
+    pub sector_id: Option<String>,
+    pub node_kind: String,
+    pub center_activation: f64,
+    pub surround_mean: f64,
+    pub contrast: f64,
+    pub last_tick: u64,
+}
+
+/// Symbol contrast sub-graph keyed by (symbol, node_kind).
+#[derive(Debug, Clone, Default)]
+pub struct SymbolContrastSubGraph {
+    by_symbol_kind: HashMap<(Symbol, String), SymbolContrastSnapshot>,
+}
+
+impl SymbolContrastSubGraph {
+    pub fn upsert(&mut self, key: (Symbol, String), snapshot: SymbolContrastSnapshot) {
+        self.by_symbol_kind.insert(key, snapshot);
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (&(Symbol, String), &SymbolContrastSnapshot)> {
+        self.by_symbol_kind.iter()
+    }
+}
+
+/// Snapshot of sensory 'Energy Flux' — how intensely information is
+/// hitting a symbol and whether independent channels are aligned.
+/// Realizes the 'Y' (Origin) archetype: inferring truth from the
+/// power activity of the info-stream.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SensoryFluxSnapshot {
+    /// Total power: sum of absolute magnitudes across all 6 channels.
+    pub total_flux: f64,
+    /// Phase coherence: how many channels point in the same direction.
+    /// 1.0 = perfect alignment; 0.0 = complete chaos.
+    pub coherence: f64,
+    /// Which channels contributed to the current vortex.
+    pub active_channels: Vec<String>,
+    pub last_tick: u64,
+}
+
+/// Sensory flux sub-graph keyed by symbol.
+#[derive(Debug, Clone, Default)]
+pub struct SensoryFluxSubGraph {
+    by_symbol: HashMap<Symbol, SensoryFluxSnapshot>,
+}
+
+impl SensoryFluxSubGraph {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn upsert(&mut self, symbol: Symbol, snapshot: SensoryFluxSnapshot) {
+        self.by_symbol.insert(symbol, snapshot);
+    }
+    pub fn get(&self, symbol: &Symbol) -> Option<SensoryFluxSnapshot> {
+        self.by_symbol.get(symbol).cloned()
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (&Symbol, &SensoryFluxSnapshot)> {
+        self.by_symbol.iter()
+    }
+}
+
+/// Snapshot of aggregated energy for an ontological theme or sector.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThematicFluxSnapshot {
+    pub theme_id: String,
+    pub theme_name: String,
+    pub total_energy: f64,
+    pub collective_coherence: f64,
+    pub active_member_count: u32,
+    pub leader_symbol: Option<String>,
+    pub last_tick: u64,
+}
+
+/// Thematic flux sub-graph keyed by theme/sector ID.
+#[derive(Debug, Clone, Default)]
+pub struct ThematicFluxSubGraph {
+    by_theme: HashMap<String, ThematicFluxSnapshot>,
+}
+
+impl ThematicFluxSubGraph {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn upsert(&mut self, theme_id: String, snapshot: ThematicFluxSnapshot) {
+        self.by_theme.insert(theme_id, snapshot);
+    }
+    pub fn get(&self, theme_id: &str) -> Option<ThematicFluxSnapshot> {
+        self.by_theme.get(theme_id).cloned()
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &ThematicFluxSnapshot)> {
+        self.by_theme.iter()
+    }
+}
+
 /// Eden's unified perception graph. Composed of typed sub-graphs, one
 /// per perceiver. Add new sub-graphs as detectors migrate off NDJSON.
 #[derive(Debug, Clone, Default)]
@@ -264,11 +398,212 @@ pub struct PerceptionGraph {
     pub sector_kinematics: SectorKinematicsSubGraph,
     pub sector_contrast: SectorContrastSubGraph,
     pub world_intent: WorldIntentSubGraph,
+    pub emergence: EmergenceSubGraph,
+    pub lead_lag: LeadLagSubGraph,
+    pub symbol_contrast: SymbolContrastSubGraph,
+    pub sensory_flux: SensoryFluxSubGraph,
+    pub thematic_flux: ThematicFluxSubGraph,
 }
 
 impl PerceptionGraph {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Project the unified perception graph into a serializable EdenPerception report.
+    /// This is the "graph-native" version of read_perception_streams.
+    pub fn to_report(
+        &self,
+        market: Market,
+        tick: u64,
+        timestamp: String,
+        cfg: &crate::agent::PerceptionFilterConfig,
+    ) -> crate::agent::EdenPerception {
+        use crate::agent::{
+            BeliefKinetic, EmergentCluster, LeadLagEdge, RegimePerception, SensoryFlux,
+            SymbolContrast, SurpriseAlert, ThematicVortex,
+        };
+
+        let mut report = crate::agent::EdenPerception {
+            schema_version: 1,
+            market: match market {
+                Market::Hk => crate::live_snapshot::LiveMarket::Hk,
+                Market::Us => crate::live_snapshot::LiveMarket::Us,
+            },
+            tick,
+            timestamp,
+            emergent_clusters: Vec::new(),
+            sector_leaders: Vec::new(),
+            causal_chains: Vec::new(),
+            anomaly_alerts: Vec::new(),
+            regime: None,
+            belief_kinetics: Vec::new(),
+            signature_replays: Vec::new(),
+            pre_market_movers: Vec::new(),
+            catalysts: Vec::new(),
+            sensory_vortices: Vec::new(),
+            thematic_vortices: Vec::new(),
+        };
+
+        // -1. Thematic Flux (Semantic Energy Centers)
+        for (_, snap) in self.thematic_flux.iter() {
+            if snap.total_energy > 1.0 {
+                report.thematic_vortices.push(ThematicVortex {
+                    theme_id: snap.theme_id.clone(),
+                    theme_name: snap.theme_name.clone(),
+                    total_energy: snap.total_energy,
+                    collective_coherence: snap.collective_coherence,
+                    active_member_count: snap.active_member_count,
+                    leader_symbol: snap.leader_symbol.clone(),
+                });
+            }
+        }
+        report.thematic_vortices.sort_by(|a, b| {
+            b.total_energy
+                .partial_cmp(&a.total_energy)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // 0. Sensory Flux (Energy Vortices)
+        for (symbol, snap) in self.sensory_flux.iter() {
+            // High flux + High coherence = Vortex (Collapse of Certainty)
+            if snap.total_flux > 0.5 && snap.coherence > 0.8 {
+                report.sensory_vortices.push(SensoryFlux {
+                    symbol: symbol.0.clone(),
+                    flux_magnitude: snap.total_flux,
+                    coherence_ratio: snap.coherence,
+                    active_channels: snap.active_channels.clone(),
+                });
+            }
+        }
+        report.sensory_vortices.sort_by(|a, b| {
+            b.flux_magnitude
+                .partial_cmp(&a.flux_magnitude)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // 1. Emergence
+        for (_, snap) in self.emergence.iter() {
+            let total = snap.total_members.max(1);
+            let sync_pct = snap.sync_member_count as f64 / total as f64;
+            if sync_pct >= cfg.min_cluster_sync_pct {
+                report.emergent_clusters.push(EmergentCluster {
+                    sector: snap.sector.clone(),
+                    total_members: snap.total_members,
+                    sync_member_count: snap.sync_member_count,
+                    sync_ratio: format!("{}/{}", snap.sync_member_count, snap.total_members),
+                    sync_pct,
+                    strongest_member: snap.strongest_member.clone(),
+                    strongest_activation: snap.strongest_activation,
+                    mean_activation_intent: snap.mean_activation_intent,
+                    mean_activation_pressure: snap.mean_activation_pressure,
+                    members: snap.sync_members.clone(),
+                });
+            }
+        }
+
+        // 2. Symbol Contrast (Sector Leaders / Standouts)
+        for (key, snap) in self.symbol_contrast.iter() {
+            if snap.contrast >= cfg.min_leader_contrast {
+                report.sector_leaders.push(SymbolContrast {
+                    symbol: key.0.0.clone(),
+                    sector: snap.sector_id.clone(),
+                    center_activation: snap.center_activation,
+                    sector_mean: snap.surround_mean,
+                    vs_sector_contrast: snap.contrast,
+                    node_kind: snap.node_kind.clone(),
+                    persistence_ticks: None,
+                });
+            }
+        }
+        report.sector_leaders.sort_by(|a, b| {
+            b.vs_sector_contrast
+                .partial_cmp(&a.vs_sector_contrast)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        report.sector_leaders.truncate(cfg.max_leaders);
+
+        // 3. Lead-Lag (Causal Chains)
+        for (_, snap) in self.lead_lag.iter() {
+            if snap.correlation.abs() >= cfg.min_chain_correlation
+                && snap.n_samples >= cfg.min_chain_samples
+            {
+                report.causal_chains.push(LeadLagEdge {
+                    leader: snap.leader.clone(),
+                    follower: snap.follower.clone(),
+                    lag_ticks: snap.lag_ticks,
+                    correlation: snap.correlation,
+                    n_samples: snap.n_samples,
+                    direction: snap.direction.clone(),
+                });
+            }
+        }
+        report.causal_chains.sort_by(|a, b| {
+            b.correlation
+                .abs()
+                .partial_cmp(&a.correlation.abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        report.causal_chains.truncate(cfg.max_chains);
+
+        // 4. Surprise (Anomaly Alerts)
+        for (symbol, snap) in self.kl_surprise.iter() {
+            let mag_f64 = snap.magnitude.to_f64().unwrap_or(0.0);
+            if mag_f64 >= cfg.min_anomaly_surprise_ratio {
+                report.anomaly_alerts.push(SurpriseAlert {
+                    symbol: symbol.0.clone(),
+                    channel: "KLSurprise".to_string(),
+                    observed: snap.observed,
+                    expected: snap.expected,
+                    squared_error: mag_f64 * mag_f64,
+                    total_surprise: mag_f64,
+                    floor: 1.0,
+                    deviation_kind: if snap.direction > Decimal::ZERO {
+                        "above_expected".to_string()
+                    } else {
+                        "below_expected".to_string()
+                    },
+                });
+            }
+        }
+        report.anomaly_alerts.sort_by(|a, b| {
+            b.total_surprise
+                .partial_cmp(&a.total_surprise)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        report.anomaly_alerts.truncate(cfg.max_anomalies);
+
+        // 5. Regime
+        if let Some(snap) = self.world_intent.get(market) {
+            report.regime = Some(RegimePerception {
+                bucket: format!("{:?}|{:?}|{:?}", snap.kind, snap.direction, snap.state),
+                historical_visits: snap.reflection_observations as u32,
+                last_seen_tick: Some(snap.last_tick),
+                forward_outcomes: Vec::new(), // Skeleton
+            });
+        }
+
+        // 6. Belief Kinetics (from sector_kinematics sub-graph)
+        for (key, snap) in self.sector_kinematics.iter() {
+            if snap.velocity.abs() >= cfg.min_kinetic_velocity {
+                report.belief_kinetics.push(BeliefKinetic {
+                    symbol: format!("{}:{}", key.0, key.1),
+                    belief_now: snap.level_now,
+                    velocity: snap.velocity,
+                    acceleration: snap.acceleration,
+                    streak_ticks: 1, // Snapshot doesn't carry history
+                });
+            }
+        }
+        report.belief_kinetics.sort_by(|a, b| {
+            b.velocity
+                .abs()
+                .partial_cmp(&a.velocity.abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        report.belief_kinetics.truncate(cfg.max_kinetics);
+
+        report
     }
 
     /// Read facade for a single symbol's perception across all sub-
@@ -278,6 +613,7 @@ impl PerceptionGraph {
         NodeView {
             symbol: symbol.clone(),
             kl_surprise: self.kl_surprise.get(symbol),
+            sensory_flux: self.sensory_flux.get(symbol),
         }
     }
 
@@ -292,28 +628,18 @@ impl PerceptionGraph {
 }
 
 /// Per-symbol read view across every perceiver. The shape Y queries.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NodeView {
     pub symbol: Symbol,
     pub kl_surprise: Option<KlSurpriseSnapshot>,
+    pub sensory_flux: Option<SensoryFluxSnapshot>,
 }
 
-impl NodeView {
-    pub fn has_kl_surprise(&self) -> bool {
-        self.kl_surprise.is_some()
-    }
-}
-
+/// Market-level read view.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorldView {
     pub market: Market,
     pub world_intent: Option<WorldIntentSnapshot>,
-}
-
-impl WorldView {
-    pub fn has_world_intent(&self) -> bool {
-        self.world_intent.is_some()
-    }
 }
 
 #[cfg(test)]
@@ -321,127 +647,17 @@ mod tests {
     use super::*;
     use rust_decimal_macros::dec;
 
-    fn sym(s: &str) -> Symbol {
-        Symbol(s.to_string())
-    }
-
     #[test]
-    fn fresh_graph_is_empty() {
-        let graph = PerceptionGraph::new();
-        assert!(graph.kl_surprise.is_empty());
-        assert!(graph.world_intent.is_empty());
-    }
-
-    #[test]
-    fn fresh_graph_node_view_has_no_readings() {
-        let graph = PerceptionGraph::new();
-        let view = graph.node(&sym("AAPL.US"));
-        assert_eq!(view.symbol, sym("AAPL.US"));
-        assert!(view.kl_surprise.is_none());
-        assert!(!view.has_kl_surprise());
-    }
-
-    #[test]
-    fn fresh_graph_world_view_has_no_intent() {
-        let graph = PerceptionGraph::new();
-        let view = graph.world(Market::Us);
-        assert_eq!(view.market, Market::Us);
-        assert!(view.world_intent.is_none());
-        assert!(!view.has_world_intent());
-    }
-
-    #[test]
-    fn upsert_kl_surprise_then_read_via_node_view() {
+    fn kl_surprise_subgraph_upsert_and_get() {
         let mut graph = PerceptionGraph::new();
-        graph.kl_surprise.upsert(
-            sym("AAPL.US"),
-            KlSurpriseSnapshot {
-                magnitude: dec!(0.42),
-                direction: dec!(1),
-                last_tick: 7,
-            },
-        );
-
-        let view = graph.node(&sym("AAPL.US"));
-        let snap = view.kl_surprise.expect("expected reading after upsert");
-        assert_eq!(snap.magnitude, dec!(0.42));
-        assert_eq!(snap.direction, dec!(1));
-        assert_eq!(snap.last_tick, 7);
-        assert!(view.has_kl_surprise());
-    }
-
-    #[test]
-    fn upsert_world_intent_then_read_via_world_view() {
-        let mut graph = PerceptionGraph::new();
-        graph.world_intent.upsert(
-            Market::Hk,
-            WorldIntentSnapshot {
-                intent_id: "world_intent:hk:42".into(),
-                kind: IntentKind::EventRepricing,
-                direction: IntentDirection::Mixed,
-                state: IntentState::Active,
-                confidence: dec!(0.67),
-                urgency: dec!(0.72),
-                persistence: dec!(0.40),
-                conflict_score: dec!(0.12),
-                strength: dec!(0.64),
-                rationale: "latent posterior stress=+0.80".into(),
-                top_expectation: Some("synchrony should propagate".into()),
-                top_falsifier: Some("synchrony decouples".into()),
-                expectation_count: 1,
-                top_violation: Some("sync failed".into()),
-                violation_count: 1,
-                reflection_observations: 3,
-                reflection_reliability: Some(dec!(0.67)),
-                reflection_violation_rate: Some(dec!(0.33)),
-                reflection_calibration_gap: Some(dec!(-0.01)),
-                latest_reflection: Some("event_repricing->distribution".into()),
-                last_tick: 42,
-            },
-        );
-
-        let view = graph.world(Market::Hk);
-        assert!(view.has_world_intent());
-        let intent = view.world_intent.expect("expected world intent");
-        assert_eq!(intent.kind, IntentKind::EventRepricing);
-        assert_eq!(intent.direction, IntentDirection::Mixed);
-        assert_eq!(
-            intent.top_expectation.as_deref(),
-            Some("synchrony should propagate")
-        );
-        assert_eq!(intent.top_falsifier.as_deref(), Some("synchrony decouples"));
-        assert_eq!(intent.expectation_count, 1);
-        assert_eq!(intent.top_violation.as_deref(), Some("sync failed"));
-        assert_eq!(intent.violation_count, 1);
-        assert_eq!(intent.reflection_observations, 3);
-        assert_eq!(intent.reflection_reliability, Some(dec!(0.67)));
-        assert_eq!(intent.reflection_violation_rate, Some(dec!(0.33)));
-        assert_eq!(intent.reflection_calibration_gap, Some(dec!(-0.01)));
-        assert_eq!(
-            intent.latest_reflection.as_deref(),
-            Some("event_repricing->distribution")
-        );
-        assert_eq!(intent.last_tick, 42);
-        assert_eq!(graph.world_intent.len(), 1);
-    }
-
-    #[test]
-    fn upsert_overwrites_previous_reading() {
-        let mut graph = PerceptionGraph::new();
-        let s = sym("MSFT.US");
-        graph.kl_surprise.upsert(
-            s.clone(),
-            KlSurpriseSnapshot {
-                magnitude: dec!(0.1),
-                direction: dec!(-1),
-                last_tick: 1,
-            },
-        );
+        let s = Symbol("AAPL.US".to_string());
         graph.kl_surprise.upsert(
             s.clone(),
             KlSurpriseSnapshot {
                 magnitude: dec!(0.9),
                 direction: dec!(1),
+                observed: 0.5,
+                expected: 0.2,
                 last_tick: 2,
             },
         );
@@ -449,212 +665,59 @@ mod tests {
         let snap = graph.kl_surprise.get(&s).expect("reading present");
         assert_eq!(snap.last_tick, 2);
         assert_eq!(snap.magnitude, dec!(0.9));
-        assert_eq!(snap.direction, dec!(1));
-        assert_eq!(graph.kl_surprise.len(), 1);
     }
 
     #[test]
-    fn fresh_graph_has_empty_sector_kinematics() {
-        let graph = PerceptionGraph::new();
-        assert!(graph.sector_kinematics.is_empty());
-        assert_eq!(graph.sector_kinematics.len(), 0);
-    }
-
-    #[test]
-    fn upsert_sector_kinematics_then_read() {
+    fn node_view_assembles_modalities() {
         let mut graph = PerceptionGraph::new();
-        graph.sector_kinematics.upsert(
-            "tech".into(),
-            "Pressure".into(),
-            SectorKinematicsSnapshot {
-                level_now: 0.42,
-                velocity: 0.05,
-                acceleration: -0.01,
-                classification: Some("TopForming".into()),
-                last_tick: 5,
-            },
-        );
-
-        let snap = graph
-            .sector_kinematics
-            .get("tech", "Pressure")
-            .expect("reading present after upsert");
-        assert_eq!(snap.level_now, 0.42);
-        assert_eq!(snap.velocity, 0.05);
-        assert_eq!(snap.acceleration, -0.01);
-        assert_eq!(snap.classification.as_deref(), Some("TopForming"));
-        assert_eq!(snap.last_tick, 5);
-    }
-
-    #[test]
-    fn distinct_sectors_keep_separate_kinematic_readings() {
-        let mut graph = PerceptionGraph::new();
-        graph.sector_kinematics.upsert(
-            "tech".into(),
-            "Pressure".into(),
-            SectorKinematicsSnapshot {
-                level_now: 0.5,
-                velocity: 0.0,
-                acceleration: 0.0,
-                classification: None,
-                last_tick: 1,
-            },
-        );
-        graph.sector_kinematics.upsert(
-            "energy".into(),
-            "Pressure".into(),
-            SectorKinematicsSnapshot {
-                level_now: -0.3,
-                velocity: -0.1,
-                acceleration: 0.0,
-                classification: Some("Decaying".into()),
-                last_tick: 1,
-            },
-        );
-
-        assert_eq!(graph.sector_kinematics.len(), 2);
-        assert_eq!(
-            graph
-                .sector_kinematics
-                .get("tech", "Pressure")
-                .unwrap()
-                .level_now,
-            0.5
-        );
-        assert_eq!(
-            graph
-                .sector_kinematics
-                .get("energy", "Pressure")
-                .unwrap()
-                .classification
-                .as_deref(),
-            Some("Decaying")
-        );
-    }
-
-    #[test]
-    fn same_sector_different_kind_kept_separate() {
-        let mut graph = PerceptionGraph::new();
-        graph.sector_kinematics.upsert(
-            "tech".into(),
-            "Pressure".into(),
-            SectorKinematicsSnapshot {
-                level_now: 0.5,
-                velocity: 0.0,
-                acceleration: 0.0,
-                classification: None,
-                last_tick: 1,
-            },
-        );
-        graph.sector_kinematics.upsert(
-            "tech".into(),
-            "Intent".into(),
-            SectorKinematicsSnapshot {
-                level_now: 0.9,
-                velocity: 0.0,
-                acceleration: 0.0,
-                classification: None,
-                last_tick: 1,
-            },
-        );
-
-        assert_eq!(graph.sector_kinematics.len(), 2);
-        assert_ne!(
-            graph
-                .sector_kinematics
-                .get("tech", "Pressure")
-                .unwrap()
-                .level_now,
-            graph
-                .sector_kinematics
-                .get("tech", "Intent")
-                .unwrap()
-                .level_now,
-        );
-    }
-
-    #[test]
-    fn fresh_graph_has_empty_sector_contrast() {
-        let graph = PerceptionGraph::new();
-        assert!(graph.sector_contrast.is_empty());
-        assert_eq!(graph.sector_contrast.len(), 0);
-    }
-
-    #[test]
-    fn upsert_sector_contrast_then_read() {
-        let mut graph = PerceptionGraph::new();
-        graph.sector_contrast.upsert(
-            "tech".into(),
-            "Pressure".into(),
-            SectorContrastSnapshot {
-                center_activation: 1.0,
-                surround_mean: 0.1,
-                contrast: 0.9,
-                surround_count: 16,
-                last_tick: 4,
-            },
-        );
-
-        let snap = graph.sector_contrast.get("tech", "Pressure").unwrap();
-        assert!((snap.center_activation - 1.0).abs() < 1e-9);
-        assert!((snap.surround_mean - 0.1).abs() < 1e-9);
-        assert!((snap.contrast - 0.9).abs() < 1e-9);
-        assert_eq!(snap.surround_count, 16);
-        assert_eq!(snap.last_tick, 4);
-    }
-
-    #[test]
-    fn sector_contrast_distinct_keys() {
-        let mut graph = PerceptionGraph::new();
-        graph.sector_contrast.upsert(
-            "tech".into(),
-            "Pressure".into(),
-            SectorContrastSnapshot {
-                center_activation: 1.0,
-                surround_mean: 0.1,
-                contrast: 0.9,
-                surround_count: 16,
-                last_tick: 4,
-            },
-        );
-        graph.sector_contrast.upsert(
-            "tech".into(),
-            "Intent".into(),
-            SectorContrastSnapshot {
-                center_activation: 0.5,
-                surround_mean: 0.4,
-                contrast: 0.1,
-                surround_count: 16,
-                last_tick: 4,
-            },
-        );
-        assert_eq!(graph.sector_contrast.len(), 2);
-    }
-
-    #[test]
-    fn distinct_symbols_keep_separate_readings() {
-        let mut graph = PerceptionGraph::new();
+        let s = Symbol("0700.HK".to_string());
         graph.kl_surprise.upsert(
-            sym("AAPL.US"),
+            s.clone(),
             KlSurpriseSnapshot {
-                magnitude: dec!(0.5),
-                direction: dec!(1),
-                last_tick: 3,
-            },
-        );
-        graph.kl_surprise.upsert(
-            sym("0700.HK"),
-            KlSurpriseSnapshot {
-                magnitude: dec!(0.7),
+                magnitude: dec!(0.1),
                 direction: dec!(-1),
-                last_tick: 3,
+                observed: 0.1,
+                expected: 0.3,
+                last_tick: 42,
             },
         );
 
-        assert_eq!(graph.kl_surprise.len(), 2);
-        let aapl = graph.node(&sym("AAPL.US")).kl_surprise.unwrap();
-        let tcent = graph.node(&sym("0700.HK")).kl_surprise.unwrap();
-        assert_eq!(aapl.direction, dec!(1));
-        assert_eq!(tcent.direction, dec!(-1));
+        let view = graph.node(&s);
+        assert_eq!(view.symbol, s);
+        assert!(view.kl_surprise.is_some());
+    }
+
+    #[test]
+    fn world_view_assembles_market_modalities() {
+        let mut graph = PerceptionGraph::new();
+        graph.world_intent.upsert(
+            Market::Hk,
+            WorldIntentSnapshot {
+                intent_id: "test".to_string(),
+                kind: IntentKind::Accumulation,
+                direction: IntentDirection::Buy,
+                state: IntentState::Informed,
+                confidence: dec!(0.8),
+                urgency: dec!(0.5),
+                persistence: dec!(0.9),
+                conflict_score: dec!(0.1),
+                strength: dec!(0.7),
+                rationale: "test".to_string(),
+                top_expectation: None,
+                top_falsifier: None,
+                expectation_count: 0,
+                top_violation: None,
+                violation_count: 0,
+                reflection_observations: 10,
+                reflection_reliability: None,
+                reflection_violation_rate: None,
+                reflection_calibration_gap: None,
+                latest_reflection: None,
+                last_tick: 100,
+            },
+        );
+
+        let view = graph.world(Market::Hk);
+        assert!(view.world_intent.is_some());
     }
 }

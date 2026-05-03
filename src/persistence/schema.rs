@@ -1040,9 +1040,20 @@ const MIGRATION_042: &str = r#"
 REMOVE FIELD polymarket_priors ON TABLE tick_record;
 "#;
 
-pub const LATEST_SCHEMA_VERSION: u32 = 42;
+// MIGRATION_043: tick_archive used to be keyed only by tick_number, which
+// lets HK and US overwrite each other when they share data/eden.db. Add an
+// explicit market field and replace the single-field unique index with a
+// composite market/tick index.
+const MIGRATION_043: &str = r#"
+DEFINE FIELD IF NOT EXISTS market ON tick_archive TYPE string;
+UPDATE tick_archive SET market = 'unknown' WHERE market = NONE;
+REMOVE INDEX idx_tick_archive_tick ON tick_archive;
+DEFINE INDEX idx_tick_archive_market_tick ON tick_archive FIELDS market, tick_number UNIQUE;
+"#;
 
-const MIGRATIONS: [SchemaMigration; 42] = [
+pub const LATEST_SCHEMA_VERSION: u32 = 43;
+
+const MIGRATIONS: [SchemaMigration; 43] = [
     SchemaMigration {
         version: 1,
         name: "bootstrap_core_schema",
@@ -1252,6 +1263,11 @@ const MIGRATIONS: [SchemaMigration; 42] = [
         version: 42,
         name: "remove_polymarket_priors",
         statements: MIGRATION_042,
+    },
+    SchemaMigration {
+        version: 43,
+        name: "market_scoped_tick_archive",
+        statements: MIGRATION_043,
     },
 ];
 

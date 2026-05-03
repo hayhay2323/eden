@@ -288,6 +288,7 @@ fn derive_world_state(
     WorldStateSnapshot {
         timestamp: reasoning.timestamp,
         entities,
+        world_intents: vec![],
         perceptual_states: vec![],
         vortices,
     }

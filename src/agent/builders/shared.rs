@@ -549,6 +549,55 @@ pub(super) fn build_hk_depth_state(
     }
 }
 
+pub(super) fn build_us_structure_state(
+    symbol: &str,
+    store: &ObjectStore,
+    setup: Option<&TacticalSetup>,
+    hypothesis: Option<&Hypothesis>,
+    status: Option<String>,
+    age_ticks: Option<u64>,
+    status_streak: Option<u64>,
+    causal_leader: Option<String>,
+    live_case: Option<&crate::live_snapshot::LiveTacticalCase>,
+) -> Option<AgentStructureState> {
+    let setup = setup?;
+    Some(AgentStructureState {
+        symbol: symbol.to_string(),
+        sector: store
+            .sector_name_for_symbol(&Symbol(symbol.to_string()))
+            .map(str::to_string),
+        setup_id: Some(setup.setup_id.clone()),
+        title: setup.title.clone(),
+        action: setup.action.to_string(),
+        status,
+        age_ticks,
+        status_streak,
+        confidence: setup.confidence,
+        confidence_change: None,
+        confidence_gap: Some(setup.confidence_gap),
+        transition_reason: None,
+        contest_state: None,
+        current_leader: causal_leader,
+        leader_streak: None,
+        leader_transition_summary: None,
+        thesis_family: hypothesis
+            .map(|item| item.family_label.clone())
+            .or_else(|| setup_family(setup)),
+        action_expectancies: crate::agent::AgentActionExpectancies::default(),
+        expected_net_alpha: None,
+        alpha_horizon: Some(alpha_horizon_label(
+            setup.horizon.primary.to_legacy_string(),
+            age_ticks.unwrap_or(0),
+        )),
+        invalidation_rule: primary_invalidation_rule(
+            hypothesis,
+            None,
+            Some(setup),
+        )
+        .or_else(|| live_case.and_then(|item| item.multi_horizon_gate_reason.clone())),
+    })
+}
+
 pub(super) fn build_hk_structure_state(
     symbol: &str,
     store: &ObjectStore,

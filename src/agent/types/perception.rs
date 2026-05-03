@@ -45,6 +45,40 @@ pub struct EdenPerception {
     /// Skeleton field — reader returns empty until external feeds wired.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub catalysts: Vec<Catalyst>,
+    /// Energy Vortices: regions of the graph where sensory flux (power)
+    /// and phase coherence (alignment) are both high. Realizes the 'Y'
+    /// archetype: finding truth in the electrical activity of the bus.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sensory_vortices: Vec<SensoryFlux>,
+    /// Thematic Vortices: aggregated energy centers across sectors or
+    /// themes. Projected from individual symbol fluxes onto the
+    /// ontological hierarchy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thematic_vortices: Vec<ThematicVortex>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ThematicVortex {
+    pub theme_id: String,
+    pub theme_name: String,
+    /// Total aggregated energy (flux) across all active members.
+    pub total_energy: f64,
+    /// Overall coherence of the theme.
+    pub collective_coherence: f64,
+    pub active_member_count: u32,
+    /// Top contributing symbol in this theme.
+    pub leader_symbol: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SensoryFlux {
+    pub symbol: String,
+    /// Sum of absolute magnitudes across all channels.
+    pub flux_magnitude: f64,
+    /// 1.0 = all channels agree; 0.0 = complete disagreement.
+    pub coherence_ratio: f64,
+    /// Channels currently resonant in this vortex.
+    pub active_channels: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

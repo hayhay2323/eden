@@ -134,8 +134,7 @@ pub fn realize_predictions(
     // Tail-read recent predictions and find the one made
     // `target_tick_predicted_at`. Buffer 1 MB is enough for ~1000 ticks
     // worth of predictions even at 500 symbols/tick.
-    let raw: Vec<PredictionRecord> =
-        crate::live_snapshot::tail_records(path, 4 * 1024 * 1024, 200);
+    let raw: Vec<PredictionRecord> = crate::live_snapshot::tail_records(path, 4 * 1024 * 1024, 200);
     let prediction = raw
         .into_iter()
         .find(|r| r.tick_predicted_at == target_tick_predicted_at)?;
@@ -165,8 +164,7 @@ pub fn realize_predictions(
     let max_kl = *kl_values.last().unwrap_or(&0.0);
 
     let mut top_divergent_sorted = kl_per_symbol.clone();
-    top_divergent_sorted
-        .sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+    top_divergent_sorted.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
     let max_kl_symbol = top_divergent_sorted.first().map(|(s, _, _, _)| s.clone());
     let top_divergent: Vec<DivergentOutcome> = top_divergent_sorted
         .into_iter()

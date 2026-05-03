@@ -19,12 +19,32 @@ pub struct AgentPerceptionReport {
 }
 
 pub fn build_perception_report(snapshot: &AgentSnapshot) -> AgentPerceptionReport {
+    let mut perception = snapshot.perception.clone();
+
+    if let Some(ref mut p) = perception {
+        // Use existing macro_events as catalysts to provide context.
+        if p.catalysts.is_empty() && !snapshot.macro_events.is_empty() {
+            p.catalysts = snapshot
+                .macro_events
+                .iter()
+                .map(|e| Catalyst {
+                    symbol: e.impact.affected_symbols.first().cloned(),
+                    kind: e.event_type.clone(),
+                    description: e.headline.clone(),
+                    scheduled_at: snapshot.timestamp.clone(), // Proxy ts
+                    source: "macro_event_stream".to_string(),
+                    importance: 3, // Default importance
+                })
+                .collect();
+        }
+    }
+
     AgentPerceptionReport {
         schema_version: 1,
         tick: snapshot.tick,
         timestamp: snapshot.timestamp.clone(),
         market: snapshot.market,
-        perception: snapshot.perception.clone(),
+        perception,
     }
 }
 

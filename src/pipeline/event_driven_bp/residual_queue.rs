@@ -117,7 +117,8 @@ impl ResidualQueueInner {
     fn push_unbounded(&mut self, update: EdgeUpdate) {
         let seq = self.next_seq;
         self.next_seq = self.next_seq.wrapping_add(1);
-        self.by_priority.insert((OrderedFloat(update.residual), seq));
+        self.by_priority
+            .insert((OrderedFloat(update.residual), seq));
         self.by_seq.insert(seq, update);
     }
 
@@ -184,8 +185,7 @@ impl ResidualQueue {
             // Incoming update is no more informative than the smallest
             // pending one — drop the incoming one instead of evicting
             // a still-useful entry.
-            self.dropped_count
-                .fetch_add(1, AtomicOrdering::Relaxed);
+            self.dropped_count.fetch_add(1, AtomicOrdering::Relaxed);
             return;
         }
         // Evict the lowest-residual entry (O(log N)) and insert the
@@ -193,8 +193,7 @@ impl ResidualQueue {
         // the prior O(N) drain + heapify.
         inner.pop_min();
         inner.push_unbounded(update);
-        self.dropped_count
-            .fetch_add(1, AtomicOrdering::Relaxed);
+        self.dropped_count.fetch_add(1, AtomicOrdering::Relaxed);
         drop(inner);
         self.notify.notify_one();
     }
@@ -324,9 +323,7 @@ mod tests {
         q.push(update("G", "H", 0.40));
         assert_eq!(q.len(), 3);
         assert_eq!(q.dropped_count(), 1);
-        let mut residuals: Vec<f64> = (0..3)
-            .map(|_| q.try_pop().unwrap().residual)
-            .collect();
+        let mut residuals: Vec<f64> = (0..3).map(|_| q.try_pop().unwrap().residual).collect();
         residuals.sort_by(|a, b| a.partial_cmp(b).unwrap());
         assert_eq!(residuals, vec![0.30, 0.40, 0.50]);
     }

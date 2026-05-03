@@ -297,6 +297,7 @@ mod tests {
             world_state: WorldStateSnapshot {
                 timestamp: OffsetDateTime::UNIX_EPOCH,
                 entities: vec![],
+                world_intents: vec![],
                 perceptual_states: vec![],
                 vortices: vec![],
             },

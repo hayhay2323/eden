@@ -100,8 +100,7 @@ impl PushReceiverHealth {
         // Guard against the rare zero-elapsed clock value so the
         // "never received" sentinel can't collide with a real
         // observation made in the very first microsecond.
-        self.last_event_micros
-            .store(now.max(1), Ordering::Release);
+        self.last_event_micros.store(now.max(1), Ordering::Release);
     }
 
     pub fn status(&self) -> HealthStatus {
@@ -130,9 +129,7 @@ impl PushReceiverHealth {
             HealthStatus::Stale { .. } => POLL_CAT_STALE,
             HealthStatus::Healthy { .. } | HealthStatus::NeverReceived { .. } => POLL_CAT_OK,
         };
-        let prev_cat = self
-            .last_poll_category
-            .swap(current_cat, Ordering::AcqRel);
+        let prev_cat = self.last_poll_category.swap(current_cat, Ordering::AcqRel);
 
         match (prev_cat, current) {
             // OK → Stale (or first poll lands stale): fire BecameStale.
@@ -142,11 +139,14 @@ impl PushReceiverHealth {
                 }
             }
             // Stale → Healthy: fire Recovered.
-            (POLL_CAT_STALE, HealthStatus::Healthy { last_event_age_micros }) => {
-                HealthTransition::Recovered {
-                    last_event_age: Duration::from_micros(last_event_age_micros),
-                }
-            }
+            (
+                POLL_CAT_STALE,
+                HealthStatus::Healthy {
+                    last_event_age_micros,
+                },
+            ) => HealthTransition::Recovered {
+                last_event_age: Duration::from_micros(last_event_age_micros),
+            },
             // Everything else (steady state, NeverReceived → Healthy first
             // event, etc.) is no transition worth reporting.
             _ => HealthTransition::Unchanged,
@@ -219,7 +219,9 @@ mod tests {
         health.record_event();
 
         match health.status() {
-            HealthStatus::Healthy { last_event_age_micros } => {
+            HealthStatus::Healthy {
+                last_event_age_micros,
+            } => {
                 // Age must be < threshold (1 minute) — real wall-clock
                 // shouldn't have advanced anywhere near that between
                 // record and status.

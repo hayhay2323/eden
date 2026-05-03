@@ -28,7 +28,7 @@
 //! the consumer was busy is not. Dropping new (vs dropping old) is
 //! simpler and equivalent in steady-state log loss.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::mpsc::{self, error::TrySendError};
@@ -49,6 +49,7 @@ pub struct NdjsonWriter<T> {
     tx: mpsc::Sender<T>,
     drops: Arc<AtomicUsize>,
     sends: Arc<AtomicUsize>,
+    aggregate_drops: Option<Arc<AtomicU64>>,
 }
 
 impl<T: Send + 'static> NdjsonWriter<T> {
@@ -65,11 +66,7 @@ impl<T: Send + 'static> NdjsonWriter<T> {
         Self::spawn_with_capacity(name, write_fn, DEFAULT_CHANNEL_CAPACITY)
     }
 
-    pub fn spawn_with_capacity<F>(
-        name: impl Into<String>,
-        mut write_fn: F,
-        capacity: usize,
-    ) -> Self
+    pub fn spawn_with_capacity<F>(name: impl Into<String>, mut write_fn: F, capacity: usize) -> Self
     where
         F: FnMut(T) -> std::io::Result<usize> + Send + 'static,
     {
@@ -84,7 +81,21 @@ impl<T: Send + 'static> NdjsonWriter<T> {
                 }
             }
         });
-        Self { tx, drops, sends }
+        Self {
+            tx,
+            drops,
+            sends,
+            aggregate_drops: None,
+        }
+    }
+
+    /// Attach a runtime-level aggregate drop counter. The Full branch of
+    /// `try_send_batch` will bump both the per-writer counter and this
+    /// shared one, so operator telemetry can surface ndjson loss across
+    /// all writers without iterating each instance.
+    pub fn with_aggregate_counter(mut self, counter: Arc<AtomicU64>) -> Self {
+        self.aggregate_drops = Some(counter);
+        self
     }
 
     /// Try to enqueue a batch. Non-blocking. On full, the batch is
@@ -98,6 +109,9 @@ impl<T: Send + 'static> NdjsonWriter<T> {
             Err(err @ TrySendError::Closed(_)) => Err(err),
             Err(err @ TrySendError::Full(_)) => {
                 self.drops.fetch_add(1, Ordering::Relaxed);
+                if let Some(agg) = self.aggregate_drops.as_ref() {
+                    agg.fetch_add(1, Ordering::Relaxed);
+                }
                 Err(err)
             }
         }
@@ -133,6 +147,7 @@ mod tests {
             tx,
             drops: drops.clone(),
             sends: sends.clone(),
+            aggregate_drops: None,
         };
         let mut rejected = 0usize;
         for n in 0..1000u64 {
@@ -171,6 +186,35 @@ mod tests {
         assert_eq!(writer.drops(), 0);
         assert_eq!(writer.sends(), 200);
         assert_eq!(drained.load(Ordering::Relaxed), 200);
+    }
+
+    #[tokio::test]
+    async fn aggregate_counter_sees_drops_across_writers() {
+        // Two saturated writers should both bump the same shared
+        // aggregate counter, so RuntimeCounters can surface a single
+        // ndjson_drops value covering all artifact streams. Receivers
+        // must outlive the loop or try_send returns Closed (not Full)
+        // and the aggregate path never fires.
+        let aggregate = Arc::new(AtomicU64::new(0));
+        let (tx_a, _rx_a) = mpsc::channel::<Vec<u64>>(1);
+        let (tx_b, _rx_b) = mpsc::channel::<Vec<u64>>(1);
+        let make_writer = |tx: mpsc::Sender<Vec<u64>>| -> NdjsonWriter<Vec<u64>> {
+            NdjsonWriter {
+                tx,
+                drops: Arc::new(AtomicUsize::new(0)),
+                sends: Arc::new(AtomicUsize::new(0)),
+                aggregate_drops: None,
+            }
+            .with_aggregate_counter(aggregate.clone())
+        };
+        let a = make_writer(tx_a);
+        let b = make_writer(tx_b);
+        for n in 0..10u64 {
+            let _ = a.try_send_batch(vec![n]);
+            let _ = b.try_send_batch(vec![n]);
+        }
+        // Each writer accepts 1 batch (capacity), drops the remaining 9.
+        assert_eq!(aggregate.load(Ordering::Relaxed), (10 - 1) * 2);
     }
 
     #[tokio::test]

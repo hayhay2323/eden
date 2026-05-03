@@ -22,18 +22,18 @@ use crate::core::runtime_tasks::{
     default_runtime_tasks_path, RuntimeTaskCreateRequest, RuntimeTaskKind, RuntimeTaskStore,
 };
 use crate::live_snapshot::ensure_snapshot_parent;
-#[path = "runtime/context.rs"]
-mod context;
 #[path = "runtime/connect_retry.rs"]
 mod connect_retry;
+#[path = "runtime/context.rs"]
+mod context;
 #[path = "runtime/persistence.rs"]
 mod persistence;
+#[path = "runtime/projection.rs"]
+mod projection_runtime;
 #[path = "runtime/push_health.rs"]
 mod push_health;
 #[path = "runtime/stage_timer.rs"]
 mod stage_timer;
-#[path = "runtime/projection.rs"]
-mod projection_runtime;
 #[path = "runtime/telemetry.rs"]
 mod telemetry;
 #[path = "runtime/tick.rs"]
@@ -61,6 +61,7 @@ use crate::persistence::store::EdenStore;
 use crate::persistence::us_lineage_metric_row::UsLineageMetricRowRecord;
 #[cfg(feature = "persistence")]
 use crate::persistence::us_lineage_snapshot::UsLineageSnapshotRecord;
+pub use connect_retry::{connect_with_retry, RetryPolicy};
 pub use context::prepare_runtime_artifact_path;
 #[cfg(feature = "persistence")]
 pub use context::sweep_pending_horizons_to_due;
@@ -75,18 +76,17 @@ use persistence::{
     KnowledgePersistenceBundle, LineagePersistenceBundle,
 };
 use projection_runtime::{finalize_runtime_projection, write_projection_artifacts};
-use serde_json::json;
-pub use connect_retry::{connect_with_retry, RetryPolicy};
-pub use stage_timer::TickStageTimer;
 pub use push_health::{
     Clock as PushHealthClock, HealthStatus as PushHealthStatus,
     HealthTransition as PushHealthTransition, PushReceiverHealth, SystemClock as PushSystemClock,
 };
-pub use telemetry::{spawn_push_health_monitor, PushTap};
+use serde_json::json;
+pub use stage_timer::TickStageTimer;
 use telemetry::{
     emit_runtime_log, load_optional_string_override, load_string_override, load_u64_override,
     spawn_batched_push_forwarder, spawn_push_forwarder, RuntimeCounters,
 };
+pub use telemetry::{spawn_push_health_monitor, PushTap};
 use tick_runtime::{
     begin_runtime_tick, log_runtime_monitoring_active, spawn_runtime_rest_refresh,
     RuntimeTickBoundary,

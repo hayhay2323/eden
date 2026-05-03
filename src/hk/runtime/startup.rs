@@ -23,8 +23,7 @@ pub(super) struct HkRuntimeBootstrap {
     /// upstream tap can publish PressureEvents directly from the
     /// longport receiver — bypassing the bounded batch channel that
     /// drops events when the tick loop falls behind (C4 fix).
-    pub(super) pressure_event_bus:
-        std::sync::Arc<eden::pipeline::pressure_events::EventBusHandle>,
+    pub(super) pressure_event_bus: std::sync::Arc<eden::pipeline::pressure_events::EventBusHandle>,
     pub(super) tick: u64,
     pub(super) debounce: std::time::Duration,
     pub(super) bootstrap_pending: bool,
@@ -236,9 +235,7 @@ pub(super) async fn initialize_hk_runtime() -> HkRuntimeBootstrap {
     // C4 fix: build the pressure-event bus BEFORE the push forwarder so
     // the forwarder's tap can demux every longport event into the bus —
     // even events whose batches the bounded push channel later drops.
-    let pressure_event_bus = std::sync::Arc::new(
-        eden::pipeline::pressure_events::spawn_bus(),
-    );
+    let pressure_event_bus = std::sync::Arc::new(eden::pipeline::pressure_events::spawn_bus());
     let bus_for_tap = std::sync::Arc::clone(&pressure_event_bus);
     let raw_event_journal = eden::core::raw_event_journal::RawEventJournal::spawn("hk");
     let journal_for_tap = raw_event_journal.clone();
@@ -248,9 +245,9 @@ pub(super) async fn initialize_hk_runtime() -> HkRuntimeBootstrap {
             bus_for_tap.publish(pe);
         }
     });
-    let push_health = std::sync::Arc::new(
-        eden::core::runtime::PushReceiverHealth::new(std::time::Duration::from_secs(60)),
-    );
+    let push_health = std::sync::Arc::new(eden::core::runtime::PushReceiverHealth::new(
+        std::time::Duration::from_secs(60),
+    ));
     let push_rx = runtime.spawn_batched_push_forwarder(
         receiver,
         HK_PUSH_BATCH_CHANNEL_CAP,

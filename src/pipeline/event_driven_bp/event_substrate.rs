@@ -32,10 +32,10 @@ use crate::ontology::TacticalSetup;
 use crate::pipeline::loopy_bp::{self, GraphEdge, NodePrior, N_STATES};
 use crate::pipeline::sub_kg_emergence;
 
-use super::node_state::{NodeAux, NodeState, NodeStateLite};
+use super::node_state::NodeState;
 use super::residual_queue::{EdgeUpdate, ResidualQueue};
 use super::substrate::{BeliefSubstrate, PosteriorView};
-use super::worker_pool::{multiply_and_normalise, residual, spawn_worker_pool, WorkerPoolHandle};
+use super::worker_pool::{residual, spawn_worker_pool, WorkerPoolHandle};
 
 /// Configuration for [`EventDrivenSubstrate`].
 #[derive(Debug, Clone, Copy)]
@@ -86,7 +86,6 @@ pub struct EventDrivenSubstrate {
     pool: Option<WorkerPoolHandle>,
     publisher: Option<tokio::task::JoinHandle<()>>,
     publisher_shutdown: tokio::sync::watch::Sender<bool>,
-    config: EventConfig,
     generation: Arc<AtomicU64>,
 }
 
@@ -132,8 +131,8 @@ impl EventDrivenSubstrate {
                         .collect();
                     let g = generation.fetch_add(1, Ordering::Relaxed) + 1;
                     let iters = pool_iterations.load(Ordering::Relaxed);
-                    let converged = queue.is_empty()
-                        && pool_idle.load(Ordering::Relaxed) == pool_workers;
+                    let converged =
+                        queue.is_empty() && pool_idle.load(Ordering::Relaxed) == pool_workers;
                     posterior.store(Arc::new(PosteriorView {
                         beliefs,
                         iterations: iters as usize,
@@ -152,7 +151,6 @@ impl EventDrivenSubstrate {
             pool: Some(pool),
             publisher: Some(publisher),
             publisher_shutdown: publisher_shutdown_tx,
-            config,
             generation,
         }
     }
@@ -234,6 +232,7 @@ impl EventDrivenSubstrate {
         symbol: &str,
         prior: NodePrior,
         adj_neighbours: Option<Vec<(String, f64)>>,
+        force_reset: bool,
     ) -> bool {
         let entry = self
             .nodes
@@ -246,7 +245,7 @@ impl EventDrivenSubstrate {
         let prior_changed = lite.prior != prior.belief || lite.observed != prior.observed;
         lite.prior = prior.belief;
         lite.observed = prior.observed;
-        if prior_changed {
+        if prior_changed || force_reset {
             lite.belief = prior.belief;
             if !lite.observed && lite.belief.iter().all(|v| v.abs() < 1e-9) {
                 let uniform = 1.0 / N_STATES as f64;
@@ -265,12 +264,12 @@ impl EventDrivenSubstrate {
             if adj_neighbours.is_some() {
                 aux.neighbours = neighbours.clone();
             }
-            if prior_changed {
+            if prior_changed || force_reset {
                 aux.clear_inbox();
             }
         }
 
-        if prior_changed {
+        if prior_changed || force_reset {
             let belief = state.snapshot_lite().belief;
             for (k, weight) in &neighbours {
                 let msg = compute_outgoing_message(&belief, *weight);
@@ -283,7 +282,7 @@ impl EventDrivenSubstrate {
             }
         }
 
-        prior_changed
+        prior_changed || force_reset
     }
 }
 
@@ -294,10 +293,8 @@ impl EventDrivenSubstrate {
 fn process_edge_update_fn(
     residual_threshold: f64,
     message_damping: f64,
-) -> impl Fn(&Arc<DashMap<String, Arc<NodeState>>>, &EdgeUpdate) -> Vec<EdgeUpdate>
-       + Send
-       + Sync
-       + 'static {
+) -> impl Fn(&Arc<DashMap<String, Arc<NodeState>>>, &EdgeUpdate) -> Vec<EdgeUpdate> + Send + Sync + 'static
+{
     move |nodes, update| {
         // Look up destination node. If unknown, drop (graph topology
         // race or stale update post-shutdown).
@@ -402,15 +399,12 @@ fn compute_outgoing_message(belief: &[f64; N_STATES], weight: f64) -> [f64; N_ST
 }
 
 impl BeliefSubstrate for EventDrivenSubstrate {
-    fn observe_tick(
-        &self,
-        priors: &HashMap<String, NodePrior>,
-        edges: &[GraphEdge],
-        _tick: u64,
-    ) {
+    fn observe_tick(&self, priors: &HashMap<String, NodePrior>, edges: &[GraphEdge], _tick: u64) {
         // Build edge adjacency once and delegate per-symbol work to
         // observe_symbol_inner so observe_tick and observe_symbol share
         // identical seeding semantics.
+        // Tick-sync parity: force_reset=true clears inboxes so each tick
+        // starts from fresh priors without remnant cross-tick messages.
         let mut adj: HashMap<String, Vec<(String, f64)>> = HashMap::new();
         for edge in edges {
             adj.entry(edge.from.clone())
@@ -422,16 +416,11 @@ impl BeliefSubstrate for EventDrivenSubstrate {
         }
         for (sym, prior) in priors {
             let neighbours = adj.get(sym).cloned().unwrap_or_default();
-            self.observe_symbol_inner(sym, prior.clone(), Some(neighbours));
+            self.observe_symbol_inner(sym, prior.clone(), Some(neighbours), true);
         }
     }
 
-    fn observe_symbol(
-        &self,
-        symbol: &str,
-        prior: NodePrior,
-        neighbours: &[GraphEdge],
-    ) {
+    fn observe_symbol(&self, symbol: &str, prior: NodePrior, neighbours: &[GraphEdge]) {
         let adj: Vec<(String, f64)> = neighbours
             .iter()
             .filter_map(|e| {
@@ -445,7 +434,7 @@ impl BeliefSubstrate for EventDrivenSubstrate {
             })
             .collect();
         let pass = if adj.is_empty() { None } else { Some(adj) };
-        self.observe_symbol_inner(symbol, prior, pass);
+        self.observe_symbol_inner(symbol, prior, pass, false);
     }
 
     fn posterior_snapshot(&self) -> Arc<PosteriorView> {

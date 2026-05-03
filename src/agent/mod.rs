@@ -52,7 +52,6 @@ mod macro_events;
 mod recommendations;
 pub(crate) mod shared;
 // symbol_inference deleted — T22 rule-based narrative assembly
-pub mod tool_registry;
 mod tools;
 mod views;
 use alerts::{
@@ -106,7 +105,7 @@ use shared::{
 #[cfg(test)]
 pub(crate) use tools::compat_query_allowlist;
 pub(crate) use tools::sort_suggested_tool_calls;
-pub use tools::{execute_tool, tool_catalog};
+pub use tools::{execute_tool, execute_tool_with_surfaces, tool_catalog, AgentToolSurfaceRefs};
 pub use views::{
     build_alert_scoreboard, build_briefing, build_eod_review, build_session, build_watchlist,
 };

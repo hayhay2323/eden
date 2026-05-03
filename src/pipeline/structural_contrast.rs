@@ -223,6 +223,28 @@ pub fn write_events(market: &str, events: &[ContrastEvent]) -> std::io::Result<(
     Ok(())
 }
 
+/// Project per-tick structural contrast events into the unified PerceptionGraph.
+pub fn apply_to_perception_graph(
+    events: &[ContrastEvent],
+    graph: &mut crate::perception::PerceptionGraph,
+    tick: u64,
+) {
+    for ev in events {
+        graph.symbol_contrast.upsert(
+            (crate::ontology::objects::Symbol(ev.symbol.clone()), ev.node_kind.clone()),
+            crate::perception::SymbolContrastSnapshot {
+                symbol: crate::ontology::objects::Symbol(ev.symbol.clone()),
+                sector_id: ev.sector_id.clone(),
+                node_kind: ev.node_kind.clone(),
+                center_activation: ev.center_activation,
+                surround_mean: ev.surround_mean,
+                contrast: ev.contrast,
+                last_tick: tick,
+            },
+        );
+    }
+}
+
 // ---------------- Tests ----------------
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+use crate::ontology::objects::Market;
 use super::shared::{
     build_hk_depth_state, build_hk_invalidation, build_hk_structure_state, hk_events_by_symbol,
     hk_recent_transitions, hk_signal_state, institutions_by_symbol,
@@ -12,6 +13,7 @@ pub fn build_hk_agent_snapshot(
     store: &ObjectStore,
     lineage_priors: &[FamilyContextLineageOutcome],
     previous_agent: Option<&AgentSnapshot>,
+    perception_graph: &std::sync::RwLock<crate::perception::PerceptionGraph>,
 ) -> AgentSnapshot {
     let latest = history
         .latest()
@@ -217,6 +219,23 @@ pub fn build_hk_agent_snapshot(
         promote_macro_events(&live.market_regime, &live.stress, &macro_event_candidates);
     let knowledge_links = build_macro_event_knowledge_links(&macro_events);
 
+    let perception = {
+        let graph = perception_graph.read().unwrap();
+        let mut report = graph.to_report(
+            Market::Hk,
+            live.tick,
+            live.timestamp.clone(),
+            &crate::agent::PerceptionFilterConfig::default(),
+        );
+        // Signature Replay remains file-based for now (historical query)
+        report.signature_replays = crate::pipeline::signature_replay::read_latest_signature_replays(
+            "hk",
+            live.tick,
+            20,
+        );
+        report
+    };
+
     AgentSnapshot {
         tick: live.tick,
         timestamp: live.timestamp.clone(),
@@ -226,14 +245,7 @@ pub fn build_hk_agent_snapshot(
         wake,
         world_state: Some(world_state),
         backward_reasoning: Some(latest.backward_reasoning.clone()),
-        perception: Some(crate::live_snapshot::read_perception_streams(
-            std::path::Path::new(".run"),
-            "hk",
-            latest.tick_number,
-            &live.timestamp,
-            live.market,
-            &crate::agent::PerceptionFilterConfig::default(),
-        )),
+        perception: Some(perception),
         notices,
         active_structures,
         recent_transitions,

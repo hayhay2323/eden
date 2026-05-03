@@ -151,6 +151,7 @@ pub(super) fn append_trades_with_cap(buffer: &mut Vec<Trade>, mut trades: Vec<Tr
 
 /// REST-only data that doesn't come via push.
 #[allow(dead_code)]
+#[derive(serde::Serialize)]
 pub(super) struct RestSnapshot {
     pub(super) calc_indexes: HashMap<Symbol, SecurityCalcIndex>,
     pub(super) capital_flows: HashMap<Symbol, Vec<longport::quote::CapitalFlowLine>>,
@@ -186,6 +187,7 @@ pub(super) struct HkTickState<'a> {
     pub(super) live: &'a mut LiveState,
     pub(super) rest: &'a mut RestSnapshot,
     pub(super) rest_updated: &'a mut bool,
+    pub(super) pressure_event_bus: Option<Arc<eden::pipeline::pressure_events::EventBusHandle>>,
 }
 
 impl TickState<Vec<PushEvent>, RestSnapshot> for HkTickState<'_> {
@@ -196,29 +198,60 @@ impl TickState<Vec<PushEvent>, RestSnapshot> for HkTickState<'_> {
         // before this batch was assembled.
         self.live.apply_batch(events);
     }
+fn apply_update(&mut self, update: RestSnapshot) {
+    let ingested_at = time::OffsetDateTime::now_utc();
+    let ts_chrono = chrono::Utc::now();
+    if let Err(error) = crate::core::raw_event_journal::append_rest_snapshot(
+        "hk",
+        "rest_snapshot",
+        &update,
+        ingested_at,
+    ) {
+        eprintln!(
+            "[raw_event_journal] hk rest snapshot append failed: {}",
+            error
+        );
+    }
 
-    fn apply_update(&mut self, update: RestSnapshot) {
-        let ingested_at = time::OffsetDateTime::now_utc();
-        self.live.raw_events.record_calc_index_snapshot(
-            &update.calc_indexes,
-            ingested_at,
-            RawEventSource::Rest,
-        );
-        self.live.raw_events.record_capital_flow_snapshot(
-            &update.capital_flows,
-            ingested_at,
-            RawEventSource::Rest,
-        );
-        self.live.raw_events.record_capital_distribution_snapshot(
-            &update.capital_distributions,
-            ingested_at,
-            RawEventSource::Rest,
-        );
-        self.live.raw_events.record_intraday_snapshot(
-            &update.intraday_lines,
-            ingested_at,
-            RawEventSource::Rest,
-        );
+    // Publish Warrant Sentiment as Option events to the pressure bus.
+    if let Some(ref bus) = self.pressure_event_bus {
+        for (underlying, obs) in &update.warrants {
+            // Heuristic for HK Warrant Sentiment bias:
+            // High Call Outstanding Ratio = Bullish (+), Put = Bearish (-)
+            // Weighted IV diff? Put IV > Call IV = Bullish?
+            let call_ratio = obs.top_call_outstanding_ratio.unwrap_or(Decimal::ZERO);
+            let put_ratio = obs.top_put_outstanding_ratio.unwrap_or(Decimal::ZERO);
+            bus.publish(eden::pipeline::pressure_events::PressureEvent::Option {
+                symbol: underlying.0.clone(),
+                put_call_ratio: Some(put_ratio / call_ratio.max(Decimal::ONE)), // simplified proxy
+                iv_skew: obs.weighted_put_iv.and_then(|p| {
+                    obs.weighted_call_iv.map(|c| p - c)
+                }),
+                ts: ts_chrono,
+            });
+        }
+    }
+
+    self.live.raw_events.record_calc_index_snapshot(
+        &update.calc_indexes,
+        ingested_at,
+        RawEventSource::Rest,
+    );
+    self.live.raw_events.record_capital_flow_snapshot(
+        &update.capital_flows,
+        ingested_at,
+        RawEventSource::Rest,
+    );
+    self.live.raw_events.record_capital_distribution_snapshot(
+        &update.capital_distributions,
+        ingested_at,
+        RawEventSource::Rest,
+    );
+    self.live.raw_events.record_intraday_snapshot(
+        &update.intraday_lines,
+        ingested_at,
+        RawEventSource::Rest,
+    );
         if let Some(temperature) = update.market_temperature.clone() {
             self.live
                 .raw_events

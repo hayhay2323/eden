@@ -36,8 +36,6 @@ use super::super::case_workflow_api::{
     post_case_assign, post_case_queue_pin, post_case_transition,
 };
 use super::super::context_api::get_context_status;
-#[cfg(feature = "coordinator")]
-use super::super::coordinator_api::get_coordinator_snapshot;
 use super::super::feed_api::{get_feed_notices, get_feed_transitions};
 use super::super::feed_surface::{stream_feed_notices, stream_feed_transitions};
 use super::super::foundation::{ApiError, ApiState};
@@ -470,9 +468,6 @@ pub(in crate::api) fn build_router(state: ApiState) -> Result<Router, ApiError> 
             get(get_archive_capital_flows),
         )
         .route("/history/symbol/:symbol", get(get_symbol_history));
-
-    #[cfg(feature = "coordinator")]
-    let api_routes = api_routes.route("/coordinator/snapshot", get(get_coordinator_snapshot));
 
     let api_routes = api_routes
         .route("/health/report", get(health_report))

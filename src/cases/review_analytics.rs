@@ -89,7 +89,7 @@ pub(super) fn build_case_review_analytics_with_assessments(
     outcome_context: crate::pipeline::learning_loop::OutcomeLearningContext,
 ) -> CaseReviewAnalytics {
     let learning_feedback = derive_learning_feedback(assessments, &outcome_context);
-    let memory_impact = build_memory_impact_stats(cases, &learning_feedback, discovered_archetypes);
+    let memory_impact = build_memory_impact_stats(cases, &learning_feedback);
     let violation_predictiveness = build_violation_predictiveness(assessments, case_outcomes);
     let (
         mechanism_transition_breakdown,
@@ -345,7 +345,6 @@ fn build_review_reason_family_feedback(
 fn build_memory_impact_stats(
     cases: &[CaseSummary],
     feedback: &ReasoningLearningFeedback,
-    discovered_archetypes: &[crate::persistence::discovered_archetype::DiscoveredArchetypeRecord],
 ) -> Vec<CaseMemoryImpactStat> {
     let mut baseline = cases.to_vec();
     baseline.sort_by(|left, right| {

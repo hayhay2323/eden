@@ -257,7 +257,7 @@ pub struct IntradayObservation {
     pub point_count: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct OptionSurfaceObservation {
     pub underlying: Symbol,
     pub expiry_label: String,
@@ -271,7 +271,7 @@ pub struct OptionSurfaceObservation {
     pub atm_vega: Option<Decimal>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct WarrantSentimentObservation {
     pub underlying: Symbol,
     pub total_warrants: usize,

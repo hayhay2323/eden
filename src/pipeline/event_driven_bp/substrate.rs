@@ -69,12 +69,7 @@ pub trait BeliefSubstrate: Send + Sync {
     /// `neighbours` lets the caller pass the latest edges-for-this-symbol
     /// snapshot if available; pass an empty slice to use whatever was
     /// cached during the last `observe_tick`.
-    fn observe_symbol(
-        &self,
-        symbol: &str,
-        prior: NodePrior,
-        neighbours: &[GraphEdge],
-    );
+    fn observe_symbol(&self, symbol: &str, prior: NodePrior, neighbours: &[GraphEdge]);
 
     /// Read the current posterior. For sync substrate this is the
     /// just-computed state. For event substrate this is the latest

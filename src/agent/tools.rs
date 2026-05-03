@@ -10,17 +10,7 @@ const COMPAT_QUERY_ALLOWLIST: &[&str] = &[
 ];
 
 pub fn tool_catalog() -> Vec<AgentToolSpec> {
-    #[cfg(feature = "tool-registry")]
-    {
-        let registry = super::tool_registry::build_default_registry();
-        let mut tools = registry.catalog();
-        sort_tool_specs(&mut tools);
-        return tools;
-    }
-
-    #[cfg(not(feature = "tool-registry"))]
-    {
-        let mut tools = vec![
+    let mut tools = vec![
         AgentToolSpec {
             name: "market_session".into(),
             category: AgentToolCategory::ObjectQuery,
@@ -433,6 +423,21 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             args: vec![],
         },
         AgentToolSpec {
+            name: "world_reflection".into(),
+            category: AgentToolCategory::ObjectQuery,
+            route: "/api/agent/:market/world/reflection".into(),
+            method: "GET".into(),
+            description: "Returns the resolved world-intent reflection ledger and bucket reliability."
+                .into(),
+            deprecated: false,
+            replacement: None,
+            args: vec![AgentToolArgSpec {
+                name: "limit".into(),
+                required: false,
+                description: "Maximum recent reflection records to return.".into(),
+            }],
+        },
+        AgentToolSpec {
             name: "backward_investigation".into(),
             category: AgentToolCategory::ObjectQuery,
             route: "/api/ontology/:market/backward/:symbol".into(),
@@ -633,9 +638,8 @@ pub fn tool_catalog() -> Vec<AgentToolSpec> {
             ],
         },
     ];
-        sort_tool_specs(&mut tools);
-        tools
-    }
+    sort_tool_specs(&mut tools);
+    tools
 }
 
 pub(crate) fn compat_query_allowlist() -> &'static [&'static str] {
@@ -674,26 +678,27 @@ fn preferred_tool_rank(tool_name: &str) -> usize {
         "transitions_since" => 6,
         "symbol_contract" => 7,
         "world_state" => 8,
-        "backward_investigation" => 9,
-        "sector_flow" => 10,
-        "macro_event_contracts" => 11,
-        "graph_knowledge_links" => 12,
-        "graph_macro_event_candidates" => 13,
-        "depth_change" => 14,
-        "broker_movement" => 15,
-        "knowledge_links" => 16,
-        "symbol_state" => 17,
-        "invalidation_status" => 18,
-        "active_structures" => 19,
-        "structure_state" => 20,
-        "threads" => 21,
-        "turns" => 22,
-        "wake" => 23,
-        "session" => 24,
-        "alert_scoreboard" => 25,
-        "eod_review" => 26,
-        "macro_event_candidates" => 27,
-        "macro_events" => 28,
+        "world_reflection" => 9,
+        "backward_investigation" => 10,
+        "sector_flow" => 11,
+        "macro_event_contracts" => 12,
+        "graph_knowledge_links" => 13,
+        "graph_macro_event_candidates" => 14,
+        "depth_change" => 15,
+        "broker_movement" => 16,
+        "knowledge_links" => 17,
+        "symbol_state" => 18,
+        "invalidation_status" => 19,
+        "active_structures" => 20,
+        "structure_state" => 21,
+        "threads" => 22,
+        "turns" => 23,
+        "wake" => 24,
+        "session" => 25,
+        "alert_scoreboard" => 26,
+        "eod_review" => 27,
+        "macro_event_candidates" => 28,
+        "macro_events" => 29,
         _ => 100,
     }
 }
@@ -719,6 +724,7 @@ fn tool_catalog_category(tool_name: &str) -> Option<AgentToolCategory> {
         "market_session"
         | "symbol_contract"
         | "world_state"
+        | "world_reflection"
         | "backward_investigation"
         | "sector_flow"
         | "macro_event_contracts" => Some(AgentToolCategory::ObjectQuery),
@@ -731,10 +737,38 @@ fn tool_catalog_category(tool_name: &str) -> Option<AgentToolCategory> {
     }
 }
 
+#[derive(Default)]
+pub struct AgentToolSurfaceRefs<'a> {
+    pub recommendations: Option<&'a AgentRecommendations>,
+    pub watchlist: Option<&'a AgentWatchlist>,
+    pub scoreboard: Option<&'a AgentAlertScoreboard>,
+    pub eod_review: Option<&'a AgentEodReview>,
+}
+
+fn recommendations_for_tool(
+    snapshot: &AgentSnapshot,
+    session: Option<&AgentSession>,
+    surfaces: &AgentToolSurfaceRefs<'_>,
+) -> AgentRecommendations {
+    surfaces
+        .recommendations
+        .cloned()
+        .unwrap_or_else(|| build_recommendations(snapshot, session))
+}
+
 pub fn execute_tool(
     snapshot: &AgentSnapshot,
     session: Option<&AgentSession>,
     request: &AgentToolRequest,
+) -> Result<AgentToolOutput, String> {
+    execute_tool_with_surfaces(snapshot, session, request, AgentToolSurfaceRefs::default())
+}
+
+pub fn execute_tool_with_surfaces(
+    snapshot: &AgentSnapshot,
+    session: Option<&AgentSession>,
+    request: &AgentToolRequest,
+    surfaces: AgentToolSurfaceRefs<'_>,
 ) -> Result<AgentToolOutput, String> {
     let symbol = request.symbol.as_deref();
     let sector = request.sector.as_deref();
@@ -752,7 +786,8 @@ pub fn execute_tool(
             .map(AgentToolOutput::Session)
             .ok_or_else(|| "session state not available".to_string()),
         "investigations" => {
-            let mut investigations = build_investigations(snapshot, session, None, limit);
+            let mut investigations =
+                build_investigations(snapshot, session, surfaces.recommendations, limit);
             if let Some(symbol) = symbol {
                 investigations.items.retain(|item| {
                     item.reference_symbols
@@ -778,7 +813,7 @@ pub fn execute_tool(
             Ok(AgentToolOutput::Investigations(investigations))
         }
         "judgments" => {
-            let mut judgments = build_judgments(snapshot, session, None, limit);
+            let mut judgments = build_judgments(snapshot, session, surfaces.recommendations, limit);
             if let Some(symbol) = symbol {
                 judgments.items.retain(|item| {
                     item.object_kind == "symbol" && item.object_id.eq_ignore_ascii_case(symbol)
@@ -800,8 +835,10 @@ pub fn execute_tool(
             Ok(AgentToolOutput::Judgments(judgments))
         }
         "watchlist" => {
-            let recommendations = build_recommendations(snapshot, session);
-            let mut watchlist = build_watchlist(snapshot, session, Some(&recommendations), limit);
+            let mut watchlist = surfaces.watchlist.cloned().unwrap_or_else(|| {
+                let recommendations = recommendations_for_tool(snapshot, session, &surfaces);
+                build_watchlist(snapshot, session, Some(&recommendations), limit)
+            });
             if let Some(symbol) = symbol {
                 watchlist.entries.retain(|item| {
                     item.symbol.eq_ignore_ascii_case(symbol)
@@ -830,7 +867,7 @@ pub fn execute_tool(
             Ok(AgentToolOutput::Watchlist(watchlist))
         }
         "recommendations" => {
-            let mut recommendations = build_recommendations(snapshot, session);
+            let mut recommendations = recommendations_for_tool(snapshot, session, &surfaces);
             recommendations
                 .decisions
                 .retain(|decision| decision_matches_filters(decision, symbol, sector));
@@ -841,7 +878,10 @@ pub fn execute_tool(
             Ok(AgentToolOutput::Recommendations(recommendations))
         }
         "alert_scoreboard" => {
-            let recommendations = build_recommendations(snapshot, session);
+            if let Some(scoreboard) = surfaces.scoreboard {
+                return Ok(AgentToolOutput::Scoreboard(scoreboard.clone()));
+            }
+            let recommendations = recommendations_for_tool(snapshot, session, &surfaces);
             Ok(AgentToolOutput::Scoreboard(build_alert_scoreboard(
                 snapshot,
                 Some(&recommendations),
@@ -849,7 +889,10 @@ pub fn execute_tool(
             )))
         }
         "eod_review" => {
-            let recommendations = build_recommendations(snapshot, session);
+            if let Some(eod_review) = surfaces.eod_review {
+                return Ok(AgentToolOutput::EodReview(eod_review.clone()));
+            }
+            let recommendations = recommendations_for_tool(snapshot, session, &surfaces);
             let scoreboard = build_alert_scoreboard(snapshot, Some(&recommendations), None);
             Ok(AgentToolOutput::EodReview(build_eod_review(
                 snapshot,
@@ -979,7 +1022,7 @@ pub fn execute_tool(
             Ok(AgentToolOutput::MacroEvents(items))
         }
         "knowledge_links" | "graph_knowledge_links" => {
-            let recommendations = build_recommendations(snapshot, session);
+            let recommendations = recommendations_for_tool(snapshot, session, &surfaces);
             let mut links = snapshot.knowledge_links.clone();
             links.extend(recommendations.knowledge_links);
             if let Some(symbol) = symbol {
@@ -1094,6 +1137,19 @@ pub fn execute_tool(
             .clone()
             .map(AgentToolOutput::World)
             .ok_or_else(|| "world state not available for this market".to_string()),
+        "world_reflection" => {
+            let market = match snapshot.market {
+                crate::live_snapshot::LiveMarket::Hk => crate::ontology::objects::Market::Hk,
+                crate::live_snapshot::LiveMarket::Us => crate::ontology::objects::Market::Us,
+            };
+            Ok(AgentToolOutput::WorldReflection(
+                crate::pipeline::latent_world_state::query_world_reflection_ledger(
+                    market,
+                    None,
+                    limit.min(500),
+                ),
+            ))
+        }
         "backward_investigation" => {
             let symbol = symbol
                 .ok_or_else(|| "tool `backward_investigation` requires `symbol`".to_string())?;

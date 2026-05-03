@@ -12,11 +12,11 @@ use crate::agent::llm::{
 use crate::agent::{
     AgentActionExpectancies, AgentAlertOutcome, AgentAlertRecord, AgentAlertScoreboard,
     AgentAlertSliceStat, AgentAlertStats, AgentBriefing, AgentDecision, AgentDecisionAttribution,
-    AgentEodReview, AgentExecutedTool, AgentJudgmentKind, AgentMarketRecommendation, AgentNotice,
-    AgentOperationalJudgment, AgentRecommendation, AgentRecommendations, AgentResolvedAlertDigest,
-    AgentSectorFlow, AgentSectorRecommendation, AgentSession, AgentSnapshot,
-    AgentSuggestedToolCall, AgentSymbolState, AgentThread, AgentTransition, AgentTurn,
-    AgentWatchlist, AgentWatchlistEntry,
+    AgentEodReview, AgentExecutedTool, AgentJudgmentKind, AgentLensComponent,
+    AgentMarketRecommendation, AgentNotice, AgentOperationalJudgment, AgentRecommendation,
+    AgentRecommendations, AgentResolvedAlertDigest, AgentSectorFlow, AgentSectorRecommendation,
+    AgentSession, AgentSnapshot, AgentSuggestedToolCall, AgentSymbolState, AgentThread,
+    AgentTransition, AgentTurn, AgentWatchlist, AgentWatchlistEntry,
 };
 use crate::cases::{build_case_summaries, CaseMarket, CaseSummary};
 use crate::live_snapshot::{

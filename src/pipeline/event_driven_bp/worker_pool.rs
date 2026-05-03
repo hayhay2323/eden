@@ -51,10 +51,7 @@ pub fn spawn_worker_pool<F>(
     process_fn: F,
 ) -> WorkerPoolHandle
 where
-    F: Fn(
-            &Arc<DashMap<String, Arc<NodeState>>>,
-            &EdgeUpdate,
-        ) -> Vec<EdgeUpdate>
+    F: Fn(&Arc<DashMap<String, Arc<NodeState>>>, &EdgeUpdate) -> Vec<EdgeUpdate>
         + Send
         + Sync
         + 'static,
@@ -101,10 +98,7 @@ where
 
 /// Multiply a message vector into a 3-cell distribution and re-normalise.
 /// Common helper used by substrate's `process_fn`.
-pub fn multiply_and_normalise(
-    state: &mut [f64; N_STATES],
-    msg: &[f64; N_STATES],
-) {
+pub fn multiply_and_normalise(state: &mut [f64; N_STATES], msg: &[f64; N_STATES]) {
     for i in 0..N_STATES {
         state[i] *= msg[i];
     }

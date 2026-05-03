@@ -6,8 +6,6 @@ mod case_api;
 mod case_workflow_api;
 mod constants;
 mod context_api;
-#[cfg(feature = "coordinator")]
-mod coordinator_api;
 mod core;
 mod feed_api;
 mod feed_surface;

@@ -80,10 +80,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
     let chains: usize = parse_flag(&args, "--chains").unwrap_or(8);
     let parquet_dir = parse_flag_str(&args, "--parquet");
+    let market_filter = parse_flag_str(&args, "--market");
     let raw_sources_out = parse_flag_str(&args, "--raw-sources-out")
         .unwrap_or_else(|| "data/replay_raw_sources.jsonl".into());
 
-    let archives = load_archives(&args, parquet_dir.as_deref(), replay_limit).await?;
+    let archives = load_archives(
+        &args,
+        parquet_dir.as_deref(),
+        replay_limit,
+        market_filter.as_deref(),
+    )
+    .await?;
 
     if archives.is_empty() {
         println!("No archives found.");
@@ -2010,6 +2017,7 @@ async fn load_archives(
     args: &[String],
     parquet_dir: Option<&str>,
     limit: Option<usize>,
+    market_filter: Option<&str>,
 ) -> Result<Vec<TickArchive>, Box<dyn std::error::Error + Send + Sync>> {
     if let Some(dir) = parquet_dir {
         // ── Parquet/JSON mode ──
@@ -2044,7 +2052,9 @@ async fn load_archives(
             let path = scan_dir.join(file_name);
             let content = std::fs::read_to_string(&path)?;
             let archive: TickArchive = serde_json::from_str(&content)?;
-            archives.push(archive);
+            if archive_matches_market(&archive.market, market_filter.as_deref()) {
+                archives.push(archive);
+            }
         }
 
         Ok(archives)
@@ -2057,6 +2067,9 @@ async fn load_archives(
 
             println!("=== Eden Replay (SurrealDB) ===");
             println!("db:      {db_path}");
+            if let Some(market) = market_filter {
+                println!("market:  {market}");
+            }
             println!();
 
             println!("Opening store...");
@@ -2064,7 +2077,7 @@ async fn load_archives(
             println!("Store opened. Streaming archives...");
 
             let mut archives = Vec::new();
-            let mut next_after_tick = None;
+            let mut next_after_cursor: Option<(String, u64)> = None;
             let mut remaining = limit;
 
             loop {
@@ -2075,13 +2088,25 @@ async fn load_archives(
                     break;
                 }
                 let batch: Vec<TickArchive> = store
-                    .replay_tick_archives_after(next_after_tick, batch_limit)
+                    .replay_market_tick_archives_after_cursor(
+                        market_filter.as_deref(),
+                        next_after_cursor
+                            .as_ref()
+                            .map(|(market, tick)| (market.as_str(), *tick)),
+                        batch_limit,
+                    )
                     .await?;
                 if batch.is_empty() {
                     break;
                 }
-                let batch_last = batch.last().map(|a| a.tick_number).unwrap_or_default();
-                next_after_tick = Some(batch_last);
+                next_after_cursor = batch.last().map(|a| {
+                    let market = if a.market.trim().is_empty() {
+                        "unknown".to_string()
+                    } else {
+                        a.market.clone()
+                    };
+                    (market, a.tick_number)
+                });
                 if let Some(left) = remaining.as_mut() {
                     *left = left.saturating_sub(batch.len());
                 }
@@ -2099,6 +2124,15 @@ async fn load_archives(
             std::process::exit(1);
         }
     }
+}
+
+fn archive_matches_market(archive_market: &str, market_filter: Option<&str>) -> bool {
+    market_filter
+        .map(|market| {
+            let archive_market = archive_market.trim();
+            archive_market.is_empty() || archive_market == "unknown" || archive_market == market
+        })
+        .unwrap_or(true)
 }
 
 fn parse_flag<T: std::str::FromStr>(args: &[String], name: &str) -> Option<T> {

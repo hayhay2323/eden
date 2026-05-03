@@ -358,6 +358,7 @@ mod tests {
                 propagated_support: dec!(0.2),
                 drivers: vec!["depth confirms".into()],
             }],
+            world_intents: vec![],
             perceptual_states: vec![],
             vortices: vec![],
         };

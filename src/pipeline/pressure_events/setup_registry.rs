@@ -60,21 +60,24 @@ impl SetupRegistry {
                 continue;
             };
             total += 1;
-            by_symbol
-                .entry(symbol)
-                .or_default()
-                .push(RegisteredSetup {
-                    hypothesis_id: setup.hypothesis_id.clone(),
-                    setup_id: setup.setup_id.clone(),
-                    direction,
-                    tick_confidence: setup.confidence,
-                });
+            by_symbol.entry(symbol).or_default().push(RegisteredSetup {
+                hypothesis_id: setup.hypothesis_id.clone(),
+                setup_id: setup.setup_id.clone(),
+                direction,
+                tick_confidence: setup.confidence,
+            });
         }
         let unique_symbols = by_symbol.len();
         *self.by_symbol.write() = by_symbol;
         // 2026-05-01: setup-registry refresh log silenced (was every
         // refresh — noise). State queryable via the registry's read API.
-        let _ = (setups.len(), total, unique_symbols, skipped_scope, skipped_dir);
+        let _ = (
+            setups.len(),
+            total,
+            unique_symbols,
+            skipped_scope,
+            skipped_dir,
+        );
     }
 
     pub fn get(&self, symbol: &str) -> Option<Vec<RegisteredSetup>> {

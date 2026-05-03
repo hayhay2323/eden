@@ -56,10 +56,7 @@ impl EdenStore {
     /// table. Cross-table sync paths (knowledge_link vs
     /// symbol_perception, etc.) hold disjoint locks and run
     /// concurrently.
-    pub(crate) async fn acquire_table_lock(
-        &self,
-        table: &'static str,
-    ) -> OwnedMutexGuard<()> {
+    pub(crate) async fn acquire_table_lock(&self, table: &'static str) -> OwnedMutexGuard<()> {
         let lock = self
             .table_locks
             .entry(table)

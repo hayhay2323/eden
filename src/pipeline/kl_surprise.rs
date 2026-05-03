@@ -239,6 +239,8 @@ impl KlSurpriseTracker {
                 crate::perception::KlSurpriseSnapshot {
                     magnitude: Decimal::try_from(magnitude).unwrap_or(Decimal::ZERO),
                     direction: Decimal::try_from(direction).unwrap_or(Decimal::ZERO),
+                    observed: abs_z,
+                    expected: 1.0,
                     last_tick: tick,
                 },
             );

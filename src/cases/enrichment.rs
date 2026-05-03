@@ -234,10 +234,6 @@ pub async fn enrich_case_detail(
         LiveMarket::Hk => "hk",
         LiveMarket::Us => "us",
     };
-    let discovered_archetypes = store
-        .load_discovered_archetypes(market_key)
-        .await
-        .unwrap_or_default();
     let assessments = store
         .recent_case_reasoning_assessments_by_market(market_key, 240)
         .await?;

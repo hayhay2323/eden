@@ -168,6 +168,7 @@ pub enum AgentToolOutput {
     MacroEvents(Vec<AgentMacroEvent>),
     KnowledgeLinks(Vec<AgentKnowledgeLink>),
     World(WorldStateSnapshot),
+    WorldReflection(crate::pipeline::latent_world_state::WorldIntentReflectionQuery),
     Backward(BackwardInvestigation),
 }
 
@@ -317,6 +318,14 @@ impl AgentToolOutput {
                 .entities
                 .first()
                 .map(|item| format!("{} layer={} regime={}", item.label, item.layer, item.regime)),
+            Self::WorldReflection(query) => query.summary.as_ref().map(|summary| {
+                format!(
+                    "world_reflection resolved={} reliability={} violation_rate={}",
+                    summary.resolved_count,
+                    summary.reliability.round_dp(3),
+                    summary.violation_rate.round_dp(3)
+                )
+            }),
             Self::Backward(item) => item.leading_cause.as_ref().map(|cause| {
                 format!(
                     "{} lead={} streak={}",

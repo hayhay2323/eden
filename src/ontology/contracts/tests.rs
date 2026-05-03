@@ -254,6 +254,7 @@ fn fixture_agent_snapshot() -> AgentSnapshot {
         world_state: Some(WorldStateSnapshot {
             timestamp: OffsetDateTime::UNIX_EPOCH,
             entities: vec![],
+            world_intents: vec![],
             perceptual_states: vec![PerceptualState {
                 state_id: "ps:fico".into(),
                 scope: ReasoningScope::Symbol(Symbol("FICO.US".into())),

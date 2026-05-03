@@ -34,10 +34,7 @@ pub(crate) fn feed_signal_momentum_tracker(
         signal_momentum.record_convergence(sym.clone(), score.composite);
     }
     for event in &event_snapshot.events {
-        if matches!(
-            event.value.kind,
-            super::super::UsEventKind::VolumeSpike
-        ) {
+        if matches!(event.value.kind, super::super::UsEventKind::VolumeSpike) {
             if let super::super::UsSignalScope::Symbol(symbol) = &event.value.scope {
                 signal_momentum.record_volume_spike(symbol.clone(), event.value.magnitude);
             }
@@ -212,6 +209,7 @@ impl UsRestSnapshot {
 pub(crate) struct UsTickState<'a> {
     pub(crate) live: &'a mut UsLiveState,
     pub(crate) rest: &'a mut UsRestSnapshot,
+    pub(crate) pressure_event_bus: Option<Arc<crate::pipeline::pressure_events::EventBusHandle>>,
 }
 
 pub(crate) fn merge_rest_quote(
@@ -265,6 +263,7 @@ impl TickState<Vec<PushEvent>, UsRestSnapshot> for UsTickState<'_> {
 
     fn apply_update(&mut self, update: UsRestSnapshot) {
         let ingested_at = time::OffsetDateTime::now_utc();
+        let ts_chrono = chrono::Utc::now();
         if let Err(error) = crate::core::raw_event_journal::append_rest_snapshot(
             "us",
             "rest_snapshot",
@@ -276,6 +275,19 @@ impl TickState<Vec<PushEvent>, UsRestSnapshot> for UsTickState<'_> {
                 error
             );
         }
+
+        // Publish Option events to the pressure bus before recording state.
+        if let Some(ref bus) = self.pressure_event_bus {
+            for obs in &update.option_surfaces {
+                bus.publish(crate::pipeline::pressure_events::PressureEvent::Option {
+                    symbol: obs.underlying.0.clone(),
+                    put_call_ratio: obs.put_call_oi_ratio,
+                    iv_skew: obs.put_call_skew,
+                    ts: ts_chrono,
+                });
+            }
+        }
+
         self.live.record_rest_snapshot(&update, ingested_at);
         let UsRestSnapshot {
             quotes,
@@ -416,8 +428,10 @@ mod tests {
         let mut live = UsLiveState::new();
         let aapl = Symbol("AAPL.US".into());
         let nvda = Symbol("NVDA.US".into());
-        live.trades
-            .insert(aapl.clone(), vec![dummy_trade(190, 100), dummy_trade(191, 200)]);
+        live.trades.insert(
+            aapl.clone(),
+            vec![dummy_trade(190, 100), dummy_trade(191, 200)],
+        );
         live.trades.insert(nvda.clone(), vec![dummy_trade(900, 50)]);
 
         let mut tape = RawTradeTape::default();

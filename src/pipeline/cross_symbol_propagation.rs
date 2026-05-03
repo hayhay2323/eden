@@ -24,20 +24,12 @@ use chrono::{DateTime, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use serde::Serialize;
 
+use crate::pipeline::loopy_bp::BpInputEdge;
 use crate::pipeline::symbol_sub_kg::{NodeId, NodeKind, SubKgRegistry};
 
 /// Default propagation rate: how much of source activation transfers
 /// per unit edge weight. Universal mechanism (not per-symbol tuned).
 pub const DEFAULT_PROPAGATION_RATE: f64 = 0.50;
-
-/// Master-KG edge: directed from src to dst with weight in [0, 1].
-#[derive(Debug, Clone)]
-pub struct MasterEdge {
-    pub from: String,
-    pub to: String,
-    pub weight: f64,
-    pub edge_type: String, // e.g., "StockToStock", "PeerSimilarity"
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PropagationSnapshot {
@@ -71,7 +63,7 @@ pub struct SourceContribution {
 pub fn propagate(
     market: &str,
     registry: &SubKgRegistry,
-    edges: &[MasterEdge],
+    edges: &[BpInputEdge],
     rate: f64,
     ts: DateTime<Utc>,
 ) -> Vec<PropagationSnapshot> {

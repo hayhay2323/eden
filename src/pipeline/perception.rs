@@ -233,6 +233,7 @@ pub fn build_world_state_snapshot(
     WorldStateSnapshot {
         timestamp: observed_at,
         entities,
+        world_intents: vec![],
         perceptual_states,
         vortices,
     }

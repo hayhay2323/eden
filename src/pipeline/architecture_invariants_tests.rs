@@ -507,6 +507,40 @@ fn us_runtime_reprojects_operator_surface_after_bp_fusion() {
 }
 
 #[test]
+fn projection_recommendations_are_derived_from_operational_snapshot() {
+    let projection = strip_comments(&read("src/core/projection.rs"));
+    assert!(
+        !projection.contains("build_recommendations("),
+        "core projection must not use the deprecated agent recommendation builder"
+    );
+    assert!(
+        projection.contains("build_operational_snapshot")
+            && projection.contains("derive_agent_recommendations")
+            && projection.contains("derive_agent_watchlist")
+            && projection.contains("derive_agent_scoreboard"),
+        "core projection must derive recommendation surfaces from the operational snapshot"
+    );
+
+    let ontology_api = strip_comments(&read("src/api/ontology_api.rs"));
+    assert!(
+        !ontology_api.contains("build_recommendations(")
+            && !ontology_api.contains("load_recommendations("),
+        "ontology fallback must not seed operational contracts from legacy recommendation JSON"
+    );
+
+    let agent_api = strip_comments(&read("src/api/agent_api.rs"));
+    assert!(
+        !agent_api.contains("build_recommendations("),
+        "agent API routes must not rebuild legacy recommendations"
+    );
+    assert!(
+        agent_api.contains("execute_tool_with_surfaces")
+            && agent_api.contains("derive_agent_narration"),
+        "agent API must feed canonical surfaces into query/analyze responses"
+    );
+}
+
+#[test]
 fn bp_message_trace_exports_priors_messages_and_posteriors() {
     let bp = read("src/pipeline/loopy_bp.rs");
     for needle in [
@@ -617,6 +651,28 @@ fn hk_runtime_builds_encoded_tick_frame_before_visual_decode() {
     assert!(
         runtime.contains("build_visual_graph_frame_from_encoded"),
         "HK visual graph frame must decode from EncodedTickFrame, not direct raw runtime state",
+    );
+}
+
+#[test]
+fn us_runtime_builds_encoded_tick_frame_before_visual_decode() {
+    let runtime = read("src/us/runtime.rs");
+    assert!(
+        runtime.contains("EncodedTickFrame::from_pressure_field"),
+        "US runtime must build the V7 encoded tick frame after pressure/BP state exists",
+    );
+    assert!(
+        runtime.contains("encoded_tick_frame.attach_subkg_registry")
+            && runtime.contains("encoded_tick_frame.attach_bp_state"),
+        "US runtime must attach sub-KG and BP state to the same encoded frame",
+    );
+    assert!(
+        runtime.contains("encoded_tick_frame::write_frame"),
+        "US runtime must persist the encoded frame artifact for auditability",
+    );
+    assert!(
+        runtime.contains("build_visual_graph_frame_from_encoded"),
+        "US visual graph frame must decode from EncodedTickFrame, not direct raw runtime state",
     );
 }
 
