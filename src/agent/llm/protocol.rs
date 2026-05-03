@@ -68,6 +68,16 @@ pub fn initial_user_prompt(
     briefing: &AgentBriefing,
     session: &AgentSession,
 ) -> String {
+    // FP2: eden does not decide; Y does. The LLM prompt no longer
+    // exposes `recommendations` directly — Y reads `perception`
+    // instead. `build_recommendations` is still called here only as
+    // input to the legacy `watchlist` / `scoreboard` helpers, which
+    // pre-date the perception report. Silence the cascade of
+    // deprecation warnings at this single site; the function-level
+    // deprecation in `agent::recommendations` still nags every other
+    // caller. Watchlist + scoreboard migration to perception-driven
+    // input is tracked separately.
+    #[allow(deprecated)]
     let recommendations = build_recommendations(snapshot, Some(session));
     let watchlist = build_watchlist(snapshot, Some(session), Some(&recommendations), 6);
     let scoreboard = build_alert_scoreboard(snapshot, Some(&recommendations), None);
@@ -116,10 +126,12 @@ pub fn initial_user_prompt(
         // Canonical eden perception — the structured graph-derived
         // observation (emergence clusters, sector leaders, lead-lag
         // causal chains, anomaly alerts, regime memory with forward
-        // outcomes, belief kinetics, sensory & thematic vortices).
-        // Per the eden thesis this is the ground-truth read surface;
-        // `decision_layer.recommendations` below is a derived analyst
-        // hint retained for backwards-compat.
+        // outcomes, belief kinetics, sensory & thematic vortices,
+        // sensory_gain / channel trust). Per the eden thesis this is
+        // the canonical Y read surface. `decision_layer` below
+        // surfaces watchlist / recent_alerts as derived ranking
+        // hints; legacy `recommendations` are intentionally NOT
+        // included — Y reads perception and decides.
         "perception": snapshot.perception,
         "wake_gate": {
             "should_speak": briefing.should_speak,
@@ -131,7 +143,6 @@ pub fn initial_user_prompt(
         },
         "decision_layer": {
             "watchlist": watchlist,
-            "recommendations": recommendations,
             "recent_alerts": scoreboard.alerts.into_iter().take(6).collect::<Vec<_>>(),
         },
         "exceptions": {
