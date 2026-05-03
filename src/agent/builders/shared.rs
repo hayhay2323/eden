@@ -675,7 +675,3 @@ pub(super) fn append_pattern_fragment(
     }
 }
 
-pub(super) fn us_sector_name(store: &ObjectStore, symbol: &str) -> Option<String> {
-    let symbol = Symbol(symbol.to_string());
-    store.sector_name_for_symbol(&symbol).map(str::to_string)
-}

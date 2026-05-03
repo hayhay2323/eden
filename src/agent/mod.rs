@@ -72,7 +72,7 @@ use attention::{
 use builders::alpha_horizon_label;
 pub use builders::{build_hk_agent_snapshot, build_us_agent_snapshot};
 use context::{
-    best_hk_context_prior, best_us_context_prior, clamp_unit_interval, current_hk_context_priors,
+    best_hk_context_prior, clamp_unit_interval, current_hk_context_priors,
     current_us_context_priors,
 };
 pub use investigations::build_investigations;

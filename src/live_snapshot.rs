@@ -3731,7 +3731,6 @@ pub fn read_anomaly_alerts(
 
 #[derive(Debug, serde::Deserialize)]
 struct RawRegimeRecord {
-    current_tick: u64,
     current_bucket: String,
     historical_visits: u32,
     #[serde(default)]
