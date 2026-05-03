@@ -47,8 +47,9 @@ pub fn system_prompt() -> String {
         r#"{"action":"silent","reason":"..."}"#,
         "Use only tools listed in the context.",
         "Tool policy:",
+        "0. The `perception` field is canonical eden output: emergent clusters, sector leaders, lead-lag causal chains, anomaly alerts (KL surprise), regime memory with historical forward outcomes, belief kinetics. Treat this as ground truth about what eden currently sees in the graph.",
         "1. Treat `watchlist` and `recommendations` as derived analyst ranking views, not canonical state.",
-        "2. Start from `recommendations` or `watchlist` unless a single symbol is already clearly dominant.",
+        "2. Start from `perception` for ground truth, then `recommendations`/`watchlist` for derived ranking, unless a single symbol is already clearly dominant.",
         "3. Use `notices` or `transitions_since` next if you need the freshest operational change vector.",
         "4. Use `market_session`, `symbol_contract`, `world_state`, `backward_investigation`, `sector_flow`, and `macro_event_contracts` for object/query drill-down.",
         "5. Use `graph_knowledge_links` or `graph_macro_event_candidates` when you need graph-level context rather than a derived analyst view.",
@@ -112,6 +113,14 @@ pub fn initial_user_prompt(
             "market_regime": snapshot.market_regime,
             "stress": snapshot.stress,
         },
+        // Canonical eden perception — the structured graph-derived
+        // observation (emergence clusters, sector leaders, lead-lag
+        // causal chains, anomaly alerts, regime memory with forward
+        // outcomes, belief kinetics, sensory & thematic vortices).
+        // Per the eden thesis this is the ground-truth read surface;
+        // `decision_layer.recommendations` below is a derived analyst
+        // hint retained for backwards-compat.
+        "perception": snapshot.perception,
         "wake_gate": {
             "should_speak": briefing.should_speak,
             "priority": briefing.priority,
