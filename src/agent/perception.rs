@@ -70,6 +70,7 @@ mod tests {
             catalysts: vec![],
             sensory_vortices: vec![],
             thematic_vortices: vec![],
+            sensory_gain: vec![],
         };
         let snapshot = AgentSnapshot {
             tick: 42,

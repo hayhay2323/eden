@@ -1096,4 +1096,18 @@ export interface EdenPerception {
   catalysts?: unknown[];
   sensory_vortices?: unknown[];
   thematic_vortices?: unknown[];
+  /** FP6 (synaptic vitality): currently-learned trust weights eden
+   *  applies to each sensory channel. Updated by the closed-loop
+   *  active-probe calibrator and persisted across sessions. */
+  sensory_gain?: ChannelGain[];
+}
+
+export interface ChannelGain {
+  channel_name: string;
+  /** Clamped to [0.1, 2.0]. */
+  current_gain: number;
+  /** 0.5 = neutral / pre-learning seed. */
+  recent_accuracy: number;
+  /** 0 = seed default (channel never touched by a probe). */
+  last_calibrated: number;
 }

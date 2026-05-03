@@ -3899,6 +3899,11 @@ pub fn read_perception_streams(
         catalysts: Vec::new(),
         sensory_vortices: Vec::new(),
         thematic_vortices: Vec::new(),
+        // Legacy NDJSON path doesn't track sensory-gain learning;
+        // PerceptionGraph::to_report() is the populated path. Y will
+        // see empty here on cold-start runtimes that haven't taken the
+        // new graph path yet.
+        sensory_gain: Vec::new(),
     }
 }
 

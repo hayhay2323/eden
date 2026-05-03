@@ -55,6 +55,31 @@ pub struct EdenPerception {
     /// ontological hierarchy.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub thematic_vortices: Vec<ThematicVortex>,
+    /// FP6 (synaptic vitality): the SensoryGainLedger snapshot — the
+    /// learned trust weights eden currently applies to each sensory
+    /// channel when forming BP priors. Updated by the closed-loop in
+    /// `active_probe::evaluate_due` and persisted across sessions.
+    /// Y can read these to discount or amplify perception fields based
+    /// on which channels have been historically reliable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sensory_gain: Vec<ChannelGain>,
+}
+
+/// Y-facing view of one sensory channel's currently-learned trust
+/// weight. Mirrors `crate::perception::SensoryGainSnapshot` but lives
+/// in agent types to keep the agent boundary self-contained.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChannelGain {
+    pub channel_name: String,
+    /// Current learned weight, clamped to `[0.1, 2.0]` by the
+    /// active_probe calibrator.
+    pub current_gain: f64,
+    /// Most recent realized accuracy (probe truth vs forecast). 0.5 is
+    /// neutral / pre-learning seed value.
+    pub recent_accuracy: f64,
+    /// Tick at which `current_gain` was last calibrated. 0 means seed
+    /// default — the channel has never been touched by a probe.
+    pub last_calibrated: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -262,6 +287,7 @@ mod tests {
             catalysts: vec![],
             sensory_vortices: vec![],
             thematic_vortices: vec![],
+            sensory_gain: vec![],
         };
         let json = serde_json::to_string(&original).expect("serialise");
         let recovered: EdenPerception = serde_json::from_str(&json).expect("deserialise");
@@ -360,6 +386,12 @@ mod tests {
             }],
             sensory_vortices: vec![],
             thematic_vortices: vec![],
+            sensory_gain: vec![ChannelGain {
+                channel_name: "CapitalFlow".to_string(),
+                current_gain: 1.4,
+                recent_accuracy: 0.78,
+                last_calibrated: 41,
+            }],
         };
         let json = serde_json::to_string(&original).expect("serialise");
         let recovered: EdenPerception = serde_json::from_str(&json).expect("deserialise");

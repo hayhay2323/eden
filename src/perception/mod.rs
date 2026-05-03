@@ -632,8 +632,8 @@ impl PerceptionGraph {
         cfg: &crate::agent::PerceptionFilterConfig,
     ) -> crate::agent::EdenPerception {
         use crate::agent::{
-            BeliefKinetic, EmergentCluster, LeadLagEdge, RegimePerception, SensoryFlux,
-            SymbolContrast, SurpriseAlert, ThematicVortex,
+            BeliefKinetic, ChannelGain, EmergentCluster, LeadLagEdge, RegimePerception,
+            SensoryFlux, SymbolContrast, SurpriseAlert, ThematicVortex,
         };
 
         let mut report = crate::agent::EdenPerception {
@@ -655,6 +655,17 @@ impl PerceptionGraph {
             catalysts: Vec::new(),
             sensory_vortices: Vec::new(),
             thematic_vortices: Vec::new(),
+            sensory_gain: self
+                .sensory_gain
+                .to_records()
+                .into_iter()
+                .map(|snap| ChannelGain {
+                    channel_name: snap.channel_name,
+                    current_gain: snap.current_gain,
+                    recent_accuracy: snap.recent_accuracy,
+                    last_calibrated: snap.last_calibrated,
+                })
+                .collect(),
         };
 
         // -2. Synthetic Sectors (Fluid Narratives)
