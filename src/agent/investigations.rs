@@ -339,9 +339,11 @@ pub fn build_investigations(
     recommendations: Option<&AgentRecommendations>,
     limit: usize,
 ) -> AgentInvestigations {
+    // FP2: empty shell instead of heuristic builder fallback.
+    let _ = session;
     let recommendations = recommendations
         .cloned()
-        .unwrap_or_else(|| build_recommendations(snapshot, session));
+        .unwrap_or_else(|| AgentRecommendations::empty(snapshot));
     let mut by_object = std::collections::HashMap::<String, AgentInvestigation>::new();
 
     for selection in &snapshot.investigation_selections {

@@ -128,6 +128,33 @@ pub struct AgentRecommendations {
     pub knowledge_links: Vec<AgentKnowledgeLink>,
 }
 
+impl AgentRecommendations {
+    /// FP2 helper: build an empty `AgentRecommendations` shell tied to
+    /// a snapshot's tick / market / regime, with zero items and
+    /// decisions. Used as the migration replacement for legacy
+    /// callers that previously fell back to
+    /// `agent::recommendations::build_recommendations` (the
+    /// 1990s-style heuristic decider). Per the eden thesis eden
+    /// should not synthesize recommendations at all — callers that
+    /// need a value should pass one in explicitly, and helpers that
+    /// previously generated one as fallback now return empty so that
+    /// downstream consumers see "no recommendation context" instead
+    /// of eden-fabricated heuristic guesses.
+    pub fn empty(snapshot: &AgentSnapshot) -> Self {
+        Self {
+            tick: snapshot.tick,
+            timestamp: snapshot.timestamp.clone(),
+            market: snapshot.market,
+            regime_bias: snapshot.market_regime.bias.clone(),
+            total: 0,
+            market_recommendation: None,
+            decisions: Vec::new(),
+            items: Vec::new(),
+            knowledge_links: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "scope_kind", content = "data", rename_all = "snake_case")]
 pub enum AgentDecision {

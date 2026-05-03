@@ -18,9 +18,12 @@ pub fn build_narration(
     recommendations: Option<&AgentRecommendations>,
     analysis: Option<&AgentAnalysis>,
 ) -> AgentNarration {
+    // FP2: empty shell when caller doesn't supply recommendations;
+    // narration still builds, just without recommendation-driven
+    // top_decision / market_recommendation context.
     let recommendations = recommendations
         .cloned()
-        .unwrap_or_else(|| build_recommendations(snapshot, Some(session)));
+        .unwrap_or_else(|| AgentRecommendations::empty(snapshot));
     let watchlist = watchlist
         .cloned()
         .unwrap_or_else(|| build_watchlist(snapshot, Some(session), Some(&recommendations), 8));

@@ -68,19 +68,15 @@ pub fn initial_user_prompt(
     briefing: &AgentBriefing,
     session: &AgentSession,
 ) -> String {
-    // FP2: eden does not decide; Y does. The LLM prompt no longer
-    // exposes `recommendations` directly — Y reads `perception`
-    // instead. `build_recommendations` is still called here only as
-    // input to the legacy `watchlist` / `scoreboard` helpers, which
-    // pre-date the perception report. Silence the cascade of
-    // deprecation warnings at this single site; the function-level
-    // deprecation in `agent::recommendations` still nags every other
-    // caller. Watchlist + scoreboard migration to perception-driven
-    // input is tracked separately.
-    #[allow(deprecated)]
-    let recommendations = build_recommendations(snapshot, Some(session));
-    let watchlist = build_watchlist(snapshot, Some(session), Some(&recommendations), 6);
-    let scoreboard = build_alert_scoreboard(snapshot, Some(&recommendations), None);
+    // FP2: eden does not decide. The LLM prompt reads `perception`
+    // for ground truth, not eden's heuristic recommendations. Pass
+    // `None` to the watchlist / scoreboard helpers so they fall
+    // through to their `AgentRecommendations::empty` shell — the
+    // helpers themselves still build (their structure is still
+    // useful for ranking hints) but aren't seeded by an eden-
+    // generated decision template.
+    let watchlist = build_watchlist(snapshot, Some(session), None, 6);
+    let scoreboard = build_alert_scoreboard(snapshot, None, None);
     let tools = crate::agent::tool_catalog();
     let focus_set = briefing
         .focus_symbols

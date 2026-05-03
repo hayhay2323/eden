@@ -75,7 +75,11 @@ async fn run_pending_analysis_loop(
         .await;
         drop(permit);
 
-        let recommendations = build_recommendations(&pending.snapshot, Some(&pending.session));
+        // FP2: empty recommendations shell; the LLM-fallback path
+        // produces analysis + narration artifacts, but eden no longer
+        // fabricates recommendations to wrap them. Downstream
+        // consumers see no recommendation context for fallback runs.
+        let recommendations = AgentRecommendations::empty(&pending.snapshot);
         let watchlist = build_watchlist(
             &pending.snapshot,
             Some(&pending.session),

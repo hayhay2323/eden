@@ -6,9 +6,9 @@ use serde_json::{json, Value};
 use tokio::sync::Semaphore;
 
 use crate::agent::{
-    build_alert_scoreboard, build_recommendations, build_watchlist, execute_tool,
-    AgentActionExpectancies, AgentBriefing, AgentDecision, AgentDecisionAttribution,
-    AgentRecommendations, AgentSession, AgentSnapshot, AgentToolRequest, AgentWatchlist,
+    build_alert_scoreboard, build_watchlist, execute_tool, AgentActionExpectancies, AgentBriefing,
+    AgentDecision, AgentDecisionAttribution, AgentRecommendations, AgentSession, AgentSnapshot,
+    AgentToolRequest, AgentWatchlist,
 };
 use crate::cases::CaseMarket;
 use crate::core::market::{ArtifactKind, MarketId, MarketRegistry};

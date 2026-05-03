@@ -766,10 +766,13 @@ fn recommendations_for_tool(
     session: Option<&AgentSession>,
     surfaces: &AgentToolSurfaceRefs<'_>,
 ) -> AgentRecommendations {
+    // FP2: empty shell when surface caller doesn't provide; tools
+    // operate on perception via the `perception` tool now.
+    let _ = session;
     surfaces
         .recommendations
         .cloned()
-        .unwrap_or_else(|| build_recommendations(snapshot, session))
+        .unwrap_or_else(|| AgentRecommendations::empty(snapshot))
 }
 
 pub fn execute_tool(

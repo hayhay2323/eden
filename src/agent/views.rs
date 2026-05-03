@@ -1333,9 +1333,14 @@ pub fn build_watchlist(
     recommendations: Option<&AgentRecommendations>,
     limit: usize,
 ) -> AgentWatchlist {
+    // FP2: empty shell instead of running the deprecated heuristic
+    // builder when no recommendations supplied. Watchlist still
+    // builds; the entries derived from recommendations.decisions are
+    // simply absent if no caller supplied them.
+    let _ = session;
     let recommendations = recommendations
         .cloned()
-        .unwrap_or_else(|| build_recommendations(snapshot, session));
+        .unwrap_or_else(|| AgentRecommendations::empty(snapshot));
     let mut entries = recommendations
         .decisions
         .iter()
@@ -1489,9 +1494,10 @@ pub fn build_alert_scoreboard(
     recommendations: Option<&AgentRecommendations>,
     previous: Option<&AgentAlertScoreboard>,
 ) -> AgentAlertScoreboard {
+    // FP2: empty shell instead of legacy heuristic builder fallback.
     let recommendations = recommendations
         .cloned()
-        .unwrap_or_else(|| build_recommendations(snapshot, None));
+        .unwrap_or_else(|| AgentRecommendations::empty(snapshot));
     let mut alerts = previous
         .map(|scoreboard| scoreboard.alerts.clone())
         .unwrap_or_default();

@@ -89,9 +89,6 @@ use macro_events::{
     merge_macro_event_candidates, promote_macro_events,
 };
 pub use perception::{build_perception_report, AgentPerceptionReport};
-// DEPRECATED: see `recommendations.rs` header. Y read surface is
-// `GET /perception/:market` or `eden perception <hk|us>`.
-pub use recommendations::build_recommendations;
 use recommendations::{
     agent_bias_for_symbol, best_counterfactual_action, counterfactual_regret,
     decision_alert_record, realized_return_for_action, recommendation_resolution_status,

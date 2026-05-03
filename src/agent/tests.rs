@@ -2,6 +2,13 @@ use super::attention::{build_sector_flows, build_wake_state};
 use super::builders::build_broker_state;
 use super::shared::extract_symbols;
 use super::*;
+// Tests in this module exercise the deprecated heuristic builder
+// directly to lock down legacy behavior. Production code paths have
+// migrated to `AgentRecommendations::empty()` (see commits in this
+// session); tests stay on the legacy entry until the function is
+// physically removed.
+#[allow(deprecated)]
+use crate::agent::recommendations::build_recommendations;
 use crate::action::workflow::{ActionExecutionPolicy, ActionGovernanceContract};
 use crate::ontology::{
     ActionDirection, ActionNodeStage, BackwardCause, CausalContestState, Market,

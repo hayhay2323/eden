@@ -226,9 +226,13 @@ pub fn build_judgments(
     recommendations: Option<&AgentRecommendations>,
     limit: usize,
 ) -> AgentJudgments {
+    // FP2: when no caller-provided recommendations are passed, fall
+    // back to an empty shell instead of running the deprecated
+    // heuristic builder. Downstream judgment helpers handle
+    // `Option<&...>` recommendation context as None gracefully.
     let recommendations = recommendations
         .cloned()
-        .unwrap_or_else(|| build_recommendations(snapshot, session));
+        .unwrap_or_else(|| AgentRecommendations::empty(snapshot));
     let investigations =
         build_investigations(snapshot, session, Some(&recommendations), usize::MAX);
     let symbol_recommendations = recommendations
