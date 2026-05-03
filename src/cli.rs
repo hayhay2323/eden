@@ -1,3 +1,4 @@
+use crate::cases::CaseMarket;
 use crate::cli::commands::OperatorCommandDescriptor;
 use crate::core::runtime_tasks::{
     RuntimeTaskCreateRequest, RuntimeTaskFilter, RuntimeTaskKind, RuntimeTaskRecord,

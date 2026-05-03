@@ -42,10 +42,16 @@ pub enum CliCommand {
     OperatorCommands {
         json: bool,
     },
+    /// Y reader — print eden's current perception of `market` to stdout.
+    /// Reads the persisted `AgentSnapshot.perception` from disk; no
+    /// runtime or HTTP server required.
+    Perception {
+        market: CaseMarket,
+    },
 }
 
 const CLI_USAGE: &str =
-    "usage: eden us\n       eden causal timeline <leaf_scope_key> [limit]\n       eden causal flips [limit]\n       eden lineage [limit] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--json]\n       eden lineage history [snapshots] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--latest-only] [--json]\n       eden lineage rows [rows] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--latest-only] [--json]\n       eden tasks [--status <value>] [--kind <value>] [--market <value>] [--owner <value>] [--json]\n       eden tasks create <kind> --label <value> [--market <value>] [--owner <value>] [--detail <value>] [--json]\n       eden tasks status <task_id> <status> [--detail <value>] [--error <value>] [--json]\n       eden operator commands [--json]";
+    "usage: eden us\n       eden perception <hk|us>\n       eden causal timeline <leaf_scope_key> [limit]\n       eden causal flips [limit]\n       eden lineage [limit] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--json]\n       eden lineage history [snapshots] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--latest-only] [--json]\n       eden lineage rows [rows] [--label <value>] [--bucket <value>] [--family <value>] [--session <value>] [--regime <value>] [--top <n>] [--sort net|conv|external] [--alignment all|confirm|contradict] [--latest-only] [--json]\n       eden tasks [--status <value>] [--kind <value>] [--market <value>] [--owner <value>] [--json]\n       eden tasks create <kind> --label <value> [--market <value>] [--owner <value>] [--detail <value>] [--json]\n       eden tasks status <task_id> <status> [--detail <value>] [--error <value>] [--json]\n       eden operator commands [--json]";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LineageViewOptions {
@@ -85,6 +91,14 @@ pub fn parse_cli_command(args: &[String]) -> Result<CliCommand, String> {
         Some("lineage") => parse_lineage_cli_command(&args[2..], DEFAULT_LIMIT),
         Some("tasks") => parse_tasks_cli_command(&args[2..]),
         Some("operator") => parse_operator_cli_command(&args[2..]),
+        Some("perception") => {
+            let raw = args
+                .get(2)
+                .ok_or_else(|| "usage: eden perception <hk|us>".to_string())?;
+            let market = CaseMarket::parse(raw)
+                .ok_or_else(|| format!("unsupported market `{raw}` (expected hk|us)"))?;
+            Ok(CliCommand::Perception { market })
+        }
         _ => Err(CLI_USAGE.into()),
     }
 }

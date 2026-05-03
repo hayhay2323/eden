@@ -75,6 +75,28 @@ fn run_tasks_status_query(
     Ok(())
 }
 
+/// Y reader — load the latest persisted `AgentSnapshot` for `market`
+/// and print just its `perception` slice as pretty-printed JSON. This
+/// is the terminal counterpart to the HTTP `/perception/:market`
+/// endpoint and reads the same artifact.
+async fn run_perception_query(market: CaseMarket) -> Result<(), AppError> {
+    let snapshot = crate::agent::load_snapshot(market)
+        .await
+        .map_err(|error| -> AppError {
+            format!("failed to load agent snapshot for {market:?}: {error}").into()
+        })?;
+    match snapshot.perception {
+        Some(perception) => {
+            println!("{}", serde_json::to_string_pretty(&perception)?);
+            Ok(())
+        }
+        None => Err(format!(
+            "no perception report yet for market `{market:?}` — runtime may not have ticked"
+        )
+        .into()),
+    }
+}
+
 fn run_operator_commands_query(json: bool) -> Result<(), std::io::Error> {
     let commands = available_operator_commands();
     if json {
@@ -213,6 +235,7 @@ pub async fn run_cli_query(command: CliCommand) -> Result<(), AppError> {
             run_operator_commands_query(json).map_err(|error| -> AppError { Box::new(error) })?;
             Ok(())
         }
+        CliCommand::Perception { market } => run_perception_query(market).await,
     }
 }
 
@@ -278,5 +301,6 @@ pub async fn run_cli_query(command: CliCommand) -> Result<(), AppError> {
             run_operator_commands_query(json).map_err(|error| -> AppError { Box::new(error) })?;
             Ok(())
         }
+        CliCommand::Perception { market } => run_perception_query(market).await,
     }
 }
