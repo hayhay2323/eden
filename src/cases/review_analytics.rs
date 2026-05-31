@@ -281,10 +281,7 @@ fn build_lens_regime_hit_rates(
             .unwrap_or("unknown")
             .to_string();
         let regime = outcome.market_regime.trim().to_string();
-        let net_return = outcome
-            .net_return
-            .parse::<rust_decimal::Decimal>()
-            .unwrap_or(rust_decimal::Decimal::ZERO);
+        let net_return = outcome.net_return;
         let entry = grouped
             .entry((lens, regime))
             .or_insert((0, 0, rust_decimal::Decimal::ZERO));
