@@ -936,6 +936,18 @@ pub async fn run() {
                     }
                 }
             }
+
+            // Fold newly-extracted schemas into the in-memory cache so THIS run's
+            // shadow_scores gate and evolution cycle act on them — previously they
+            // were only persisted, so the gate saw them only after a restart reload.
+            for schema in schemas_to_write {
+                if !cached_causal_schemas
+                    .iter()
+                    .any(|existing| existing.schema_id == schema.schema_id)
+                {
+                    cached_causal_schemas.push(schema);
+                }
+            }
         }
 
         // Evolution cycle: governed lifecycle management (every 50 ticks)
