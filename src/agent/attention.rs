@@ -517,7 +517,7 @@ pub(crate) fn build_wake_state(
         });
     }
     sort_suggested_tool_calls(&mut suggested_tools);
-    suggested_tools.truncate(6);
+    suggested_tools.truncate(8);
 
     AgentWakeState {
         should_speak,

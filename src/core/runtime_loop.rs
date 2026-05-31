@@ -139,9 +139,11 @@ where
         drain_debounced(push_rx, debounce, |event| state.apply_push(event)).await;
     }
 
-    if let Some(update) = drain_latest(update_rx) {
-        state.apply_update(update);
-        received_update = true;
+    if received_push || received_update {
+        if let Some(update) = drain_latest(update_rx) {
+            state.apply_update(update);
+            received_update = true;
+        }
     }
 
     if !state.is_dirty() {

@@ -823,11 +823,6 @@ fn workflow_focus_summary(
     workflow_next_step: Option<&str>,
     best_action: Option<&str>,
 ) -> Option<String> {
-    let family_suffix = family_label
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|item| format!(" ({item})"))
-        .unwrap_or_default();
     let family_inline = family_label
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -845,7 +840,7 @@ fn workflow_focus_summary(
         )),
         (_, Some("review_desk")) => Some(format!(
             "{object_id} is queued for review_desk{}",
-            family_suffix
+            family_inline
         )),
         (_, Some("collect_confirmation")) => Some(format!(
             "{object_id} is collecting confirmation{}",
