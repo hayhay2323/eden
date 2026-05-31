@@ -41,10 +41,13 @@ pub async fn wait_for_activity<P, U>(
                     }),
                     None => Err(()),
                 },
-                maybe_update = update_rx.recv() => Ok(LoopActivity {
-                    first_push: None,
-                    latest_update: maybe_update,
-                }),
+                maybe_update = update_rx.recv() => match maybe_update {
+                    Some(update) => Ok(LoopActivity {
+                        first_push: None,
+                        latest_update: Some(update),
+                    }),
+                    None => Err(()),
+                },
             }
         })
         .await;

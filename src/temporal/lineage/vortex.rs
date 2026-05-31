@@ -43,10 +43,17 @@ pub struct VortexSuccessPattern {
     pub mean_channel_diversity: Decimal,
 }
 
-pub fn compute_vortex_successful_fingerprints(
+/// Reconstruct the vortex fingerprint for EVERY resolved outcome in the window
+/// (winners and losers alike), each tagged with whether it was a successful
+/// outcome. This is the symmetric base that both the success-only fingerprint
+/// view and candidate-mechanism hit/miss scoring build on — attributing misses
+/// by the SAME channel-identity reconstruction as hits is what keeps a
+/// mechanism's hit-rate (and therefore its promotion) honest rather than
+/// permissive.
+pub fn compute_vortex_fingerprints(
     history: &TickHistory,
     limit: usize,
-) -> Vec<VortexOutcomeFingerprint> {
+) -> Vec<(VortexOutcomeFingerprint, bool)> {
     let window = history.latest_n(limit);
     if window.is_empty() {
         return Vec::new();
@@ -60,8 +67,8 @@ pub fn compute_vortex_successful_fingerprints(
 
     let mut fingerprints = super::compute_case_realized_outcomes_adaptive(history, limit)
         .into_iter()
-        .filter(is_successful_outcome)
         .filter_map(|outcome| {
+            let hit = is_successful_outcome(&outcome);
             let entry_record = by_tick.get(&outcome.entry_tick).copied()?;
             let setup = entry_record
                 .tactical_setups
@@ -69,27 +76,30 @@ pub fn compute_vortex_successful_fingerprints(
                 .find(|setup| setup.setup_id == outcome.setup_id)?;
             let (vortex, role) = match_setup_vortex(setup, entry_record)?;
             let dominant_channels = dominant_channels(vortex);
-            Some(VortexOutcomeFingerprint {
-                setup_id: outcome.setup_id,
-                family: outcome.family,
-                symbol: outcome.symbol,
-                entry_tick: outcome.entry_tick,
-                resolved_tick: outcome.resolved_tick,
-                center_scope: vortex.center_scope.label(),
-                center_kind: vortex.center_scope.kind_slug().into(),
-                role: role.into(),
-                channel_signature: channel_signature(&dominant_channels),
-                dominant_channels,
-                channel_diversity: vortex.channel_diversity,
-                path_count: vortex.flow_paths.len(),
-                strength: vortex.strength,
-                coherence: vortex.coherence,
-                net_return: outcome.net_return,
-            })
+            Some((
+                VortexOutcomeFingerprint {
+                    setup_id: outcome.setup_id,
+                    family: outcome.family,
+                    symbol: outcome.symbol,
+                    entry_tick: outcome.entry_tick,
+                    resolved_tick: outcome.resolved_tick,
+                    center_scope: vortex.center_scope.label(),
+                    center_kind: vortex.center_scope.kind_slug().into(),
+                    role: role.into(),
+                    channel_signature: channel_signature(&dominant_channels),
+                    dominant_channels,
+                    channel_diversity: vortex.channel_diversity,
+                    path_count: vortex.flow_paths.len(),
+                    strength: vortex.strength,
+                    coherence: vortex.coherence,
+                    net_return: outcome.net_return,
+                },
+                hit,
+            ))
         })
         .collect::<Vec<_>>();
 
-    fingerprints.sort_by(|left, right| {
+    fingerprints.sort_by(|(left, _), (right, _)| {
         right
             .resolved_tick
             .cmp(&left.resolved_tick)
@@ -97,6 +107,19 @@ pub fn compute_vortex_successful_fingerprints(
             .then_with(|| left.setup_id.cmp(&right.setup_id))
     });
     fingerprints
+}
+
+/// Winners-only view over [`compute_vortex_fingerprints`], for callers that only
+/// want successful patterns (e.g. success-pattern aggregation). Order preserved.
+pub fn compute_vortex_successful_fingerprints(
+    history: &TickHistory,
+    limit: usize,
+) -> Vec<VortexOutcomeFingerprint> {
+    compute_vortex_fingerprints(history, limit)
+        .into_iter()
+        .filter(|(_, hit)| *hit)
+        .map(|(fingerprint, _)| fingerprint)
+        .collect()
 }
 
 pub fn compute_vortex_success_patterns(
@@ -416,6 +439,34 @@ pub fn score_candidate_mechanism(
     mech.post_promotion_net_return += net_return;
     mech.last_seen_tick = tick;
     mech.updated_at = now_rfc3339.to_string();
+}
+
+/// Attribute each resolved outcome's hit/miss to the candidate mechanism whose
+/// identity (`center_kind` + `role` + `channel_signature`) the outcome's
+/// reconstructed vortex matches. Only outcomes that resolved on `tick` are
+/// scored, so each is counted exactly once over the run. Because hits AND misses
+/// are joined by the SAME identity (via [`compute_vortex_fingerprints`]), the
+/// resulting hit-rate that gates shadow→assist→live promotion is a real skill
+/// filter, not a permissive accumulator.
+pub fn score_mechanisms_from_outcomes(
+    mechanisms: &mut [CandidateMechanismRecord],
+    fingerprints: &[(VortexOutcomeFingerprint, bool)],
+    tick: u64,
+    now_rfc3339: &str,
+) {
+    for (fingerprint, hit) in fingerprints {
+        if fingerprint.resolved_tick != tick {
+            continue;
+        }
+        for mech in mechanisms.iter_mut() {
+            if mech.channel_signature == fingerprint.channel_signature
+                && mech.center_kind == fingerprint.center_kind
+                && mech.role == fingerprint.role
+            {
+                score_candidate_mechanism(mech, *hit, fingerprint.net_return, tick, now_rfc3339);
+            }
+        }
+    }
 }
 
 /// Filter mechanisms that are in "live" mode and can act as hypothesis templates.
@@ -848,5 +899,113 @@ mod tests {
             evaluate_candidate_mechanisms(&[], &[existing], "hk", 100, "2026-04-01T01:00:00Z");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].consecutive_misses, 3);
+    }
+
+    fn mech_for_scoring(
+        mode: &str,
+        hits: u64,
+        misses: u64,
+        net: Decimal,
+    ) -> CandidateMechanismRecord {
+        CandidateMechanismRecord {
+            mechanism_id: "hk|symbol|center|broker_flow|catalyst".into(),
+            market: "hk".into(),
+            center_kind: "symbol".into(),
+            role: "center".into(),
+            channel_signature: "broker_flow|catalyst".into(),
+            dominant_channels: vec!["broker_flow".into(), "catalyst".into()],
+            top_family: "Directed Flow".into(),
+            samples: 20,
+            mean_net_return: dec!(0.03),
+            mean_strength: dec!(0.5),
+            mean_coherence: dec!(0.7),
+            mean_channel_diversity: dec!(2.0),
+            mode: mode.into(),
+            promoted_at_tick: 10,
+            last_seen_tick: 80,
+            last_hit_tick: None,
+            consecutive_misses: 0,
+            post_promotion_hits: hits,
+            post_promotion_misses: misses,
+            post_promotion_net_return: net,
+            created_at: "2026-04-01T00:00:00Z".into(),
+            updated_at: "2026-04-01T00:00:00Z".into(),
+        }
+    }
+
+    fn fingerprint_for(
+        channel_signature: &str,
+        center_kind: &str,
+        role: &str,
+        resolved_tick: u64,
+        net_return: Decimal,
+    ) -> VortexOutcomeFingerprint {
+        VortexOutcomeFingerprint {
+            setup_id: "s1".into(),
+            family: "Directed Flow".into(),
+            symbol: Some("700.HK".into()),
+            entry_tick: resolved_tick.saturating_sub(5),
+            resolved_tick,
+            center_scope: "symbol:700.HK".into(),
+            center_kind: center_kind.into(),
+            role: role.into(),
+            channel_signature: channel_signature.into(),
+            dominant_channels: vec!["broker_flow".into(), "catalyst".into()],
+            channel_diversity: 2,
+            path_count: 2,
+            strength: dec!(0.6),
+            coherence: dec!(0.7),
+            net_return,
+        }
+    }
+
+    #[test]
+    fn score_mechanisms_promotes_assist_to_live_on_honest_hit_rate() {
+        // 4 hits / 7 misses = 11 evals — just under the 12-eval live gate — positive net.
+        let mut mechs = vec![mech_for_scoring("assist", 4, 7, dec!(0.40))];
+        assert!(!mechs[0].should_promote_to_live());
+        // One matching successful outcome resolved this tick → 5/12 = 0.417 hit-rate.
+        let fps = vec![(
+            fingerprint_for("broker_flow|catalyst", "symbol", "center", 100, dec!(0.05)),
+            true,
+        )];
+        score_mechanisms_from_outcomes(&mut mechs, &fps, 100, "2026-04-01T00:00:00Z");
+        assert_eq!(mechs[0].post_promotion_hits, 5);
+        assert_eq!(mechs[0].post_promotion_misses, 7);
+        assert!(mechs[0].should_promote_to_live());
+    }
+
+    #[test]
+    fn score_mechanisms_attributes_misses_by_same_identity() {
+        // A loser joined by the SAME identity must count as a miss — otherwise the
+        // hit-rate is permissive (the whole point of the symmetric join).
+        let mut mechs = vec![mech_for_scoring("assist", 5, 0, dec!(0.10))];
+        let fps = vec![(
+            fingerprint_for("broker_flow|catalyst", "symbol", "center", 100, dec!(-0.03)),
+            false,
+        )];
+        score_mechanisms_from_outcomes(&mut mechs, &fps, 100, "2026-04-01T00:00:00Z");
+        assert_eq!(mechs[0].post_promotion_misses, 1);
+        assert_eq!(mechs[0].consecutive_misses, 1);
+    }
+
+    #[test]
+    fn score_mechanisms_skips_mismatched_identity_and_other_ticks() {
+        let mut mechs = vec![mech_for_scoring("assist", 4, 4, dec!(0.10))];
+        let fps = vec![
+            // Wrong channel_signature → not this mechanism's outcome.
+            (
+                fingerprint_for("liquidity|risk", "symbol", "center", 100, dec!(0.05)),
+                true,
+            ),
+            // Right identity but resolved on a different tick → already scored / skip.
+            (
+                fingerprint_for("broker_flow|catalyst", "symbol", "center", 99, dec!(0.05)),
+                true,
+            ),
+        ];
+        score_mechanisms_from_outcomes(&mut mechs, &fps, 100, "2026-04-01T00:00:00Z");
+        assert_eq!(mechs[0].post_promotion_hits, 4);
+        assert_eq!(mechs[0].post_promotion_misses, 4);
     }
 }

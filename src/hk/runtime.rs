@@ -831,6 +831,24 @@ pub async fn run() {
             &next_vortex_success_patterns,
         );
 
+        // Score candidate mechanisms from this tick's freshly-resolved outcomes
+        // (honest symmetric hit/miss join by mechanism identity) BEFORE the
+        // promotion check below, so shadow→assist→live promotion is driven by a
+        // real hit-rate rather than counters that never move.
+        {
+            let now_str = now
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default();
+            let vortex_fingerprints =
+                crate::temporal::lineage::compute_vortex_fingerprints(&history, LINEAGE_WINDOW);
+            crate::temporal::lineage::score_mechanisms_from_outcomes(
+                &mut cached_candidate_mechanisms,
+                &vortex_fingerprints,
+                tick,
+                &now_str,
+            );
+        }
+
         // Evaluate and persist candidate mechanisms
         {
             let now_str = now
@@ -916,6 +934,18 @@ pub async fn run() {
                     if let Err(err) = store.write_causal_schemas(&schemas_to_write).await {
                         eprintln!("[hk] failed to persist causal schemas: {err}");
                     }
+                }
+            }
+
+            // Fold newly-extracted schemas into the in-memory cache so THIS run's
+            // shadow_scores gate and evolution cycle act on them — previously they
+            // were only persisted, so the gate saw them only after a restart reload.
+            for schema in schemas_to_write {
+                if !cached_causal_schemas
+                    .iter()
+                    .any(|existing| existing.schema_id == schema.schema_id)
+                {
+                    cached_causal_schemas.push(schema);
                 }
             }
         }
