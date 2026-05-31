@@ -158,6 +158,59 @@ impl EventSnapshot {
             ));
         }
 
+        // Sector propagation: when >=2 constituents of the same sector each show
+        // smart-money pressure this tick, the sector composite is corroborated as
+        // accelerating -> emit a Sector-scoped CompositeAcceleration. Mirrors the
+        // US `propagate_symbol_events_to_sector` pass; isolated (single-stock)
+        // pressure never propagates to its sector.
+        {
+            use std::collections::HashMap;
+            let mut sector_pressure: HashMap<crate::ontology::objects::SectorId, Vec<Decimal>> =
+                HashMap::new();
+            for event in &events {
+                if !matches!(event.value.kind, MarketEventKind::SmartMoneyPressure) {
+                    continue;
+                }
+                let SignalScope::Symbol(symbol) = &event.value.scope else {
+                    continue;
+                };
+                if let Some(sector) = crate::ontology::store::symbol_sector(&symbol.0) {
+                    sector_pressure
+                        .entry(sector)
+                        .or_default()
+                        .push(event.value.magnitude);
+                }
+            }
+            let mut propagated: Vec<(crate::ontology::objects::SectorId, Vec<Decimal>)> =
+                sector_pressure
+                    .into_iter()
+                    .filter(|(_, magnitudes)| magnitudes.len() >= 2)
+                    .collect();
+            propagated.sort_by(|(s_a, _), (s_b, _)| s_a.0.cmp(&s_b.0));
+            for (sector, magnitudes) in propagated {
+                let count = magnitudes.len();
+                let mean =
+                    magnitudes.iter().copied().sum::<Decimal>() / Decimal::from(count as i64);
+                events.push(Event::new(
+                    MarketEventRecord {
+                        scope: SignalScope::Sector(sector.clone()),
+                        kind: MarketEventKind::CompositeAcceleration,
+                        magnitude: mean.min(Decimal::ONE),
+                        summary: format!(
+                            "sector {} composite accelerating: {} constituents under corroborated smart-money pressure",
+                            sector, count
+                        ),
+                    },
+                    provenance(
+                        ProvenanceSource::Computed,
+                        links.timestamp,
+                        Some(mean),
+                        [format!("sector_propagation:{}", sector)],
+                    ),
+                ));
+            }
+        }
+
         if exceeds_cutoff(
             insights.stress.composite_stress,
             historical_market_stress_cutoff(history),
