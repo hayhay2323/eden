@@ -28,8 +28,11 @@
 
 ## 🔵 P3 — 拓撲湧現
 - [ ] Hypothesis generation 從 template-matching 反轉為 convergence-detection
-- [ ] 正反饋閉環：outcome 好 → 放大 family / 降低門檻 / 記住漩渦形狀
+- [~] 正反饋閉環：outcome 好 → 放大 family / 降低門檻 / 記住漩渦形狀
+  - [x] **「記住漩渦形狀」= candidate-mechanism 晉升現在是技能門檻**（branch `wire-mechanism-scoring`）：補上 `score_mechanisms_from_outcomes`（誠實對稱 hit/miss join，按 mechanism identity）→ shadow→assist→live 由真實命中率決定，多數形狀死在 shadow、少數塌縮進 live = 收斂瓶頸。+ 修好 shadow_scores gate 的 in-memory seam（schema 萃取現在當場進 cache，不必等重啟）。
+  - [ ] 「放大 family / 降門檻」力道仍微弱（boost 封頂 1.25 → 只削 0.005 邊際，base 0.03）——可加大 + 去重 `alpha_boost`
 - [ ] 湧現：新漩渦形狀不屬於任何現有 template → 自動提取為新 pattern
+  - **下一刀**：`templates_from_candidate_mechanisms`（family_gate.rs:175）把 **live** mechanism 轉成 `emergent:{sig}` HypothesisTemplate——零 caller。現在 mechanism 終於能到 live 了（上面那刀），把這個接進 `derive_hypotheses`（經 ReasoningContext）就閉合「發現新形狀→餵回假設生成」。
 
 ## 🟠 發現的 pre-existing 債（2026-05-31 掃出 → 全數解決）
 - [x] 5 個 pre-existing 失敗測試已全部處理（每個都用對抗式診斷：git 考古 + 同類測試交叉比對 + 反方論證，先分類「測試對碼錯」vs「碼對測試過時」再動手）。`cargo test --lib` → **768 passed / 0 failed**。
@@ -49,3 +52,4 @@
 - 2026-05-31 | `shadow_scores` 接通 evolution safety gate | `src/temporal/lineage/evolution.rs`, `src/temporal/lineage.rs`, `src/hk/runtime.rs` | gate 先前查的 `shadow_scores` map 永遠空（unused、never-mutated HashMap）→ `unwrap_or(true)` → 所有 schema 無門檻驗證 = **非收斂根因**。新增 `compute_shadow_scores_from_outcomes`：用 `CaseRealizedOutcome` 既有欄位（regime/session affinity + convergence 門檻）算每個 schema 的反事實命中率；hit-rate < 0.30 且 ≥3 次匹配的 schema 被擋出驗證。刻意不呼叫 `preconditions_met`（其依賴的 `contest_state` 全 codebase 無 production 來源）。+2 測試（皆過）。commit `fac739f`。
 - 2026-05-31 | 修復 5 個 pre-existing 失敗測試中的 4 個（3 碼 bug + 1 過時測試）| `agent/views.rs`, `agent/attention.rs`, `core/runtime_loop.rs`, `us/runtime_tests.rs` | 每個先對抗式分類（test-stale vs code-bug）再改：3 個其實是 production 回歸（測試是對的）、1 個是測試時間戳過時。767 passed。commit `9ea190e`。
 - 2026-05-31 | 補上 HK 板塊傳導功能（第 5 個失敗測試）| `src/pipeline/signals/events.rs` | `detect()` 本來不發任何板塊範圍信號；照美股 `propagate_symbol_events_to_sector` 把 symbol 級 `SmartMoneyPressure` 事件按板塊分組，同板塊 ≥2 檔佐證 → 發 Sector 範圍 `CompositeAcceleration`（magnitude=均值）。沿用既有 median-cutoff 顯著性門檻，≥2 規則保證孤立單檔不傳導。**768 passed / 0 failed**，persistence build 亦綠。commit `f65bca9`。
+- 2026-05-31 | P3 收斂第一刀：candidate-mechanism 晉升技能門檻化 + 修 flaky + gate seam | `vortex.rs`, `lineage.rs`, `hk/runtime.rs`, `core/runtime_loop.rs` | branch `wire-mechanism-scoring`。Map+design+對抗審查工作流先確認 keystone：`score_candidate_mechanism`（唯一動 hit/miss 的函數）零 caller → 所有 mechanism 永凍 shadow。審查抓到天真接法會做出「permissive 假門檻」（hit 用精確 fingerprint、miss 用鬆散 family → 灌水命中率）。改成誠實對稱：`compute_vortex_fingerprints` 對贏家輸家都重建 identity 並標 hit，`score_mechanisms_from_outcomes` 按 center_kind+role+channel_signature 對稱 join。+ flaky `closed_channels` 修（select! 對 closed update channel 回 Ok 而非 Err 的 50/50 race）+ shadow_scores gate 的 in-memory seam（萃取的 schema 當場進 cache）。**771 passed / 0 failed**，兩 build 綠。commits `c7c7223`/`409dfe0`/`c5aa42b`。
