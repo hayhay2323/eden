@@ -27,10 +27,10 @@ pub use evolution::{
 };
 pub use schema::extract_causal_schema;
 pub use vortex::{
-    active_candidate_mechanisms, compute_vortex_success_patterns,
+    active_candidate_mechanisms, compute_vortex_fingerprints, compute_vortex_success_patterns,
     compute_vortex_successful_fingerprints, evaluate_candidate_mechanisms,
-    live_candidate_mechanisms, score_candidate_mechanism, vortex_matches_success_pattern,
-    VortexOutcomeFingerprint, VortexSuccessPattern,
+    live_candidate_mechanisms, score_candidate_mechanism, score_mechanisms_from_outcomes,
+    vortex_matches_success_pattern, VortexOutcomeFingerprint, VortexSuccessPattern,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

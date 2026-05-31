@@ -831,6 +831,24 @@ pub async fn run() {
             &next_vortex_success_patterns,
         );
 
+        // Score candidate mechanisms from this tick's freshly-resolved outcomes
+        // (honest symmetric hit/miss join by mechanism identity) BEFORE the
+        // promotion check below, so shadow→assist→live promotion is driven by a
+        // real hit-rate rather than counters that never move.
+        {
+            let now_str = now
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default();
+            let vortex_fingerprints =
+                crate::temporal::lineage::compute_vortex_fingerprints(&history, LINEAGE_WINDOW);
+            crate::temporal::lineage::score_mechanisms_from_outcomes(
+                &mut cached_candidate_mechanisms,
+                &vortex_fingerprints,
+                tick,
+                &now_str,
+            );
+        }
+
         // Evaluate and persist candidate mechanisms
         {
             let now_str = now
