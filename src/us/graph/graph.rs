@@ -306,6 +306,14 @@ impl UsGraph {
                 _ => None,
             })
     }
+
+    /// The dual-listed (US, HK) symbol pairs currently active in the graph.
+    pub fn active_cross_market_pairs(&self) -> Vec<(Symbol, Symbol)> {
+        self.cross_market_nodes
+            .keys()
+            .filter_map(|us| self.hk_counterpart(us).map(|hk| (us.clone(), hk)))
+            .collect()
+    }
 }
 
 // ── Helpers ──

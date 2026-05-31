@@ -1335,6 +1335,21 @@ fn evaluate_tracker(tracker: &HiddenForceTracker) -> HiddenForceVerdict {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// Coherence-adjusted residual propagation strength for a sector.
+/// Returns `mean_residual × coherence` for the sector's cluster, or `None`
+/// if the sector has no residual cluster in this field. Negative values mean
+/// the sector's propagation is failing (residuals diverge from expectation).
+pub fn residual_adjusted_propagation_strength(
+    field: &ResidualField,
+    sector: &SectorId,
+) -> Option<Decimal> {
+    field
+        .clustered_sectors
+        .iter()
+        .find(|c| &c.sector == sector)
+        .map(|c| c.mean_residual * c.coherence)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

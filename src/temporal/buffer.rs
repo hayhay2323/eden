@@ -28,6 +28,18 @@ impl TickHistory {
         self.records.push_back(record);
     }
 
+    /// All graph-edge transitions for a given edge id, in chronological order.
+    pub fn graph_edge_transitions_for_id(
+        &self,
+        edge_id: &crate::graph::temporal::GraphEdgeId,
+    ) -> Vec<&crate::graph::temporal::GraphEdgeTransition> {
+        self.records
+            .iter()
+            .flat_map(|r| r.graph_edge_transitions.iter())
+            .filter(|t| &t.edge_id == edge_id)
+            .collect()
+    }
+
     pub fn len(&self) -> usize {
         self.records.len()
     }
