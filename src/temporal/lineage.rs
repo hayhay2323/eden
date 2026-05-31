@@ -22,8 +22,8 @@ pub use outcomes::{
 #[cfg(test)]
 use outcomes::{fade_return, setup_direction};
 pub use evolution::{
-    detect_quality_degradation, run_evolution_cycle, shadow_score_schema, EvolutionCycleResult,
-    EvolutionEvent, ShadowScore, SurfaceQualitySnapshot,
+    compute_shadow_scores_from_outcomes, detect_quality_degradation, run_evolution_cycle,
+    shadow_score_schema, EvolutionCycleResult, EvolutionEvent, ShadowScore, SurfaceQualitySnapshot,
 };
 pub use schema::extract_causal_schema;
 pub use vortex::{

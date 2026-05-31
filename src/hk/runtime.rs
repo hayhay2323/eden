@@ -181,11 +181,6 @@ pub async fn run() {
     let mut cached_causal_schemas: Vec<crate::persistence::causal_schema::CausalSchemaRecord> =
         Vec::new();
     let mut baseline_quality: Option<SurfaceQualitySnapshot> = None;
-    #[allow(unused_mut)]
-    let mut shadow_scores: std::collections::HashMap<
-        String,
-        crate::temporal::lineage::ShadowScore,
-    > = std::collections::HashMap::new();
     #[cfg(feature = "persistence")]
     if let Some(ref store) = runtime.store {
         if let Ok(mechs) = store.load_candidate_mechanisms("hk").await {
@@ -966,6 +961,16 @@ pub async fn run() {
             if baseline_quality.is_none() && (live_mech_count == 0 && live_schema_count == 0) {
                 baseline_quality = Some(current_quality.clone());
             }
+
+            // Populate the safety gate: counterfactual shadow scores for candidate
+            // schemas, scored from realized outcomes (regime/session/convergence
+            // affinity). This map was previously always empty, so the gate inside
+            // run_evolution_cycle defaulted to "allow" and never blocked a weak schema.
+            // Now it bites.
+            let shadow_scores = crate::temporal::lineage::compute_shadow_scores_from_outcomes(
+                &cached_causal_schemas,
+                &all_outcomes,
+            );
 
             let evolution_result = run_evolution_cycle(
                 &mut cached_candidate_mechanisms,
