@@ -372,7 +372,6 @@ impl EdenStore {
             .filter_map(|r| r.signals.get(sym).cloned())
             .collect())
     }
-}
 
     /// Load all candidate mechanisms for a given market.
     pub async fn load_candidate_mechanisms(

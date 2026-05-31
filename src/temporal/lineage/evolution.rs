@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::persistence::candidate_mechanism::CandidateMechanismRecord;
 use crate::persistence::causal_schema::CausalSchemaRecord;
 
+use super::CaseRealizedOutcome;
+
 // ---------------------------------------------------------------------------
 // Audit trail
 // ---------------------------------------------------------------------------
@@ -112,6 +114,60 @@ pub fn shadow_score_schema(
     }
 
     true
+}
+
+/// Compute counterfactual shadow scores for schemas directly from realized outcomes.
+///
+/// For each schema, counts how many past realized outcomes would have matched its
+/// regime/session affinity and convergence threshold, and whether those outcomes were
+/// winners. The resulting map populates the safety gate consumed by
+/// [`run_evolution_cycle`] (a schema is denied validation if its counterfactual
+/// hit-rate is poor over enough matches).
+///
+/// This intentionally scores on the dimensions actually carried by
+/// [`CaseRealizedOutcome`] (`market_regime`, `session`, `convergence_score`) and NOT on
+/// the `coherence`/`strength`/`contest_state` inputs of
+/// [`CausalSchemaRecord::preconditions_met`]: the runtime does not yet produce a
+/// per-tick `contest_state`, so invoking the full precondition check would silently
+/// mis-score. Matching on regime+session+convergence affinity is faithful to a schema's
+/// core gating and — crucially — never leaves a candidate schema unscored, which is the
+/// gap that previously short-circuited the gate (empty map → `unwrap_or(true)` → allow).
+pub fn compute_shadow_scores_from_outcomes(
+    schemas: &[CausalSchemaRecord],
+    outcomes: &[CaseRealizedOutcome],
+) -> HashMap<String, ShadowScore> {
+    let mut scores: HashMap<String, ShadowScore> = HashMap::new();
+    for schema in schemas {
+        let entry = scores
+            .entry(schema.schema_id.clone())
+            .or_insert_with(|| ShadowScore {
+                schema_id: schema.schema_id.clone(),
+                ..Default::default()
+            });
+        for outcome in outcomes {
+            let regime_ok = schema.regime_affinity.is_empty()
+                || schema
+                    .regime_affinity
+                    .iter()
+                    .any(|a| a.regime == outcome.market_regime && a.mean_return > Decimal::ZERO);
+            let session_ok = schema.session_affinity.is_empty()
+                || schema
+                    .session_affinity
+                    .iter()
+                    .any(|a| a.session == outcome.session && a.mean_return > Decimal::ZERO);
+            let convergence_ok = outcome.convergence_score >= schema.min_convergence_score;
+            if regime_ok && session_ok && convergence_ok {
+                entry.would_have_matched += 1;
+                entry.counterfactual_return += outcome.net_return;
+                if outcome.net_return > Decimal::ZERO {
+                    entry.would_have_hit += 1;
+                } else {
+                    entry.would_have_missed += 1;
+                }
+            }
+        }
+    }
+    scores
 }
 
 // ---------------------------------------------------------------------------
@@ -565,6 +621,67 @@ mod tests {
             created_at: "2026-04-01T00:00:00Z".into(),
             updated_at: "2026-04-01T00:00:00Z".into(),
         }
+    }
+
+    fn make_outcome(
+        regime: &str,
+        session: &str,
+        convergence: Decimal,
+        net_return: Decimal,
+    ) -> CaseRealizedOutcome {
+        CaseRealizedOutcome {
+            setup_id: "setup:test".into(),
+            workflow_id: None,
+            symbol: Some("700.HK".into()),
+            entry_tick: 1,
+            entry_timestamp: time::OffsetDateTime::UNIX_EPOCH,
+            resolved_tick: 11,
+            resolved_at: time::OffsetDateTime::UNIX_EPOCH,
+            family: "family:test".into(),
+            session: session.into(),
+            market_regime: regime.into(),
+            direction: 1,
+            return_pct: net_return,
+            net_return,
+            max_favorable_excursion: Decimal::ZERO,
+            max_adverse_excursion: Decimal::ZERO,
+            followed_through: true,
+            invalidated: false,
+            structure_retained: true,
+            convergence_score: convergence,
+        }
+    }
+
+    #[test]
+    fn shadow_scores_flag_poor_counterfactual_schema() {
+        // make_schema: regime_affinity risk_on (mean +0.02), session opening (mean +0.02),
+        // min_convergence_score 0.4.
+        let schema = make_schema("schema:weak", "candidate", 0, 0);
+        // Four matching outcomes (risk_on, opening, convergence 0.5 >= 0.4), all losers.
+        let outcomes: Vec<CaseRealizedOutcome> = (0..4)
+            .map(|_| make_outcome("risk_on", "opening", dec!(0.5), dec!(-0.02)))
+            .collect();
+
+        let scores = compute_shadow_scores_from_outcomes(std::slice::from_ref(&schema), &outcomes);
+        let score = scores.get("schema:weak").expect("schema scored");
+
+        assert_eq!(score.would_have_matched, 4);
+        assert_eq!(score.would_have_hit, 0);
+        // Counterfactual hit-rate below the 0.30 gate => run_evolution_cycle must NOT validate.
+        assert!(score.counterfactual_hit_rate() < Decimal::new(30, 2));
+    }
+
+    #[test]
+    fn shadow_scores_ignore_off_regime_outcomes() {
+        let schema = make_schema("schema:offregime", "candidate", 0, 0);
+        // Different regime/session => must not match the schema's affinity.
+        let outcomes: Vec<CaseRealizedOutcome> = (0..3)
+            .map(|_| make_outcome("risk_off", "midday", dec!(0.9), dec!(0.05)))
+            .collect();
+
+        let scores = compute_shadow_scores_from_outcomes(std::slice::from_ref(&schema), &outcomes);
+        let score = scores.get("schema:offregime").expect("schema scored");
+        assert_eq!(score.would_have_matched, 0);
     }
 
     #[test]

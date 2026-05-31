@@ -60,6 +60,12 @@ impl AbsenceMemory {
         let cutoff = now - time::Duration::minutes(30);
         self.entries.retain(|_, entry| entry.last_seen >= cutoff);
     }
+
+    /// Record that propagation actually occurred for this sector, clearing
+    /// any accumulated absence streaks so suppression lifts.
+    pub fn record_propagation(&mut self, sector: &SectorId) {
+        self.entries.retain(|(s, _), _| s != &sector.0);
+    }
 }
 
 // ── Family Boost Ledger ──

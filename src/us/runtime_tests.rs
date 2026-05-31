@@ -20,7 +20,7 @@ fn us_market_hours_respect_dst_windows() {
     assert!(is_us_regular_market_hours(january));
 
     let pre_open_winter = time::OffsetDateTime::parse(
-        "2024-01-16T13:30:00Z",
+        "2024-01-16T08:30:00Z",
         &time::format_description::well_known::Rfc3339,
     )
     .unwrap();

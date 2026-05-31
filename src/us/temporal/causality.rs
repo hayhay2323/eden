@@ -65,6 +65,20 @@ impl UsCausalTimeline {
         self.flips.last()
     }
 
+    /// The most-recent distinct leaders, newest first, up to `n`.
+    pub fn recent_leaders(&self, n: usize) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for point in self.points.iter().rev() {
+            if seen.insert(point.leader.clone()) {
+                out.push(point.leader.clone());
+                if out.len() >= n {
+                    break;
+                }
+            }
+        }
+        out
+    }
 }
 
 // ── Named dimension extraction ──
